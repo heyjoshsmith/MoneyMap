@@ -10,23 +10,32 @@ import SwiftData
 
 @main
 struct MoneyMapApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Item.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
+    
+    var modelContainer: ModelContainer = {
+        let schema = Schema([Goal.self, PaydayConfig.self])
+        let modelConfiguration = ModelConfiguration(schema: schema)
+        
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }
     }()
-
+    
     var body: some Scene {
         WindowGroup {
+            let context = modelContainer.mainContext
             ContentView()
+                .environmentObject(PaydayManager(context: context))
+                .modelContainer(modelContainer)
         }
-        .modelContainer(sharedModelContainer)
     }
+}
+
+#Preview("MoneyMap") {
+    
+    let (container, paydayManager) = PreviewDataProvider.createContainer()
+    ContentView()
+        .environmentObject(paydayManager)
+        .modelContainer(container)
 }

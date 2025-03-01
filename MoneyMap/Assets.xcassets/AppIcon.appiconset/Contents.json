@@ -1,6 +1,7 @@
 {
   "images" : [
     {
+      "filename" : "My Money.001.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
@@ -12,6 +13,7 @@
           "value" : "dark"
         }
       ],
+      "filename" : "My Money.002.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
