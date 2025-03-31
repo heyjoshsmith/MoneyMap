@@ -10,6 +10,19 @@
 		34AF79862D5D4A52001CEE30 /* Glur in Frameworks */ = {isa = PBXBuildFile; productRef = 34AF79852D5D4A52001CEE30 /* Glur */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		A75571322D959D3000CDECE7 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		34AF79522D5C448E001CEE30 /* MoneyMap.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MoneyMap.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -73,6 +86,7 @@
 				34AF794E2D5C448E001CEE30 /* Sources */,
 				34AF794F2D5C448E001CEE30 /* Frameworks */,
 				34AF79502D5C448E001CEE30 /* Resources */,
+				A75571322D959D3000CDECE7 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
@@ -96,7 +110,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 1620;
+				LastSwiftUpdateCheck = 1630;
 				LastUpgradeCheck = 1620;
 				TargetAttributes = {
 					34AF79512D5C448E001CEE30 = {

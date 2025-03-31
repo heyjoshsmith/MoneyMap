@@ -10,13 +10,18 @@ import SwiftUI
 // MARK: - ContentView (TabView)
 struct ContentView: View {
     var body: some View {
-//        TabView {
+        TabView {
             GoalsView()
                 .tabItem {
                     Image(systemName: "dollarsign.circle")
                     Text("Goals")
                 }
-//        }
+            BillsView()
+                .tabItem {
+                    Image(systemName: "banknote")
+                    Text("Bills")
+                }
+        }
     }
 }
 

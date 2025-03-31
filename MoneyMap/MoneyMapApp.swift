@@ -12,7 +12,7 @@ import SwiftData
 struct MoneyMapApp: App {
     
     var modelContainer: ModelContainer = {
-        let schema = Schema([Goal.self, PaydayConfig.self])
+        let schema = Schema([Goal.self, PaydayConfig.self, Bill.self])
         let modelConfiguration = ModelConfiguration(schema: schema)
         
         do {
