@@ -139,7 +139,7 @@ enum Status: Codable {
     
     case paid
     case overdue
-    case upcoming(days: Int)
+    case upcoming(date: Date)
     
     var name: String {
         switch self {
@@ -147,8 +147,8 @@ enum Status: Codable {
             return "Paid"
         case .overdue:
             return "Overdue"
-        case .upcoming(let days):
-            return "\(days) days"
+        case .upcoming(let date):
+            return date.daysUntil
         }
     }
     
@@ -158,8 +158,11 @@ enum Status: Codable {
             return .green
         case .overdue:
             return .red
-        case .upcoming(let days):
-            switch days {
+        case .upcoming(let date):
+            
+            let daysDifference = Calendar.current.dateComponents([.day], from: .now, to: date).day ?? 0
+            
+            switch daysDifference {
             case 0...7:
                 return .orange
             case 8...14:
@@ -177,19 +180,37 @@ extension Bill {
     // MARK: - Sorting
     
     static func byDate(lhs: Bill, rhs: Bill) -> Bool {
-        return lhs.dueDate < rhs.dueDate
+        let lhsDate = Calendar.current.startOfDay(for: lhs.dueDate)
+        let rhsDate = Calendar.current.startOfDay(for: rhs.dueDate)
+        if lhsDate == rhsDate {
+            return lhs.amount > rhs.amount
+        }
+        return lhsDate < rhsDate
     }
     
     static func byName(lhs: Bill, rhs: Bill) -> Bool {
+        if lhs.name == rhs.name {
+            return lhs.amount > rhs.amount
+        }
         return lhs.name < rhs.name
     }
     
     static func byBalance(lhs: Bill, rhs: Bill) -> Bool {
-        return lhs.creditCardDetails?.cardBalance ?? 0 < rhs.creditCardDetails?.cardBalance ?? 0
+        let lhsBalance = lhs.creditCardDetails?.cardBalance ?? 0
+        let rhsBalance = rhs.creditCardDetails?.cardBalance ?? 0
+        if lhsBalance == rhsBalance {
+            return lhs.amount > rhs.amount
+        }
+        return lhsBalance < rhsBalance
     }
     
     static func byLimit(lhs: Bill, rhs: Bill) -> Bool {
-        return lhs.creditCardDetails?.creditLimit ?? 0 < rhs.creditCardDetails?.creditLimit ?? 0
+        let lhsLimit = lhs.creditCardDetails?.creditLimit ?? 0
+        let rhsLimit = rhs.creditCardDetails?.creditLimit ?? 0
+        if lhsLimit == rhsLimit {
+            return lhs.amount > rhs.amount
+        }
+        return lhsLimit < rhsLimit
     }
     
     
@@ -200,6 +221,11 @@ extension Bill {
         let today = calendar.startOfDay(for: Date())
         let dueDay = calendar.startOfDay(for: dueDate)
         
+        // Automatically mark non-credit card bills as paid if due date is today or earlier
+        if category != .creditCard && dueDay <= today {
+            datePaid = dueDate
+        }
+
         if let _ = datePaid {
             // If the bill is paid, check if the current billing period has ended
             if today > dueDay {
@@ -221,7 +247,7 @@ extension Bill {
                 let daysDifference = calendar.dateComponents([.day], from: today, to: newDueDay).day ?? 0
                 
                 if daysDifference >= 0 {
-                    status = .upcoming(days: daysDifference)
+                    status = .upcoming(date: newDueDay)
                 } else {
                     status = .overdue
                 }
@@ -234,7 +260,7 @@ extension Bill {
             let daysDifference = calendar.dateComponents([.day], from: today, to: dueDay).day ?? 0
             
             if daysDifference >= 0 {
-                status = .upcoming(days: daysDifference)
+                status = .upcoming(date: dueDay)
             } else {
                 status = .overdue
             }
@@ -253,22 +279,34 @@ extension Bill {
     
     // MARK: - Sample Data
     
-    static func sampleBills() -> Bills {
-        return [
+    static func sampleBills(type: BillCategory? = nil) -> Bills {
+        let bills = [
             Bill(name: "Electricity", amount: 100.0, dueDate: Date(), category: .utilities, recurrenceInterval: 1, recurrenceUnit: .month),
             Bill(name: "Water", amount: 50.0, dueDate: Date(), category: .utilities, recurrenceInterval: 1, recurrenceUnit: .month),
-            Bill(name: "Rent", amount: 1200.0, dueDate: Date(), category: .rent, recurrenceInterval: 1, recurrenceUnit: .month)
+            Bill(name: "Rent", amount: 1200.0, dueDate: Date(), category: .rent, recurrenceInterval: 1, recurrenceUnit: .month),
+            getSampleCreditCard(name: "American Express"),
+            getSampleCreditCard(name: "Apple Card"),
+            getSampleCreditCard(name: "Capital One"),
+            getSampleCreditCard(name: "Chase")
         ]
+        
+        if let type {
+            return bills.filter { bill in
+                bill.category == type
+            }
+        }
+        
+        return bills
     }
     
-    static var sampleCreditCard: Bill {
+    static func getSampleCreditCard(name: String) -> Bill {
         
         let limit = Double.random(in: 1_000...50_000)
         let balance = Double.random(in: 0...limit)
         let details = CreditCardDetails(creditLimit: limit, cardBalance: balance)
         
         return Bill(
-            name: "American Express",
+            name: name,
             amount: 200,
             dueDate: .now,
             category: .creditCard,
@@ -278,6 +316,21 @@ extension Bill {
         )
     }
 }
+
+#if DEBUG
+extension Bill {
+    @MainActor static var preview: ModelContainer {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try! ModelContainer(for: Bill.self, configurations: config)
+        let context = container.mainContext
+        // Insert sample bills into the context
+        for bill in Bill.sampleBills() {
+            context.insert(bill)
+        }
+        return container
+    }
+}
+#endif
 
 extension Double {
     var abbreviatedCurrency: String {
@@ -325,5 +378,95 @@ extension Bills {
     
     var creditCardUtilization: Double {
         return totalBalance / totalCreditLimit
+    }
+    
+    func due(_ timeframe: Timeframe) -> Bills {
+        
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+        
+        var bills = Bills()
+        
+        switch timeframe {
+        case .overdue:
+            bills = self.withoutCreditCards.filter {
+                let dueDay = calendar.startOfDay(for: $0.dueDate)
+                let diff = calendar.dateComponents([.day], from: today, to: dueDay).day ?? 0
+                return diff < 0
+            }
+        case .today:
+            bills = self.withoutCreditCards.filter {
+                let dueDay = calendar.startOfDay(for: $0.dueDate)
+                let diff = calendar.dateComponents([.day], from: today, to: dueDay).day ?? 0
+                return diff == 0
+            }
+        case .tomorrow:
+            bills = self.withoutCreditCards.filter {
+                let dueDay = calendar.startOfDay(for: $0.dueDate)
+                let diff = calendar.dateComponents([.day], from: today, to: dueDay).day ?? 0
+                return diff == 1
+            }
+        case .thisWeek:
+            bills = self.withoutCreditCards.filter {
+                let dueDay = calendar.startOfDay(for: $0.dueDate)
+                let diff = calendar.dateComponents([.day], from: today, to: dueDay).day ?? 0
+                return diff >= 2 && diff <= 7
+            }
+        case .thisMonth:
+            bills = self.withoutCreditCards.filter {
+                
+                let dueDay = calendar.startOfDay(for: $0.dueDate)
+                let diff = calendar.dateComponents([.day], from: today, to: dueDay).day ?? 0
+                
+                let month = calendar.component(.month, from: today)
+                var nextMonth = calendar.date(bySetting: .month, value: month + 1, of: today)
+                    nextMonth = calendar.date(bySetting: .day, value: 1, of: nextMonth ?? today)
+                
+                
+                return diff >= 8 && $0.dueDate < nextMonth ?? dueDay
+                
+            }
+        case .later:
+            bills = self.withoutCreditCards.filter {
+                
+                let month = calendar.component(.month, from: today)
+                var nextMonth = calendar.date(bySetting: .month, value: month + 1, of: today)
+                    nextMonth = calendar.date(bySetting: .day, value: 1, of: nextMonth ?? today)
+                
+                return $0.dueDate >= nextMonth ?? today
+            }
+        }
+        
+        return bills.sorted(by: Bill.byDate)
+    }
+    
+}
+
+enum Timeframe: String, Identifiable, CaseIterable {
+    
+    case overdue
+    case today
+    case tomorrow
+    case thisWeek
+    case thisMonth
+    case later
+    
+    var id: Self { return self }
+    
+    var name: String {
+        switch self {
+        case .overdue:
+            return "Overdue"
+        case .today:
+            return "Today"
+        case .tomorrow:
+            return "Tomorrow"
+        case .thisWeek:
+            return "This week"
+        case .thisMonth:
+            return "This month"
+        case .later:
+            return "Later"
+        }
     }
 }

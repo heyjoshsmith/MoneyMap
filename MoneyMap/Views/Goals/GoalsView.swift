@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import MoneyMapShared
 
 struct GoalsView: View {
     
@@ -61,6 +62,9 @@ struct GoalsView: View {
                             addingSavings.toggle()
                         }
                         Divider()
+                        Button("Add Example Goal", systemImage: "text.badge.star") {
+                            modelContext.insert(Goal.example)
+                        }
                         Button("Reset Savings", systemImage: "trash", role: .destructive) {
                             showingResetAlert.toggle()
                         }

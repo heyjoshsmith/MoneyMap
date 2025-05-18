@@ -7,14 +7,21 @@
 
 import SwiftUI
 import SwiftData
+import MoneyMapShared
 
 @main
 struct MoneyMapApp: App {
     
     var modelContainer: ModelContainer = {
+        let containerURL = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: "group.com.heyjoshsmith.MoneyMap")!
+
         let schema = Schema([Goal.self, PaydayConfig.self, Bill.self])
-        let modelConfiguration = ModelConfiguration(schema: schema)
-        
+        let modelConfiguration = ModelConfiguration(
+            schema: schema,
+            url: containerURL.appendingPathComponent("shared.sqlite")
+        )
+
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {

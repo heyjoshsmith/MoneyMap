@@ -10,27 +10,26 @@ import SwiftData
 
 // MARK: - Model (SwiftData)
 @Model
-class Goal: Identifiable {
-    var id = UUID()
-    var name: String?
-    var targetAmount: Double
-    var deadline: Date
-    var amountPerPaycheck: Double?
-    var createdDate: Date = Date()
-    var imageFileName: String?
-    var urls: [URL]?
+public class Goal: Identifiable {
+    public var id = UUID()
+    public var name: String?
+    public var targetAmount: Double
+    public var deadline: Date
+    public var amountPerPaycheck: Double?
+    public var createdDate: Date = Date()
+    public var imageFileName: String?
+    public var urls: [URL]?
     
     
-    private var priorityWeight: Double? // Allow old data without a value
-    var weight: Double {
+    public var priorityWeight: Double? // Allow old data without a value
+    public var amountSaved: Double = 0
+    
+    public var weight: Double {
         get { priorityWeight ?? 1.0 } // Fallback for existing data
         set { priorityWeight = newValue }
     }
     
-    // Added later
-    var amountSaved: Double = 0
-    
-    init(_ name: String?, targetAmount: Double, deadline: Date, weight: Double, imageURL: URL?, paydaysUntil: Int) {
+    public init(_ name: String?, targetAmount: Double, deadline: Date, weight: Double, imageURL: URL?, paydaysUntil: Int) {
         self.name = name
         self.targetAmount = targetAmount
         self.deadline = deadline
@@ -39,17 +38,17 @@ class Goal: Identifiable {
         self.amountPerPaycheck = targetAmount / Double(paydaysUntil)
     }
     
-    var remainingAmount: Double {
+    public var remainingAmount: Double {
         return max(0, targetAmount - amountSaved)
     }
     
-    var daysUntilDeadline: Int {
+    public var daysUntilDeadline: Int {
         return Calendar.current.dateComponents([.day], from: Date(), to: deadline).day ?? 0
     }
     
-    func addURL(_ string: String) {
+    public func addURL(_ string: String) {
         if let url = URL(string: string) {
-            if let urls = self.urls {
+            if self.urls != nil {
                 self.urls?.append(url)
             } else {
                 self.urls = [url]
@@ -69,23 +68,36 @@ class Goal: Identifiable {
     }
     
     /// Progress toward the goal (0 to 1).
-    func progress() -> Double {
+    public func progress() -> Double {
         if targetAmount > 0 {
             return amountSaved / targetAmount
         }
         return 0
     }
     
-    private var imageURL: URL? {
+    public var imageURL: URL? {
         guard let fileName = imageFileName else { return nil }
-        let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return documentsDirectory.appendingPathComponent(fileName)
+        // Point to the shared App Group container
+        guard let groupURL = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: "group.com.heyjoshsmith.MoneyMap")?
+            .appendingPathComponent("Images", isDirectory: true) else {
+            return nil
+        }
+        return groupURL.appendingPathComponent(fileName)
     }
     
-    func loadImage() -> UIImage? {
+    public func loadImage() -> UIImage? {
         guard let imageURL, FileManager.default.fileExists(atPath: imageURL.path),
               let data = try? Data(contentsOf: imageURL) else { return nil }
         return UIImage(data: data)
+    }
+    
+}
+
+extension Goal {
+    
+    public static var example: Goal {
+        return Goal("Nintendo Switch 2", targetAmount: 500, deadline: .distantFuture, weight: 1, imageURL: nil, paydaysUntil: 5)
     }
     
 }

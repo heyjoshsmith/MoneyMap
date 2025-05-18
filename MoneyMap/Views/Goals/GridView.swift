@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import MoneyMapShared
 
 struct GridView: View {
     

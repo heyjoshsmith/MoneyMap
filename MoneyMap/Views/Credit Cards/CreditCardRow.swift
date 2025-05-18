@@ -68,13 +68,13 @@ struct CreditCardRow: View {
             .padding()
             .background(Color(uiColor: .secondarySystemGroupedBackground))
             .clipShape(.rect(cornerRadius: 15))
-            .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 5)
+            .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 5)
             .task {
                 creditCard.checkStatus()
             }
         }
         .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 10))
+        .listRowInsets(EdgeInsets(top: 7, leading: 15, bottom: 7, trailing: 15))
         .listRowBackground(Color.clear)
         .navigationDestination(isPresented: $isPresented) {
             BillView(bill: creditCard)
@@ -86,9 +86,9 @@ struct CreditCardRow: View {
 #Preview {
     NavigationStack {
         List {
-            CreditCardRow(for: Bill.sampleCreditCard)
-            CreditCardRow(for: Bill.sampleCreditCard)
-            CreditCardRow(for: Bill.sampleCreditCard)
+            ForEach(Bill.sampleBills(type: .creditCard)) {  bill in
+                CreditCardRow(for: bill)
+            }
         }
         .listStyle(.plain)
         .background(Color(uiColor: .systemGroupedBackground))

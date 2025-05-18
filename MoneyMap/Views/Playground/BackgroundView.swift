@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import MoneyMapShared
 
 struct BackgroundView: View {
     

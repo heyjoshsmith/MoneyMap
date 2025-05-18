@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftData
+import MoneyMapShared
 
 @Model
 class PaydayConfig {
@@ -24,7 +25,6 @@ class PaydayConfig {
         self.nextPayday = nextPayday
         self.strategy = strategy
     }
-    
     
 }
 
@@ -101,7 +101,8 @@ class PaydayManager: ObservableObject {
     /// Returns the number of days remaining until the next payday.
     func daysUntilNextPayday() -> Int {
         guard let payday = nextPayday else { return 0 }
-        let components = Calendar.current.dateComponents([.day], from: Date(), to: payday)
+        guard let startOfDay = Calendar.current.date(bySettingHour: 0, minute: 0, second: 0, of: payday) else { return 0 }
+        let components = Calendar.current.dateComponents([.day], from: Date(), to: startOfDay)
         return components.day ?? 0
     }
     
@@ -121,6 +122,22 @@ class PaydayManager: ObservableObject {
         }
         
         return paydayCount
+    }
+    
+    /// Returns an array of all paydays for the next year, starting from the nextPayday.
+    func upcomingPaydaysForNextYear() -> [Date] {
+        guard let start = nextPayday else { return [] }
+        guard let startOfDay = Calendar.current.date(bySettingHour: 0, minute: 0, second: 0, of: start) else { return [] }
+        var paydays: [Date] = []
+        var current = startOfDay
+        let oneYearLater = Calendar.current.date(byAdding: .year, value: 1, to: startOfDay)!
+        
+        while current <= oneYearLater {
+            paydays.append(current)
+            current = Calendar.current.date(byAdding: .day, value: 14, to: current)!
+        }
+        
+        return paydays
     }
     
 }

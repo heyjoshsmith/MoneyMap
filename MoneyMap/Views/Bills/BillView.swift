@@ -9,95 +9,123 @@ import SwiftUI
 
 struct BillView: View {
     var bill: Bill
+    
+    @State private var animate = false
+    @State private var editingLimit = false
+    @State private var cardLimit = ""
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                // Bill Name
-                Text(bill.name)
-                    .font(.largeTitle)
-                    .bold()
-                    .padding(.bottom, 8)
                 
-                // Amount
-                HStack {
-                    Text("Amount")
-                    Spacer()
-                    Text(bill.amount, format: .currency(code: "USD"))
-                }
-                
-                // Due Date
-                HStack {
-                    Text("Due Date")
-                    Spacer()
+                VStack(spacing: 10) {
+                    
+                    if bill.category != .creditCard {
+                        Text(bill.amount, format: .currency(code: "USD"))
+                            .font(.title.weight(.medium))
+                    }
+                    
+                    Label(bill.name, systemImage: bill.category.icon)
+                        .font(.largeTitle.weight(.semibold))
+                        
                     Text(bill.dueDate, style: .date)
-                }
-                
-                // Date Paid (if available)
-                if let datePaid = bill.datePaid {
-                    HStack {
-                        Text("Date Paid")
-                        Spacer()
-                        Text(datePaid, style: .date)
-                    }
-                }
-                
-                // Category
-                HStack {
-                    Text("Category")
-                    Spacer()
-                    Label(bill.category.name, systemImage: bill.category.icon)
-                        .foregroundColor(bill.category.color)
-                }
-                
-                // Recurrence
-                HStack {
-                    Text("Recurrence")
-                    Spacer()
-                    Text("Every \(bill.recurrenceInterval) \(bill.recurrenceUnit.rawValue)\(bill.recurrenceInterval > 1 ? "s" : "")")
-                }
-                
-                // Credit Card Details (if applicable)
-                if bill.category == .creditCard, let details = bill.creditCardDetails {
-                    Divider()
-                    Text("Credit Card Details")
-                        .font(.headline)
-                    HStack {
-                        Text("Credit Limit")
-                        Spacer()
-                        Text(details.creditLimit, format: .currency(code: "USD"))
-                    }
-                    HStack {
-                        Text("Card Balance")
-                        Spacer()
-                        Text(details.cardBalance, format: .currency(code: "USD"))
-                    }
-                    HStack {
-                        Text("Utilization")
-                        Spacer()
-                        utilizationIcon
-                    }
+                        .opacity(0.7)
                     
-                    HStack {
-                        Text("Max Usage")
-                        Spacer()
-                        Text(details.creditLimit * 0.3, format: .currency(code: "USD"))
+                }
+                .scaleEffect(animate ? 1.0 : 0.75)
+                .opacity(animate ? 1.0 : 0.0)
+                .onAppear {
+                    withAnimation(.easeOut(duration: 0.8)) {
+                        animate = true
                     }
+                }
+                .frame(maxWidth: .infinity, idealHeight: 300)
+                .foregroundStyle(.white)
+                .background(bill.category.color.gradient)
+
+                
+                VStack(spacing: 10) {
                     
-                    if let recommendedPayment {
+                    // Credit Card Details (if applicable)
+                    if bill.category == .creditCard, let details = bill.creditCardDetails {
+                        
                         HStack {
-                            Text("Recommended Payment")
+                            VStack(alignment: .leading) {
+                                Text("Card Balance")
+                                    .font(.title3.weight(.medium))
+                                Text("\(details.cardBalance.abbreviatedCurrency) of \(details.creditLimit.abbreviatedCurrency)")
+                                    .foregroundStyle(.secondary)
+                            }
                             Spacer()
-                            Text(recommendedPayment, format: .currency(code: "USD"))
+                            Gauge(value: details.cardBalance, in: 0...details.creditLimit) {
+                                Text(details.utilization, format: .percent.precision(.fractionLength(0)))
+                                    .font(.callout.weight(.medium))
+                            }
+                            .gaugeStyle(.accessoryCircularCapacity)
+                            .tint(aboveMax ? .red : .green)
+                        }
+                        .padding()
+                        .background(Color(uiColor: .secondarySystemGroupedBackground))
+                        .clipShape(.rect(cornerRadius: 15))
+                        .shadow(color: .black.opacity(0.1), radius: 5, x: 0, y: 5)
+                        .padding(.bottom)
+                        
+                        HStack {
+                            Text("Max Usage")
+                            Spacer()
+                            Text(details.creditLimit * 0.3, format: .currency(code: "USD"))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal)
+                        
+                        if let recommendedPayment {
+                            HStack {
+                                Text("Recommended Payment")
+                                Spacer()
+                                Text(recommendedPayment, format: .currency(code: "USD"))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal)
                         }
                     }
+                    
+                    // Recurrence
+                    HStack {
+                        Text("Recurrence")
+                        Spacer()
+                        Text("Every \(bill.recurrenceInterval) \(bill.recurrenceUnit.rawValue)\(bill.recurrenceInterval > 1 ? "s" : "")")
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                    
                 }
-                
-                Spacer()
+                .padding()
             }
-            .padding()
         }
         .navigationTitle("Bill Details")
+        .navigationBarTitleDisplayMode(.inline)
+        .background(Color(uiColor: .systemGroupedBackground))
+        .toolbar {
+            if bill.category == .creditCard {
+                Menu("Options", systemImage: "ellipsis.circle") {
+                    Button("Adjust Card Limit", systemImage: "creditcard.trianglebadge.exclamationmark") {
+                        editingLimit.toggle()
+                    }
+                }
+            }
+        }
+        .alert("Card Limit", isPresented: $editingLimit) {
+            TextField((bill.creditCardDetails?.creditLimit ?? 0).formatted(.currency(code: "USD")), text: $cardLimit)
+            Button("Cancel", role: .cancel) { }
+            Button("Save") {
+                bill.creditCardDetails?.creditLimit = Double(cardLimit) ?? 0
+            }
+        } message: {
+            if let details = bill.creditCardDetails {
+                Text("What is your new card limit? Your current limit is \(details.creditLimit, format: .currency(code: "USD"))")
+            }
+        }
+
     }
     
     var recommendedPayment: Double? {
@@ -158,6 +186,9 @@ struct BillView: View {
                           category: .creditCard,
                           recurrenceInterval: 1,
                           recurrenceUnit: .month,
-                          creditCardDetails: CreditCardDetails(creditLimit: 5000, cardBalance: 1200))
-    BillView(bill: sampleBill)
+                          creditCardDetails: CreditCardDetails(creditLimit: 5000, cardBalance: 1200)
+    )
+    NavigationStack {
+        BillView(bill: sampleBill)
+    }
 }

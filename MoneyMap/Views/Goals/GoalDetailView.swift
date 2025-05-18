@@ -8,6 +8,7 @@
 import SwiftUI
 import PhotosUI
 import Glur
+import MoneyMapShared
 
 struct GoalDetailView: View {
     
@@ -214,14 +215,19 @@ struct GoalDetailView: View {
 
 func getSavedFiles() -> [URL] {
     let fileManager = FileManager.default
-    let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
-    
+    // Point at the shared App Group container's Images directory
+    guard let groupContainer = fileManager
+        .containerURL(forSecurityApplicationGroupIdentifier: "group.com.heyjoshsmith.MoneyMap")?
+        .appendingPathComponent("Images", isDirectory: true) else {
+            print("Error: Could not locate shared Images container")
+            return []
+    }
     do {
-        let files = try fileManager.contentsOfDirectory(at: documentsURL, includingPropertiesForKeys: nil)
-        print("Found \(files.count) files in documents directory: \(documentsURL.absoluteString)")
-        return files // Returns all files, regardless of type
+        let files = try fileManager.contentsOfDirectory(at: groupContainer, includingPropertiesForKeys: nil)
+        print("Found \(files.count) files in shared Images directory: \(groupContainer.path)")
+        return files
     } catch {
-        print("Error listing files:", error)
+        print("Error listing files in shared container:", error)
         return []
     }
 }

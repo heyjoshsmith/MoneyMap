@@ -8,6 +8,7 @@
 import SwiftUI
 import ImagePlayground
 import PhotosUI
+import MoneyMapShared
 
 struct AddGoalView: View {
     
@@ -259,38 +260,6 @@ struct AddGoalView: View {
         }
     }
     
-}
-
-func saveImageToDocuments(originalURL: URL? = nil, imageData: Data? = nil) -> URL? {
-    let fileManager = FileManager.default
-    let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
-
-    // Determine the destination filename
-    let filename: String
-    if let originalURL {
-        filename = originalURL.lastPathComponent
-    } else {
-        filename = UUID().uuidString + ".jpg" // Generate unique filename for data-based images
-    }
-
-    let destinationURL = documentsURL.appendingPathComponent(filename)
-
-    do {
-        if let originalURL {
-            // Move the file from its original location to the Documents directory
-            try fileManager.moveItem(at: originalURL, to: destinationURL)
-        } else if let imageData {
-            // Save image data directly to the Documents directory
-            try imageData.write(to: destinationURL)
-        } else {
-            print("Error: No valid URL or image data provided")
-            return nil
-        }
-        return destinationURL
-    } catch {
-        print("Error saving image:", error)
-        return nil
-    }
 }
 
 #Preview("Add Goal") {

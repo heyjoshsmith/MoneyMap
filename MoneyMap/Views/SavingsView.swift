@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import MoneyMapShared
 
 struct SavingsView: View {
     @Environment(\.modelContext) private var modelContext
