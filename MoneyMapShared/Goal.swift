@@ -13,13 +13,17 @@ import SwiftData
 public class Goal: Identifiable {
     public var id = UUID()
     public var name: String?
-    public var targetAmount: Double
-    public var deadline: Date
+    public var targetAmount: Double?
+    public var deadline: Date?
     public var amountPerPaycheck: Double?
     public var createdDate: Date = Date()
-    public var imageFileName: String?
     public var urls: [URL]?
+    // Store image data for CloudKit syncing and general use
+    public var imageData: Data?
     
+    @available(*, deprecated, message: "Use imageData instead. imageFileName is only for legacy migration.")
+    public var imageFileName: String?
+
     
     public var priorityWeight: Double? // Allow old data without a value
     public var amountSaved: Double = 0
@@ -29,20 +33,30 @@ public class Goal: Identifiable {
         set { priorityWeight = newValue }
     }
     
-    public init(_ name: String?, targetAmount: Double, deadline: Date, weight: Double, imageURL: URL?, paydaysUntil: Int) {
+    public init(_ name: String?, targetAmount: Double?, deadline: Date?, weight: Double, paydaysUntil: Int?, imageData: Data? = nil) {
         self.name = name
         self.targetAmount = targetAmount
         self.deadline = deadline
         self.weight = weight
-        self.imageFileName = imageURL?.lastPathComponent
-        self.amountPerPaycheck = targetAmount / Double(paydaysUntil)
+        if let targetAmount = targetAmount, let paydaysUntil = paydaysUntil, paydaysUntil != 0 {
+            self.amountPerPaycheck = targetAmount / Double(paydaysUntil)
+        } else {
+            self.amountPerPaycheck = nil
+        }
+        if let imageData = imageData {
+            self.imageData = imageData
+        } else {
+            self.imageData = nil
+        }
     }
     
     public var remainingAmount: Double {
-        return max(0, targetAmount - amountSaved)
+        guard let target = targetAmount else { return 0 }
+        return max(0, target - amountSaved)
     }
     
     public var daysUntilDeadline: Int {
+        guard let deadline = deadline else { return 0 }
         return Calendar.current.dateComponents([.day], from: Date(), to: deadline).day ?? 0
     }
     
@@ -69,12 +83,11 @@ public class Goal: Identifiable {
     
     /// Progress toward the goal (0 to 1).
     public func progress() -> Double {
-        if targetAmount > 0 {
-            return amountSaved / targetAmount
-        }
-        return 0
+        guard let target = targetAmount, target > 0 else { return 0 }
+        return amountSaved / target
     }
     
+    @available(*, deprecated, message: "Use imageData/uiImage instead. imageURL is only for legacy migration.")
     public var imageURL: URL? {
         guard let fileName = imageFileName else { return nil }
         // Point to the shared App Group container
@@ -85,11 +98,28 @@ public class Goal: Identifiable {
         }
         return groupURL.appendingPathComponent(fileName)
     }
-    
-    public func loadImage() -> UIImage? {
-        guard let imageURL, FileManager.default.fileExists(atPath: imageURL.path),
-              let data = try? Data(contentsOf: imageURL) else { return nil }
+
+    /// Returns the loaded UIImage for this goal, using imageData if available.
+    public var uiImage: UIImage? {
+        guard let data = imageData else { return nil }
         return UIImage(data: data)
+    }
+
+    /// Loads the image for this goal. Returns the image from imageData if present,
+    /// otherwise attempts to load from imageURL (for migrated/legacy goals).
+    /// If migration from file is successful, imageData is updated.
+    @available(*, deprecated, message: "Use imageData/uiImage instead. imageURL is only for legacy migration.")
+    public func loadImage() -> UIImage? {
+        if let data = imageData {
+            return UIImage(data: data)
+        } else if let imageURL,
+                  FileManager.default.fileExists(atPath: imageURL.path),
+                  let data = try? Data(contentsOf: imageURL) {
+            // Migrate legacy file-based image to imageData
+            self.imageData = data
+            return UIImage(data: data)
+        }
+        return nil
     }
     
 }
@@ -97,7 +127,7 @@ public class Goal: Identifiable {
 extension Goal {
     
     public static var example: Goal {
-        return Goal("Nintendo Switch 2", targetAmount: 500, deadline: .distantFuture, weight: 1, imageURL: nil, paydaysUntil: 5)
+        return Goal("Nintendo Switch 2", targetAmount: 500, deadline: .distantFuture, weight: 1, paydaysUntil: 5)
     }
     
 }

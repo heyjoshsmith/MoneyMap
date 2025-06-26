@@ -111,7 +111,7 @@ struct ShareView: View {
                                     }
                                 } label: {
                                     VStack(spacing: 0) {
-                                        if let img = goal.tempImage() {
+                                        if let img = goal.uiImage {
                                             Image(uiImage: img)
                                                 .resizable()
                                                 .scaledToFill()
@@ -249,8 +249,7 @@ struct ShareView: View {
         if saveToNewGoal {
             
             let imageData = selectedImage?.jpegData(compressionQuality: 0.8)
-            let imageURL = saveImageToDocuments(originalURL: nil, imageData: imageData)
-            let goal = Goal(nameText, targetAmount: targetAmount ?? 0, deadline: selectedDeadline, weight: priorityWeight, imageURL: imageURL, paydaysUntil: 1)
+            let goal = Goal(nameText, targetAmount: targetAmount ?? 0, deadline: selectedDeadline, weight: priorityWeight, paydaysUntil: 1, imageData: imageData)
             goal.addURL(url.absoluteString)
             modelContext.insert(goal)
             
@@ -334,7 +333,12 @@ struct ShareView: View {
 
 extension Goal {
     /// Copies the image file into the extension sandbox and returns a UIImage.
+    /// - Warning: Deprecated. Use imageData/uiImage for synced images. This method is only for migration/legacy support.
+    @available(*, deprecated, message: "Use imageData/uiImage for synced images. This method is only for migration/legacy support.")
     func tempImage() -> UIImage? {
+        if let data = imageData {
+            return UIImage(data: data)
+        }
         guard let srcURL = imageURL else { return nil }
         let tmpURL = FileManager.default
             .temporaryDirectory

@@ -146,7 +146,7 @@ class PaydayManager: ObservableObject {
 struct PreviewDataProvider {
     @MainActor static func createContainer() -> (ModelContainer, PaydayManager) {
         let container = try! ModelContainer(
-            for: Goal.self, PaydayConfig.self,
+            for: Goal.self, PaydayConfig.self, Bill.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true) // In-memory store for previews
         )
         let mockContext = container.mainContext
@@ -158,11 +158,22 @@ struct PreviewDataProvider {
         
         // Add sample goals
         let deadline1 = Date().addingTimeInterval(60 * 60 * 24 * 30)
-        let sampleGoal1 = Goal("iPhone 17", targetAmount: 1000, deadline: deadline1, weight: 1.0, imageURL: nil, paydaysUntil: paydayManager.numberOfPaydaysUntil(deadline1))
+        let sampleGoal1 = Goal("iPhone 17", targetAmount: 1000, deadline: deadline1, weight: 1.0, paydaysUntil: paydayManager.numberOfPaydaysUntil(deadline1))
+        
         let deadline2 = Date().addingTimeInterval(60 * 60 * 24 * 60)
-        let sampleGoal2 = Goal("Mac Mini", targetAmount: 500, deadline: deadline2, weight: 1.0, imageURL: nil, paydaysUntil: paydayManager.numberOfPaydaysUntil(deadline2))
+        let sampleGoal2 = Goal("Mac Mini", targetAmount: 500, deadline: deadline2, weight: 1.0, paydaysUntil: paydayManager.numberOfPaydaysUntil(deadline2))
+        
+        
+        let endOfMonth = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date()))!
+            .addingTimeInterval(60 * 60 * 24 * 32)
+        let lastDayOfMonth = Calendar.current.date(byAdding: .day, value: -Calendar.current.component(.day, from: endOfMonth), to: endOfMonth)!
+        let creditCardDetails = CreditCardDetails(creditLimit: 15000, cardBalance: 2500)
+        let appleCard = Bill(name: "Apple Card", amount: 0, dueDate: lastDayOfMonth, category: .creditCard, recurrenceInterval: 1, recurrenceUnit: .month, creditCardDetails: creditCardDetails)
+        
+        mockContext.insert(appleCard)
         mockContext.insert(sampleGoal1)
         mockContext.insert(sampleGoal2)
+        try! mockContext.save()
         
         return (container, paydayManager)
     }

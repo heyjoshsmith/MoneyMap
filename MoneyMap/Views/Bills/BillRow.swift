@@ -53,24 +53,27 @@ struct BillButton: View {
             BillView(bill: bill)
         } label: {
             HStack {
-                Image(systemName: bill.category.icon)
+                Image(systemName: bill.category?.icon ?? "questionmark.circle")
                     .imageScale(.large)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(bill.name)
+                    Text(bill.name ?? "Untitled")
                         .font(.title3.weight(.semibold))
-                    let daysUntilDue = Calendar.current.dateComponents([.day], from: Date(), to: bill.dueDate).day ?? 0
+                    let daysUntilDue = Calendar.current.dateComponents([.day], from: Date(), to: bill.dueDate ?? Date()).day ?? 0
                     Text("\(daysUntilDue) days")
                         .font(.footnote)
                         .opacity(0.7)
                 }
-                Text(bill.amount, format: .currency(code: "USD").precision(.fractionLength(0)))
+                Text((bill.amount ?? 0), format: .currency(code: "USD").precision(.fractionLength(0)))
                     .font(.system(.title, design: .rounded, weight: .bold))
                     .padding(.leading)
             }
             .padding()
             .foregroundStyle(.white)
-            .background(bill.category.color.gradient)
+            .background(bill.category?.color.gradient ?? Color.gray.gradient)
             .clipShape(.rect(cornerRadius: 10))
+        }
+        .task {
+            bill.checkStatus()
         }
     }
     

@@ -27,7 +27,7 @@ struct CreditCardRow: View {
                     Gauge(value: details.cardBalance, in: 0...(details.creditLimit)) {
                         VStack {
                             HStack {
-                                Text(creditCard.name)
+                                Text(creditCard.name ?? "Untitled")
                                     .font(.title3.weight(.semibold))
                                 Spacer()
                                 Text(creditCard.status?.name ?? "")

@@ -25,7 +25,6 @@ struct AddGoalView: View {
     @FocusState private var focused: Bool
     
     @State private var creatingImage: Bool = false
-    @State private var imageURL: URL?
     
     @State private var selectedItem: PhotosPickerItem? = nil
     @State private var selectedImage: UIImage? = nil
@@ -111,26 +110,24 @@ struct AddGoalView: View {
             }
             
             Section {
-                if let imageURL {
-                    AsyncImage(url: imageURL) { image in
-                        image.resizable()
-                            .scaledToFill()
-                    } placeholder: {
-                        ProgressView()
-                    }
-                    .listRowInsets(EdgeInsets())
+                if let image = selectedImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(height: 200)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .listRowInsets(EdgeInsets())
                 } else {
                     imagePicker
                 }
             } header: {
                 HStack {
                     Text("Image")
-                    if (imageURL != nil) {
+                    if selectedImage != nil {
                         Spacer()
                         Button("Remove") {
                             selectedItem = nil
                             selectedImage = nil
-                            imageURL = nil
                         }
                         .textCase(.none)
                         .font(.callout)
@@ -147,7 +144,11 @@ struct AddGoalView: View {
         }
         .navigationTitle("New Goal")
         .imagePlaygroundSheet(isPresented: $creatingImage, concept: name, onCompletion: { url in
-            self.imageURL = saveImageToDocuments(originalURL: url)
+            Task {
+                if let data = try? Data(contentsOf: url) {
+                    selectedImage = UIImage(data: data)
+                }
+            }
         })
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
@@ -165,7 +166,7 @@ struct AddGoalView: View {
                         return
                     }
                     
-                    let newGoal = Goal(name.isEmpty ? nil : name, targetAmount: target, deadline: deadline, weight: priority, imageURL: imageURL, paydaysUntil: paydayManager.numberOfPaydaysUntil(deadline))
+                    let newGoal = Goal(name.isEmpty ? nil : name, targetAmount: target, deadline: deadline, weight: priority, paydaysUntil: paydayManager.numberOfPaydaysUntil(deadline), imageData: selectedImage?.jpegData(compressionQuality: 0.8))
                     modelContext.insert(newGoal)
                     dismiss()
                 }
@@ -188,19 +189,6 @@ struct AddGoalView: View {
 
                     if let data = try await newItem.loadTransferable(type: Data.self){
                         selectedImage = UIImage(data: data)
-                        
-                        // Attempt to load image as URL (optional)
-                        let url = try? await newItem.loadTransferable(type: URL.self)
-
-                        // Save using URL if available, otherwise use Data
-                        let localURL = saveImageToDocuments(originalURL: url, imageData: data)
-                        
-                        if let localURL {
-                            imageURL = localURL
-                        } else {
-                            errorMessage = "Unable to save image to local storage"
-                        }
-                        
                     } else {
                         errorMessage = "Unable to load image"
                     }

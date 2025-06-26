@@ -32,7 +32,7 @@ struct SavingsView: View {
                     ForEach(goals) { goal in
                         VStack(alignment: .leading) {
                             Text(goal.name ?? "Goal").font(.headline)
-                            Text("Saved: $\(goal.amountSaved, specifier: "%.2f") / $\(goal.targetAmount, specifier: "%.2f")")
+                            Text("Saved: $\(goal.amountSaved, specifier: "%.2f") / $\(goal.targetAmount ?? 0, specifier: "%.2f")")
                                 .font(.subheadline)
                             if let allocated = allocation[goal] {
                                 Text("Next Paycheck: $\(allocated, specifier: "%.2f")")
@@ -63,11 +63,12 @@ struct SavingsView: View {
     }
     
     func calculateSavingsDistribution(goals: [Goal], totalPerPaycheck: Double) -> [Goal: Double] {
-        let filteredGoals = goals.filter { $0.remainingAmount > 0 } // Ignore fully saved goals
+        let filteredGoals = goals.filter { ($0.targetAmount ?? 0) - $0.amountSaved > 0 } // Ignore fully saved goals
         guard !filteredGoals.isEmpty else { return [:] }
         
         let weightedGoals = filteredGoals.map { goal -> (Goal, Double) in
-            let urgencyFactor = goal.daysUntilDeadline > 0 ? 1.0 / Double(goal.daysUntilDeadline) : 1.0
+            let daysUntilDeadline = goal.deadline.map { Calendar.current.dateComponents([.day], from: Date(), to: $0).day ?? 0 } ?? 0
+            let urgencyFactor = daysUntilDeadline > 0 ? 1.0 / Double(daysUntilDeadline) : 1.0
             let weightedValue = urgencyFactor * goal.weight
             return (goal, weightedValue)
         }
@@ -77,7 +78,8 @@ struct SavingsView: View {
         var allocation: [Goal: Double] = [:]
         for (goal, weight) in weightedGoals {
             let percentage = weight / totalWeight
-            allocation[goal] = min(goal.remainingAmount, percentage * totalPerPaycheck)
+            let remainingAmount = (goal.targetAmount ?? 0) - goal.amountSaved
+            allocation[goal] = min(remainingAmount, percentage * totalPerPaycheck)
         }
         
         return allocation

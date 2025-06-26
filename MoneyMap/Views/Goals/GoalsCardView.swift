@@ -21,7 +21,11 @@ struct GoalsCardView: View {
     
     var body: some View {
         ScrollView {
-            LazyVStack {
+            let columns = [
+                // This will fit as many columns as possible with minimum width 250
+                GridItem(.adaptive(minimum: 250), spacing: 16)
+            ]
+            LazyVGrid(columns: columns, spacing: 16) {
                 ForEach(goals) { goal in
                     NavigationLink(destination: GoalDetailView(goal)) {
                         CardView(for: goal)

@@ -58,17 +58,17 @@ fileprivate struct Row: View {
         } label: {
             HStack(spacing: 10) {
                 
-                Image(systemName: bill.category.icon)
+                Image(systemName: bill.category?.icon ?? "questionmark.circle")
                     .resizable()
                     .scaledToFit()
                     .padding(5)
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 40)
-                    .background(bill.category.color.gradient)
+                    .background((bill.category?.color.gradient) ?? Color.gray.gradient)
                     .clipShape(.rect(cornerRadius: 5))
                 
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(bill.name)
+                    Text(bill.name ?? "Untitled")
                         .font(.title3.weight(.semibold))
                     Text(bill.status?.name ?? "N/A")
                         .font(.footnote)
@@ -77,7 +77,7 @@ fileprivate struct Row: View {
                 
                 Spacer()
                 
-                Text(bill.amount, format: .currency(code: "USD").precision(.fractionLength(0)))
+                Text((bill.amount ?? 0), format: .currency(code: "USD").precision(.fractionLength(0)))
                     .font(.system(.title, design: .rounded, weight: .bold))
                     .padding(.leading)
             }
@@ -97,14 +97,14 @@ fileprivate struct Row: View {
                 deletingBill.toggle()
             }.tint(.red)
         }
-        .alert("Delete \(bill.name) Bill", isPresented: $deletingBill) {
+        .alert("Delete \(bill.name ?? "Bill") Bill", isPresented: $deletingBill) {
             Button("Delete", role: .destructive) {
                 withAnimation {
                     modelContext.delete(bill)
                 }
             }
         } message: {
-            Text("Are you sure you want to delete your \(bill.name) bill? This cannot be undone.")
+            Text("Are you sure you want to delete your \(bill.name ?? "this") bill? This cannot be undone.")
         }
 
     }

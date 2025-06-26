@@ -41,23 +41,21 @@ struct BillEditor: View {
                             .multilineTextAlignment(.trailing)
                             .focused($focusedField, equals: .name)
                     }
-                    HStack {
-                        Text("Amount")
-                        Spacer()
-                        TextField("Amount", value: $amount, format: .currency(code: "USD"))
-                            .multilineTextAlignment(.trailing)
-                            .keyboardType(.decimalPad)
-                            .focused($focusedField, equals: .amount)
-                    }
-                    DatePicker("Due Date", selection: $dueDate, displayedComponents: .date)
-                }
-
-                // Category Section
-                Section(header: Text("Category")) {
                     Picker("Category", selection: $selectedCategory) {
                         ForEach(BillCategory.allCases.sorted(by: <), id: \ .self) { category in
                             Label(category.name, systemImage: category.icon)
                                 .tint(category.color)
+                        }
+                    }
+                    DatePicker("Due Date", selection: $dueDate, displayedComponents: .date)
+                    if selectedCategory != .creditCard {
+                        HStack {
+                            Text("Amount")
+                            Spacer()
+                            TextField("Amount", value: $amount, format: .currency(code: "USD"))
+                                .multilineTextAlignment(.trailing)
+                                .keyboardType(.decimalPad)
+                                .focused($focusedField, equals: .amount)
                         }
                     }
                 }
@@ -101,19 +99,22 @@ struct BillEditor: View {
                         saveBill()
                     }
                 }
-                ToolbarItemGroup(placement: .keyboard) {
+                ToolbarItem(placement: .keyboard) {
                     Button {
                         moveFocus(direction: -1)
                     } label: {
                         Label("Previous", systemImage: "chevron.up")
                     }
-                    Spacer()
+                }
+                ToolbarItem(placement: .keyboard) {
                     Button {
                         moveFocus(direction: 1)
                     } label: {
                         Label("Next", systemImage: "chevron.down")
                     }
-                    Spacer()
+                }
+                ToolbarSpacer(.fixed)
+                ToolbarItem(placement: .keyboard) {
                     Button("Done") {
                         focusedField = nil
                     }

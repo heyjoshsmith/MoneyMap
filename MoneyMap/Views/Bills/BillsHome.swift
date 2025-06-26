@@ -12,6 +12,7 @@ struct BillsHome: View {
     
     @Environment(\.modelContext) private var modelContext
     @Query private var bills: [Bill]
+    @Query private var goals: [Goal]
     
     @State private var addingBill = false
     @State private var editingBalance = false
@@ -23,65 +24,12 @@ struct BillsHome: View {
         NavigationStack {
             List {
                 
-                Section {
-                    
-                    Gauge(value: bills.totalBalance, in: 0...(bills.totalCreditLimit)) {
-                        VStack {
-                            HStack {
-                                Text("Credit Cards")
-                                    .font(.title3.weight(.semibold))
-                                Spacer()
-                                Text(bills.creditCardUtilization, format: .percent.precision(.fractionLength(0)))
-                                    .fontDesign(.rounded)
-                                    .font(.title3.weight(.bold))
-                                    .multilineTextAlignment(.trailing)
-                            }
-                            HStack {
-                                Text(bills.totalBalance, format: .currency(code: "USD").precision(.fractionLength(0)))
-                                Spacer()
-                                Text(bills.totalCreditLimit, format: .currency(code: "USD").precision(.fractionLength(0)))
-                            }
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-                    .tint(LinearGradient(colors: [.green, .yellow, .red], startPoint: .leading, endPoint: .trailing))
-                    
-                    if bills.creditCardUtilization >= 0.3 {
-                        HStack {
-                            Text("Amount Over Utilization")
-                            Spacer()
-                            Text((bills.totalBalance - bills.totalCreditLimit * 0.3), format: .currency(code: "USD"))
-                        }
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    }
-                    
-                }
-                .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
+                CreditCardGauge(bills: bills)
                 
                 Section {
-                    ForEach(bills.creditCards.sorted(by: Bill.byDate)) { card in
-                        CreditCardRow(for: card)
-                        .contextMenu {
-                            Button("Balance", systemImage: "dollarsign.gauge.chart.lefthalf.righthalf") {
-                                billToEdit = card
-                                alertValue = String(billToEdit?.creditCardDetails?.cardBalance ?? 0.0)
-                                editingBalance = true
-                            }
-                        }
-                        .swipeActions(edge: .leading) {
-                            Button("Make Payment", systemImage: "dollarsign.arrow.trianglehead.counterclockwise.rotate.90") {
-                                billToEdit = card
-                                alertValue = ""
-                                makingPayment = true
-                            }.tint(.green)
-                        }
-                        .swipeActions(edge: .trailing) {
-                            Button("Delete", systemImage: "trash") {
-                                modelContext.delete(card)
-                            }.tint(.red)
-                        }
+                    ForEach(bills.creditCards.sorted(by: Bill.byStatusDateUtilization)) { card in
+                        // Use closure to allow local @State
+                        CardRowWithDelete(card: card, modelContext: modelContext, billToEdit: $billToEdit, alertValue: $alertValue, editingBalance: $editingBalance, makingPayment: $makingPayment)
                     }
                 }
                 
@@ -102,7 +50,7 @@ struct BillsHome: View {
                 BillEditor()
             }
             .alert(billToEdit?.name ?? "Current Balance", isPresented: $editingBalance) {
-                TextField("Enter Balance", text: $alertValue)
+                TextField(balancePlaceholder, text: $alertValue)
                     .keyboardType(.decimalPad)
                 Button("Cancel", role: .cancel) { }
                 Button("Done") {
@@ -112,8 +60,8 @@ struct BillsHome: View {
             } message: {
                 Text("What is your current balance?")
             }
-            .alert(billToEdit?.name ?? "Payment Amount", isPresented: $makingPayment) {
-                TextField("Enter Payment", text: $alertValue)
+            .alert(paymentTitle, isPresented: $makingPayment) {
+                TextField(paymentPlaceholder, text: $alertValue)
                     .keyboardType(.decimalPad)
                 Button("Cancel", role: .cancel) { }
                 Button("Done") {
@@ -126,9 +74,73 @@ struct BillsHome: View {
         }
     }
     
+    var paymentPlaceholder: String {
+        if let payment = billToEdit?.creditCardDetails?.recommendedPayment {
+            return "Recommended: $\(payment)"
+        } else {
+            return "Enter Payment"
+        }
+    }
+    
+    var balancePlaceholder: String {
+        if let balance = billToEdit?.creditCardDetails?.cardBalance {
+            return "Current: $\(balance)"
+        } else {
+            return "Enter Balance"
+        }
+    }
+        
+    var paymentTitle: String {
+        
+        if let billToEdit, let name = billToEdit.name {
+            return name
+        }
+        return "Payment Amount"
+    }
+    
+}
+
+private struct CardRowWithDelete: View {
+    let card: Bill
+    let modelContext: ModelContext
+    
+    @Binding var billToEdit: Bill?
+    @Binding var alertValue: String
+    @Binding var editingBalance: Bool
+    @Binding var makingPayment: Bool
+    
+    @State private var showingDeleteConfirmation = false
+    
+    var body: some View {
+        CreditCardRow(for: card)
+            .swipeActions(edge: .leading) {
+                Button("Pay", systemImage: "dollarsign.arrow.trianglehead.counterclockwise.rotate.90") {
+                    billToEdit = card
+                    alertValue = ""
+                    makingPayment = true
+                }.tint(.green)
+                Button("Balance", systemImage: "dollarsign.gauge.chart.lefthalf.righthalf") {
+                    billToEdit = card
+                    editingBalance = true
+                }.tint(.blue)
+            }
+            .swipeActions(edge: .trailing) {
+                Button("Delete", systemImage: "trash") {
+                    showingDeleteConfirmation = true
+                }.tint(.red)
+            }
+            .confirmationDialog("Are you sure you want to delete this bill?", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
+                Button("Delete", role: .destructive) {
+                    modelContext.delete(card)
+                }
+                Button("Cancel", role: .cancel) {}
+            }
+    }
 }
 
 #Preview {
-    BillsHome()
-        .modelContainer(Bill.preview)
-}
+      let (container, paydayManager) = PreviewDataProvider.createContainer()
+      BillsHome()
+          .environmentObject(paydayManager)
+          .modelContainer(container)
+  }

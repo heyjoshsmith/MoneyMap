@@ -27,7 +27,7 @@ struct GoalsView: View {
     
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 
                 if listView {
@@ -46,18 +46,14 @@ struct GoalsView: View {
                 }
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    NavigationLink {
-                        PaydayView()
-                    } label: {
-                        Image(systemName: "gear")
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Add Goal", systemImage: "plus") {
+                        addingGoal.toggle()
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu("Add", systemImage: "ellipsis.circle") {
-                        Button("Add Goal", systemImage: "text.badge.star") {
-                            addingGoal.toggle()
-                        }
+                        
                         Button("Add Savings", systemImage: "dollarsign.arrow.trianglehead.counterclockwise.rotate.90") {
                             addingSavings.toggle()
                         }

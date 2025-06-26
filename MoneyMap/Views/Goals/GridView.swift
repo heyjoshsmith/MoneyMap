@@ -12,9 +12,9 @@ struct GridView: View {
     
     init(_ goal: Goal, choosingImage: Binding<Bool>) {
         self.goal = goal
-        self._targetAmount = State(initialValue: goal.targetAmount)
+        self._targetAmount = State(initialValue: goal.targetAmount ?? 0)
         self._amountSaved = State(initialValue: goal.amountSaved)
-        self._deadline = State(initialValue: goal.deadline)
+        self._deadline = State(initialValue: goal.deadline ?? .now)
         self._priority = State(initialValue: goal.weight)
         self._choosingImage = choosingImage
     }
@@ -37,7 +37,7 @@ struct GridView: View {
     var body: some View {
         Grid() {
             
-            if goal.loadImage() == nil, let name = goal.name {
+            if goal.imageData == nil, let name = goal.name {
                 GridRow {
                     Button {
                         choosingImage.toggle()
@@ -61,11 +61,11 @@ struct GridView: View {
             
             GridRow {
                 
-                Widget(.targetAmount, value: goal.targetAmount) {
+                Widget(.targetAmount, value: goal.targetAmount ?? 0) {
                     editingTargetAmount.toggle()
                 }
                 
-                Widget(.deadline, date: goal.deadline) {
+                Widget(.deadline, date: goal.deadline ?? .now) {
                     editingDeadline.toggle()
                 }
                 
@@ -73,7 +73,7 @@ struct GridView: View {
             
             GridRow {
                 Widget(.daysUntilDeadline, value: Double(daysUntilDeadline), currency: false)
-                Widget(.numberOfPaydays, value: Double(paydayManager.numberOfPaydaysUntil(goal.deadline)), currency: false)
+                Widget(.numberOfPaydays, value: Double(paydayManager.numberOfPaydaysUntil(goal.deadline ?? .now)), currency: false)
             }
             
             GridRow {
@@ -145,7 +145,7 @@ struct GridView: View {
             Text("You currently have \(goal.amountSaved, format: .currency(code: "USD").precision(.fractionLength(0))) saved.")
         })
         .alert("Target Amount", isPresented: $editingTargetAmount, actions: {
-            TextField(goal.targetAmount.formatted(.currency(code: "USD").precision(.fractionLength(0))), value: $targetAmount, format: .currency(code: "USD").precision(.fractionLength(0)))
+            TextField((goal.targetAmount ?? 0).formatted(.currency(code: "USD").precision(.fractionLength(0))), value: $targetAmount, format: .currency(code: "USD").precision(.fractionLength(0)))
             Button("Cancel", role: .cancel) { }
             Button("Save") {
                 goal.targetAmount = targetAmount ?? 0
@@ -155,14 +155,16 @@ struct GridView: View {
     
     /// Days remaining until the deadline.
     var daysUntilDeadline: Int {
+        guard let deadline = goal.deadline else { return 0 }
         let now = Date()
-        let components = Calendar.current.dateComponents([.day], from: now, to: goal.deadline)
+        let components = Calendar.current.dateComponents([.day], from: now, to: deadline)
         return components.day ?? 0
     }
     
     /// The remaining amount left to save.
     var remainingAmount: Double {
-        return max(goal.targetAmount - goal.amountSaved, 0)
+        let targetAmount = goal.targetAmount ?? 0
+        return max(targetAmount - goal.amountSaved, 0)
     }
     
     @EnvironmentObject var paydayManager: PaydayManager
@@ -224,7 +226,7 @@ enum Priority: Double, CaseIterable, Identifiable {
     let (container, paydayManager) = PreviewDataProvider.createContainer()
     
     NavigationStack {
-        GridView(Goal("Test", targetAmount: 300, deadline: .now, weight: 1, imageURL: nil, paydaysUntil: 3), choosingImage: .constant(false))
+        GridView(Goal("Test", targetAmount: 300, deadline: .now, weight: 1, paydaysUntil: 3), choosingImage: .constant(false))
     }
     .environmentObject(paydayManager)
     .modelContainer(container)

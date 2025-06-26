@@ -7,6 +7,7 @@
 
 import Foundation
 
+@available(*, deprecated, message: "Use imageData/uiImage instead. imageURL is only for legacy migration.")
 func saveImageToDocuments(originalURL: URL? = nil, imageData: Data? = nil) -> URL? {
     let fileManager = FileManager.default
     // Use shared App Group container

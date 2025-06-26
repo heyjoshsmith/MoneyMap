@@ -29,7 +29,7 @@ struct GoalsListView: View {
                 NavigationLink(destination: GoalDetailView(goal)) {
                     HStack {
                         
-                        if let image = goal.loadImage() {
+                        if let image = goal.uiImage {
                             Image(uiImage: image)
                                 .resizable()
                                 .scaledToFit()
@@ -52,12 +52,14 @@ struct GoalsListView: View {
                                 Text(name)
                                     .font(.title2.weight(.semibold))
                             } else {
-                                Text("Save $\(goal.targetAmount, specifier: "%.2f")")
+                                Text("Save $\(goal.targetAmount ?? 0, specifier: "%.2f")")
                                     .font(.headline)
                             }
-                            Text("By \(goal.deadline, style: .date)")
-                                .font(.callout)
-                                .foregroundColor(.secondary)
+                            if let deadline = goal.deadline {
+                                Text("By \(deadline, style: .date)")
+                                    .font(.callout)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                         
                         if goal.name != nil {

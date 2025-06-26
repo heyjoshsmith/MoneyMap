@@ -6,7 +6,7 @@
 //
 
 import SwiftUI
-import Glur
+//import Glur
 
 struct MirroredBackgroundScrollView<Content: View>: View {
     
@@ -60,7 +60,7 @@ struct MirroredBackgroundScrollView<Content: View>: View {
                     .clipped()
                     .scaleEffect(y: index % 2 == 0 ? 1 : -1)
                     .blur(radius: index == 0 ? 0 : 20, opaque: true)
-                    .glur(radius: index == 0 ? 20 : 0)
+//                    .glur(radius: index == 0 ? 20 : 0)
             }
         }
     }

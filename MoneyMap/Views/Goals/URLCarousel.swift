@@ -65,7 +65,7 @@ struct URLCarousel: View {
     private func pasteLinks() {
         if let clipboardText = UIPasteboard.general.string {
             let detectedLinks = extractURLs(from: clipboardText)
-            if let urls = goal.urls {
+            if goal.urls != nil {
                 goal.urls?.append(contentsOf: detectedLinks)
             } else {
                 goal.urls = detectedLinks
@@ -85,7 +85,7 @@ struct URLCarousel: View {
 }
 
 #Preview {
-    URLCarousel(for: Goal("Standing Desk", targetAmount: 500, deadline: .now, weight: 1.0, imageURL: nil, paydaysUntil: 6))
+    URLCarousel(for: Goal("Standing Desk", targetAmount: 500, deadline: .now, weight: 1.0, paydaysUntil: 6))
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(uiColor: .systemGroupedBackground))

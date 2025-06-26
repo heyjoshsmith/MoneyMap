@@ -22,8 +22,8 @@ struct CardView: View {
             
             ZStack(alignment: .topLeading) {
                 GeometryReader { proxy in
-                    if let image = goal.loadImage() {
-                        Image(uiImage: image)
+                    if let uiImage = goal.uiImage {
+                        Image(uiImage: uiImage)
                             .resizable()
                             .scaledToFill()
                             .frame(width: proxy.size.width, height: 200)
@@ -44,7 +44,7 @@ struct CardView: View {
                 } currentValueLabel: {
                     Text("\(Int(goal.progress() * 100))%")
                 }
-                .tint(goal.imageFileName == nil ? .white : .green)
+                .tint(goal.imageData == nil ? .white : .green)
                 .gaugeStyle(.accessoryCircularCapacity)
                 .shadow(radius: 15)
                 .padding()
@@ -55,10 +55,11 @@ struct CardView: View {
                 
                 Text(goal.name ?? "Unknown")
                     .font(.title2.weight(.semibold))
+                    .lineLimit(1)
                 
                 Spacer()
                 
-                Text(goal.targetAmount, format: .currency(code: "USD").precision(.fractionLength(0)))
+                Text(goal.targetAmount ?? 0, format: .currency(code: "USD").precision(.fractionLength(0)))
                     .foregroundStyle(.secondary)
                 
                 Image(systemName: "chevron.right")

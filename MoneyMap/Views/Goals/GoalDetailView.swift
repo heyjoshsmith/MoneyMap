@@ -7,7 +7,7 @@
 
 import SwiftUI
 import PhotosUI
-import Glur
+//import Glur
 import MoneyMapShared
 
 struct GoalDetailView: View {
@@ -53,8 +53,8 @@ struct GoalDetailView: View {
                     Text("Saved Files: \(savedFiles)")
                         .opacity(0)
                     
-                    if let image = goal.loadImage() {
-                        HeroImage(goal.name ?? "", image: Image(uiImage: image))
+                    if let uiImage = goal.uiImage {
+                        HeroImage(goal.name ?? "", image: Image(uiImage: uiImage))
                     } else if let selectedImage {
                         HeroImage(goal.name ?? "", image: Image(uiImage: selectedImage))
                     } else if isLoading {
@@ -96,12 +96,20 @@ struct GoalDetailView: View {
             
         }
         .imagePlaygroundSheet(isPresented: $creatingImage, concept: goal.name ?? "", onCompletion: { url in
-            self.imageURL = saveImageToDocuments(originalURL: url)
+            Task {
+                if let data = try? Data(contentsOf: url) {
+                    goal.imageData = data
+                    selectedImage = UIImage(data: data)
+                }
+                // Optionally, for legacy migration support:
+                self.imageURL = url
+            }
         })
         .sheet(isPresented: $choosingSavedImage) {
-            ChooseImageView() { url in
-                goal.imageFileName = url.lastPathComponent
-            }
+            Text("This feature is deprecated.")
+//            ChooseImageView() { url in
+//                goal.imageFileName = url.lastPathComponent
+//            }
         }
         .onChange(of: selectedItem) { oldItem, newItem in
             Task {
@@ -115,43 +123,28 @@ struct GoalDetailView: View {
     // Main Functions
     
     func loadImage(_ newItem: PhotosPickerItem?) async {
-        
         isLoading = true
         choosingImage = false
         defer { isLoading = false }
-        
+
         guard let newItem else {
             errorMessage = "No image selected"
             print("Error: No item selected")
             return
         }
-        
+
         do {
-            
-            if let data = try await newItem.loadTransferable(type: Data.self){
+            if let data = try await newItem.loadTransferable(type: Data.self) {
                 selectedImage = UIImage(data: data)
-                
-                // Attempt to load image as URL (optional)
-                let url = try? await newItem.loadTransferable(type: URL.self)
-                
-                // Save using URL if available, otherwise use Data
-                let localURL = saveImageToDocuments(originalURL: url, imageData: data)
-                
-                if let localURL {
-                    goal.imageFileName = localURL.lastPathComponent
-                } else {
-                    errorMessage = "Unable to save image to local storage"
-                }
-                
+                // Save image data directly into the Goal for CloudKit sync
+                goal.imageData = data
             } else {
                 errorMessage = "Unable to load image"
             }
-            
         } catch {
             errorMessage = "Failed to load image: \(error.localizedDescription)"
             print("Error: \(error.localizedDescription)")
         }
-        
     }
     
     
@@ -237,7 +230,7 @@ func getSavedFiles() -> [URL] {
     let (container, paydayManager) = PreviewDataProvider.createContainer()
     
     NavigationStack {
-        GoalDetailView(.init("New Couch", targetAmount: 3000, deadline: .distantFuture, weight: 1.0, imageURL: nil, paydaysUntil: paydayManager.numberOfPaydaysUntil(.distantFuture)))
+        GoalDetailView(.init("New Couch", targetAmount: 3000, deadline: .distantFuture, weight: 1.0, paydaysUntil: paydayManager.numberOfPaydaysUntil(.distantFuture)))
     }
     .environmentObject(paydayManager)
     .modelContainer(container)

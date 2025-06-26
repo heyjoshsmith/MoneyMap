@@ -29,11 +29,16 @@ struct ContentView: View {
                     Image(systemName: "banknote")
                     Text("Bills")
                 }
+            Settings().tag(Tab.settings)
+                .tabItem {
+                    Image(systemName: "gear")
+                    Text("Settings")
+                }
         }
     }
     
     enum Tab: String, CaseIterable, Identifiable {
-        case goals, pay, bills
+        case goals, pay, bills, settings
         var id: Self { return self }
     }
 }

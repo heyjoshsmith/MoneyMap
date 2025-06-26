@@ -6,7 +6,7 @@
 //
 
 import SwiftUI
-import Glur
+//import Glur
 
 struct HeroImage: View {
     
@@ -49,7 +49,7 @@ struct HeroImage: View {
             image
                 .resizable()
                 .scaledToFit()
-                .glur(offset: 0.7)
+//                .glur(offset: 0.7)
             
             Text(label)
                 .font(.title.weight(.semibold))

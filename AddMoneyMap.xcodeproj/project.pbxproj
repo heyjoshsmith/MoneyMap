@@ -7,12 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		34AF79862D5D4A52001CEE30 /* Glur in Frameworks */ = {isa = PBXBuildFile; productRef = 34AF79852D5D4A52001CEE30 /* Glur */; };
 		A726FAF42DC2C602006D6A82 /* MoneyMapShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A726FAEC2DC2C602006D6A82 /* MoneyMapShared.framework */; };
 		A726FAF52DC2C602006D6A82 /* MoneyMapShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A726FAEC2DC2C602006D6A82 /* MoneyMapShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A726FAFC2DC2C64D006D6A82 /* MoneyMapShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A726FAEC2DC2C602006D6A82 /* MoneyMapShared.framework */; };
 		A726FAFD2DC2C64D006D6A82 /* MoneyMapShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A726FAEC2DC2C602006D6A82 /* MoneyMapShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A7DF69152DBE99A400071A0C /* MoneyMapShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A7DF690B2DBE99A400071A0C /* MoneyMapShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A7FF14072E0CB75100EF0464 /* MoneyMap.icon in Resources */ = {isa = PBXBuildFile; fileRef = A7FF14062E0CB75100EF0464 /* MoneyMap.icon */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -79,6 +79,7 @@
 		34AF79522D5C448E001CEE30 /* MoneyMap.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MoneyMap.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A726FAEC2DC2C602006D6A82 /* MoneyMapShared.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = MoneyMapShared.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		A7DF690B2DBE99A400071A0C /* MoneyMapShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MoneyMapShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A7FF14062E0CB75100EF0464 /* MoneyMap.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = MoneyMap.icon; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -89,21 +90,7 @@
 			);
 			target = 34AF79512D5C448E001CEE30 /* MoneyMap */;
 		};
-		A726FB072DC2C858006D6A82 /* Exceptions for "MoneyMapShared" folder in "MoneyMap" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Goal.swift,
-			);
-			target = 34AF79512D5C448E001CEE30 /* MoneyMap */;
-		};
-		A726FB082DC2C85A006D6A82 /* Exceptions for "MoneyMapShared" folder in "MoneyMapShareExtension" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Goal.swift,
-			);
-			target = A7DF690A2DBE99A400071A0C /* MoneyMapShareExtension */;
-		};
-		A7DF691C2DBEA81C00071A0C /* Exceptions for "MoneyMapShareExtension" folder in "MoneyMapShareExtension" target */ = {
+		A7C081C22E04CC0500084B8D /* Exceptions for "MoneyMapShareExtension" folder in "MoneyMapShareExtension" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -123,17 +110,13 @@
 		};
 		A726FAED2DC2C602006D6A82 /* MoneyMapShared */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				A726FB072DC2C858006D6A82 /* Exceptions for "MoneyMapShared" folder in "MoneyMap" target */,
-				A726FB082DC2C85A006D6A82 /* Exceptions for "MoneyMapShared" folder in "MoneyMapShareExtension" target */,
-			);
 			path = MoneyMapShared;
 			sourceTree = "<group>";
 		};
 		A7DF690C2DBE99A400071A0C /* MoneyMapShareExtension */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				A7DF691C2DBEA81C00071A0C /* Exceptions for "MoneyMapShareExtension" folder in "MoneyMapShareExtension" target */,
+				A7C081C22E04CC0500084B8D /* Exceptions for "MoneyMapShareExtension" folder in "MoneyMapShareExtension" target */,
 			);
 			path = MoneyMapShareExtension;
 			sourceTree = "<group>";
@@ -146,7 +129,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				A726FAF42DC2C602006D6A82 /* MoneyMapShared.framework in Frameworks */,
-				34AF79862D5D4A52001CEE30 /* Glur in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -175,6 +157,7 @@
 				A7DF690C2DBE99A400071A0C /* MoneyMapShareExtension */,
 				A747BC602DC284F600DAF6B6 /* Frameworks */,
 				34AF79532D5C448E001CEE30 /* Products */,
+				A7FF14062E0CB75100EF0464 /* MoneyMap.icon */,
 			);
 			sourceTree = "<group>";
 		};
@@ -231,7 +214,6 @@
 			);
 			name = MoneyMap;
 			packageProductDependencies = (
-				34AF79852D5D4A52001CEE30 /* Glur */,
 			);
 			productName = MoneyMap;
 			productReference = 34AF79522D5C448E001CEE30 /* MoneyMap.app */;
@@ -316,7 +298,6 @@
 			mainGroup = 34AF79492D5C448E001CEE30;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				34AF79842D5D4A52001CEE30 /* XCRemoteSwiftPackageReference "Glur" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 34AF79532D5C448E001CEE30 /* Products */;
@@ -335,6 +316,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A7FF14072E0CB75100EF0464 /* MoneyMap.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -400,7 +382,7 @@
 		34AF79642D5C4490001CEE30 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = MoneyMap;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = MoneyMap/MoneyMap.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -422,11 +404,11 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.heyjoshsmith.MoneyMap;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -435,14 +417,14 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				XROS_DEPLOYMENT_TARGET = 2.2;
+				XROS_DEPLOYMENT_TARGET = 26.0;
 			};
 			name = Debug;
 		};
 		34AF79652D5C4490001CEE30 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = MoneyMap;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = MoneyMap/MoneyMap.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -464,11 +446,11 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.heyjoshsmith.MoneyMap;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -477,7 +459,7 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				XROS_DEPLOYMENT_TARGET = 2.2;
+				XROS_DEPLOYMENT_TARGET = 26.0;
 			};
 			name = Release;
 		};
@@ -767,25 +749,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		34AF79842D5D4A52001CEE30 /* XCRemoteSwiftPackageReference "Glur" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/joogps/Glur.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.0.4;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		34AF79852D5D4A52001CEE30 /* Glur */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 34AF79842D5D4A52001CEE30 /* XCRemoteSwiftPackageReference "Glur" */;
-			productName = Glur;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 34AF794A2D5C448E001CEE30 /* Project object */;
 }
