@@ -7,7 +7,7 @@
 
 import SwiftUI
 import SwiftData
-import MoneyMapShared
+
 
 struct GoalsCardView: View {
     

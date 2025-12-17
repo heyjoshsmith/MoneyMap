@@ -8,7 +8,7 @@
 import SwiftUI
 import PhotosUI
 //import Glur
-import MoneyMapShared
+
 
 struct GoalDetailView: View {
     

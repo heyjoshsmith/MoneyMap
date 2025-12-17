@@ -10,7 +10,6 @@ import SwiftUI
 struct BillRow: View {
     
     var bills: Bills
-    @State private var isPresented: Bool = false
     
     var body: some View {
         VStack {
@@ -19,8 +18,13 @@ struct BillRow: View {
                 Text("Bills")
                     .font(.title3.weight(.medium))
                 Spacer()
-                Button("View All") {
-                    isPresented.toggle()
+                NavigationLink {
+                    BillsView()
+                } label: {
+                    HStack {
+                        Spacer()
+                        Text("View All")
+                    }
                 }
                 .foregroundStyle(.blue)
             }.padding(.horizontal)
@@ -37,9 +41,6 @@ struct BillRow: View {
         .listRowInsets(EdgeInsets(top: 15, leading: 0, bottom: 15, trailing: 0))
         .listRowSeparator(.hidden)
         .scrollIndicators(.hidden)
-        .navigationDestination(isPresented: $isPresented) {
-            BillsView()
-        }
     }
     
 }

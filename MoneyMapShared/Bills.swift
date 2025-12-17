@@ -121,6 +121,7 @@ struct CreditCardDetails: Codable {
 
 // MARK: - Bill Model
 
+/// Represents a bill, which can also represent a credit card with related transactions.
 @Model
 class Bill {
     
@@ -135,6 +136,8 @@ class Bill {
     var creditCardDetails: CreditCardDetails?
     var status: Status?
     var imageData: Data?
+    
+    @Relationship(inverse: \Transaction.creditCard) var transactions: [Transaction]?
     
     var image: Image? {
         #if os(iOS) || os(tvOS) || os(watchOS)

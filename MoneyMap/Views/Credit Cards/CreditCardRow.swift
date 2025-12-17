@@ -47,13 +47,26 @@ struct CreditCardRow: View {
                     .tint(LinearGradient(colors: [.green, .yellow, .red], startPoint: .leading, endPoint: .trailing))
                     .overlay {
                         GeometryReader { geometry in
-                            // Calculate the x-coordinate for 30% of the gauge's width
-                            let markerX = geometry.size.width * 0.3
                             // Position the marker (a hollow circle with a white outline) at that position and vertically centered.
-                            Circle()
-                                .stroke(Color.white, lineWidth: 2)
-                                .frame(width: 15, height: 15)
-                                .position(x: markerX, y: geometry.size.height - 8)
+                            Group {
+                                if details.utilization >= 0.3 {
+                                    Image(systemName: "30.circle")
+                                        .resizable()
+                                        .scaledToFit()
+                                        .fontWeight(.light)
+                                        .frame(width: 15, height: 15)
+                                        .position(x: geometry.size.width * 0.3, y: geometry.size.height - 8)
+                                } else if details.utilization >= 0.1 {
+                                    Image(systemName: "10.circle")
+                                        .resizable()
+                                        .scaledToFit()
+                                        .fontWeight(.light)
+                                        .frame(width: 15, height: 15)
+                                        .position(x: geometry.size.width * 0.1, y: geometry.size.height - 8)
+                                }
+                            }
+                            .symbolVariant(.fill)
+                            .foregroundStyle(.red, .white)
                         }
                     }
                     
@@ -94,3 +107,4 @@ struct CreditCardRow: View {
         .background(Color(uiColor: .systemGroupedBackground))
     }
 }
+

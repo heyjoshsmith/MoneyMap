@@ -8,7 +8,7 @@
 import SwiftUI
 import ImagePlayground
 import PhotosUI
-import MoneyMapShared
+
 
 struct AddGoalView: View {
     

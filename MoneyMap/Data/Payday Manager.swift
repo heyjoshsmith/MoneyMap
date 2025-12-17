@@ -7,31 +7,7 @@
 
 import Foundation
 import SwiftData
-import MoneyMapShared
 
-@Model
-class PaydayConfig {
-    var nextPayday: Date?
-    var amountPerPayday: Double?
-    var savingsPerPaycheck: Double?
-    
-    private var storedStrategy: SaveStrategy? // Allow old data without a value
-    var strategy: SaveStrategy {
-        get { storedStrategy ?? SaveStrategy.oneItem } // Fallback for existing data
-        set { storedStrategy = newValue }
-    }
-    
-    init(nextPayday: Date?, strategy: SaveStrategy = .oneItem) {
-        self.nextPayday = nextPayday
-        self.strategy = strategy
-    }
-    
-}
-
-enum SaveStrategy: String, Codable, CaseIterable, Identifiable {
-    case oneItem, allItems
-    var id: String { rawValue }
-}
 
 // MARK: - Payday Manager
 class PaydayManager: ObservableObject {
@@ -167,10 +143,47 @@ struct PreviewDataProvider {
         let endOfMonth = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date()))!
             .addingTimeInterval(60 * 60 * 24 * 32)
         let lastDayOfMonth = Calendar.current.date(byAdding: .day, value: -Calendar.current.component(.day, from: endOfMonth), to: endOfMonth)!
-        let creditCardDetails = CreditCardDetails(creditLimit: 15000, cardBalance: 2500)
-        let appleCard = Bill(name: "Apple Card", amount: 0, dueDate: lastDayOfMonth, category: .creditCard, recurrenceInterval: 1, recurrenceUnit: .month, creditCardDetails: creditCardDetails)
         
-        mockContext.insert(appleCard)
+        let sampleCards: [Bill] = [
+            Bill(
+                name: "Apple Card",
+                amount: 0,
+                dueDate: lastDayOfMonth,
+                category: .creditCard,
+                recurrenceInterval: 1,
+                recurrenceUnit: .month,
+                creditCardDetails: CreditCardDetails(creditLimit: 15000, cardBalance: 2500)
+            ),
+            Bill(
+                name: "Chase Sapphire",
+                amount: 0,
+                dueDate: Calendar.current.date(byAdding: .day, value: -20, to: lastDayOfMonth)!,
+                category: .creditCard,
+                recurrenceInterval: 1,
+                recurrenceUnit: .month,
+                creditCardDetails: CreditCardDetails(creditLimit: 12000, cardBalance: 3200)
+            ),
+            Bill(
+                name: "Amex Gold",
+                amount: 0,
+                dueDate: Calendar.current.date(byAdding: .day, value: -10, to: lastDayOfMonth)!,
+                category: .creditCard,
+                recurrenceInterval: 1,
+                recurrenceUnit: .month,
+                creditCardDetails: CreditCardDetails(creditLimit: 9000, cardBalance: 1500)
+            ),
+            Bill(
+                name: "Citi Double Cash",
+                amount: 0,
+                dueDate: Calendar.current.date(byAdding: .day, value: -5, to: lastDayOfMonth)!,
+                category: .creditCard,
+                recurrenceInterval: 1,
+                recurrenceUnit: .month,
+                creditCardDetails: CreditCardDetails(creditLimit: 8000, cardBalance: 650)
+            )
+        ]
+        sampleCards.forEach { mockContext.insert($0) }
+        
         mockContext.insert(sampleGoal1)
         mockContext.insert(sampleGoal2)
         try! mockContext.save()
