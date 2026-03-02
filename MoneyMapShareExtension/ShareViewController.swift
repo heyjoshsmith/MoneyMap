@@ -12,20 +12,35 @@ import MoneyMapShared
 
 class ShareViewController: UIViewController {
     
-    private lazy var container: ModelContainer = {
-        let storeURL = FileManager.default
-            .containerURL(forSecurityApplicationGroupIdentifier: "group.com.heyjoshsmith.MoneyMap")!
-            .appendingPathComponent("shared.sqlite")
+    private lazy var container: ModelContainer? = {
+        guard let groupURL = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: "group.com.heyjoshsmith.MoneyMap") else {
+            return nil
+        }
+
+        let storeURL = groupURL.appendingPathComponent("shared.sqlite")
         let config = ModelConfiguration(url: storeURL)
         let schema = Schema([Goal.self])
-        return try! ModelContainer(for: schema, configurations: [config])
+        return try? ModelContainer(for: schema, configurations: [config])
     }()
     
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        // 4️⃣ Pass the actual context into your SwiftUI view
-        let shareView = ShareView(context: extensionContext!).modelContainer(container)
+        guard let context = extensionContext, let container else {
+            let fallback = Text("Unable to open share extension.")
+                .padding()
+            let host = UIHostingController(rootView: fallback)
+            addChild(host)
+            host.view.frame = view.bounds
+            host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            view.addSubview(host.view)
+            host.didMove(toParent: self)
+            return
+        }
+
+        // Pass the actual context into your SwiftUI view.
+        let shareView = ShareView(context: context).modelContainer(container)
         let host = UIHostingController(rootView: shareView)
 
         addChild(host)

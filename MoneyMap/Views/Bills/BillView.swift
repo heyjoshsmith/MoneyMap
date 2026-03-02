@@ -70,6 +70,10 @@ struct BillView: View {
     var allCategories: [String] {
         Set((bill.transactions ?? []).compactMap { $0.category }).sorted()
     }
+
+    private var previewTransactions: [Transaction] {
+        Array(filteredAndSortedTransactions.prefix(3))
+    }
     
     var transactionView: some View {
         return VStack(alignment: .leading, spacing: 8) {
@@ -92,7 +96,7 @@ struct BillView: View {
                     .foregroundStyle(.secondary)
                     .padding(.leading)
             } else {
-                ForEach(filteredAndSortedTransactions[0...2], id: \.self) { transaction in
+                ForEach(previewTransactions, id: \.self) { transaction in
                     TransactionRow(transaction: transaction, onSetFriendlyName: { selected in
                         pendingFriendlyName = ""
                         transactionForFriendlyName = selected
@@ -213,6 +217,14 @@ struct BillView: View {
                             showingImporter = true
                         }
                     }
+                    if bill.category == .creditCard {
+                        Section {
+                            Button("Edit Card Limit") {
+                                cardLimit = bill.creditCardDetails?.creditLimit.formatted(.number) ?? ""
+                                editingLimit = true
+                            }
+                        }
+                    }
                 } label: {
                     Label("Options", systemImage: "ellipsis")
                 }
@@ -222,9 +234,15 @@ struct BillView: View {
             TextField("New Limit", text: $cardLimit)
             Button("Cancel", role: .cancel) { }
             Button("Save") {
-                if let newLimit = Double(cardLimit) {
-                    // TODO: Update card limit via binding or callback. Cannot mutate bill here.
-                    print(newLimit)
+                let normalized = cardLimit.replacingOccurrences(of: ",", with: "")
+                if let newLimit = Double(normalized), newLimit >= 0 {
+                    bill.creditCardDetails?.creditLimit = newLimit
+                    do {
+                        try modelContext.save()
+                    } catch {
+                        importErrorMessage = "Could not update card limit: \(error.localizedDescription)"
+                        importErrorAlert = true
+                    }
                 }
             }
         } message: {
@@ -271,7 +289,11 @@ struct BillView: View {
                 }
             }
         })
-        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.commaSeparatedText], allowsMultipleSelection: true) { result in
+        .fileImporter(
+            isPresented: $showingImporter,
+            allowedContentTypes: [.commaSeparatedText, .text, .plainText],
+            allowsMultipleSelection: true
+        ) { result in
             switch result {
             case .success(let urls):
                 var errorMessages: [String] = []
@@ -315,9 +337,6 @@ struct BillView: View {
                     
                     if matchPrefix {
                         let prefix = prefixSearchText.trimmingCharacters(in: .whitespaces)
-                        print("[DEBUG] Prefix to match (trimmed, lowercased): '\(prefix)'")
-                        let allMerchants = (bill.transactions ?? []).compactMap { $0.merchant }
-                        for merchantName in allMerchants { print("[DEBUG] Candidate merchant: '\(merchantName)'") }
                         if prefix.isEmpty {
                             // If prefix is empty when matchPrefix enabled, do not make changes
                             transactionForFriendlyName = nil
@@ -326,17 +345,10 @@ struct BillView: View {
                             prefixSearchText = ""
                             return
                         }
-                        for tx in (bill.transactions ?? []) {
-                            let merchantName = tx.merchant ?? "<nil>"
-                            let isMatch = merchantName.lowercased().hasPrefix(prefix.lowercased())
-                            print("[DEBUG] '\(merchantName)' matches prefix '\(prefix)'? \(isMatch)")
-                        }
                         let matchingTransactions = (bill.transactions ?? []).filter {
                             guard let merchantName = $0.merchant else { return false }
                             return merchantName.lowercased().hasPrefix(prefix.lowercased())
                         }
-                        print("[DEBUG] Matched transactions count: \(matchingTransactions.count)")
-                        print("[DEBUG] Matched merchants: \(matchingTransactions.compactMap { $0.merchant })")
                         for tx in matchingTransactions {
                             tx.friendlyName = pendingFriendlyName
                         }
@@ -545,9 +557,7 @@ struct BillView: View {
     
     var aboveMax: Bool {
         if let creditCardDetails = bill.creditCardDetails {
-            
-            return (creditCardDetails.cardBalance / creditCardDetails.creditLimit) >= 0.3
-            
+            return creditCardDetails.utilization >= 0.3
         }
         
         return false
@@ -557,7 +567,7 @@ struct BillView: View {
         HStack {
             if let creditCardDetails = bill.creditCardDetails {
                 
-                let above = (creditCardDetails.cardBalance / creditCardDetails.creditLimit) >= 0.3
+                let above = creditCardDetails.utilization >= 0.3
                 
                 if above {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -567,7 +577,7 @@ struct BillView: View {
                         .foregroundStyle(.green)
                 }
                 
-                Text((creditCardDetails.cardBalance / creditCardDetails.creditLimit), format: .percent.precision(.fractionLength(0)))
+                Text(creditCardDetails.utilization, format: .percent.precision(.fractionLength(0)))
                 
             } else {
                 Image(systemName: "questionmark.square.dashed")
@@ -603,7 +613,6 @@ struct FriendlyNameSheet: View {
             .toolbar {
                 ToolbarItem {
                     Button("Save", systemImage: "checkmark", role: .confirm) {
-                        print("Saving friendly name \(friendlyName) and match prefix \(matchPrefix)")
                         onComplete(true)
                         isPresented = false
                     }
@@ -734,35 +743,89 @@ struct DocumentPicker: UIViewControllerRepresentable {
 
 func importTransactions(fromCSVAt url: URL, to bill: Bill, context: ModelContext) throws -> Int {
     let content = try String(contentsOf: url, encoding: .utf8)
-    let rows = content.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-    guard rows.count > 1 else { return 0 }
-    let header = rows[0].components(separatedBy: ",")
+    let rows = parseCSVRows(content)
+    guard let headerRow = rows.first, rows.count > 1 else { return 0 }
+    let header = headerRow.map { sanitizeCSVField($0) }
     let dataRows = rows.dropFirst()
     var importedCount = 0
     
-    print("Importing \(dataRows.count) Transactions...",dataRows)
-    
     for row in dataRows {
-        let columns = row.components(separatedBy: ",")
-        if columns.count == header.count {
-            var dict = [String: String]()
-            for (index, key) in header.enumerated() {
-                dict[key.trimmingCharacters(in: .whitespacesAndNewlines)] = columns[index].trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            if let transaction = BillView.createTransaction(from: dict) {
-                transaction.creditCard = bill
-                if let merchant = transaction.merchant {
-                    if let existingFriendly = (bill.transactions ?? []).first(where: { $0.merchant == merchant && ($0.friendlyName?.isEmpty == false) })?.friendlyName {
-                        transaction.friendlyName = existingFriendly
-                    }
+        guard row.count == header.count else { continue }
+        var dict = [String: String]()
+        for (index, key) in header.enumerated() {
+            dict[key] = sanitizeCSVField(row[index])
+        }
+        if let transaction = BillView.createTransaction(from: dict) {
+            transaction.creditCard = bill
+            if let merchant = transaction.merchant {
+                if let existingFriendly = (bill.transactions ?? []).first(where: { $0.merchant == merchant && ($0.friendlyName?.isEmpty == false) })?.friendlyName {
+                    transaction.friendlyName = existingFriendly
                 }
-                context.insert(transaction)
-                importedCount += 1
             }
+            context.insert(transaction)
+            importedCount += 1
         }
     }
     try context.save()
     return importedCount
+}
+
+private func sanitizeCSVField(_ value: String) -> String {
+    value
+        .replacingOccurrences(of: "\u{FEFF}", with: "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func parseCSVRows(_ input: String) -> [[String]] {
+    var rows: [[String]] = []
+    var row: [String] = []
+    var field = ""
+    var isInsideQuotes = false
+    var index = input.startIndex
+
+    while index < input.endIndex {
+        let char = input[index]
+
+        if char == "\"" {
+            let next = input.index(after: index)
+            if isInsideQuotes, next < input.endIndex, input[next] == "\"" {
+                field.append("\"")
+                index = next
+            } else {
+                isInsideQuotes.toggle()
+            }
+        } else if char == "," && !isInsideQuotes {
+            row.append(field)
+            field = ""
+        } else if (char == "\n" || char == "\r") && !isInsideQuotes {
+            row.append(field)
+            let cleaned = row.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if cleaned.contains(where: { !$0.isEmpty }) {
+                rows.append(cleaned)
+            }
+            row = []
+            field = ""
+
+            if char == "\r" {
+                let next = input.index(after: index)
+                if next < input.endIndex, input[next] == "\n" {
+                    index = next
+                }
+            }
+        } else {
+            field.append(char)
+        }
+
+        index = input.index(after: index)
+    }
+
+    row.append(field)
+    let cleaned = row.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    if cleaned.contains(where: { !$0.isEmpty }) {
+        rows.append(cleaned)
+    }
+
+    return rows
 }
 
 

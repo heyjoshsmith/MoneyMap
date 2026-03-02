@@ -93,6 +93,7 @@ struct CreditCardDetails: Codable {
     var cardBalance: Double
     
     var utilization: Double {
+        guard creditLimit > 0 else { return 0 }
         return cardBalance / creditLimit
     }
     
@@ -438,7 +439,9 @@ extension Bill {
 extension Bill {
     @MainActor static var preview: ModelContainer {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        let container = try! ModelContainer(for: Bill.self, configurations: config)
+        guard let container = try? ModelContainer(for: Bill.self, configurations: config) else {
+            preconditionFailure("Failed to create in-memory preview container for Bill.")
+        }
         let context = container.mainContext
         // Insert sample bills into the context
         for bill in Bill.sampleBills() {
@@ -602,4 +605,3 @@ enum Timeframe: String, Identifiable, CaseIterable {
         }
     }
 }
-

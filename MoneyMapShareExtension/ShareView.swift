@@ -16,48 +16,35 @@ struct ShareExtensionApp: App {
     let container: ModelContainer
 
     init() {
-        let containerURL = FileManager.default
-            .containerURL(forSecurityApplicationGroupIdentifier: "group.com.heyjoshsmith.MoneyMap")!
-        let storeURL = containerURL.appendingPathComponent("shared.sqlite")
-        
-//        deleteAndPrintStoreURL()
         let schema = Schema([Goal.self, PaydayConfig.self, Bill.self])
-        do {
-            if let container = try? ModelContainer(
-                for: schema,
-                configurations: [
-                    ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: .private("iCloud.com.heyjoshsmith.MoneyMap"))
-                ]
-            ) {
-                self.container = container
-            } else {
-                self.container = try ModelContainer(
-                    for: schema,
-                    configurations: [
-                        ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: .none)
-                    ]
-                )
-            }
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+        guard let containerURL = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: "group.com.heyjoshsmith.MoneyMap") else {
+            self.container = ShareExtensionApp.makeInMemoryContainer(for: schema)
+            return
         }
-        
-        do {
-          let bills = try container.mainContext.fetch(FetchDescriptor<Bill>())
-          print("Diagnostics - Bills count: \(bills.count)")
-          for bill in bills {
-            print("Bill - id: \(bill.id), name: \(bill.name), category: \(bill.category), dueDate: \(bill.dueDate)")
-          }
+        let storeURL = containerURL.appendingPathComponent("shared.sqlite")
 
-          let goals = try container.mainContext.fetch(FetchDescriptor<Goal>())
-          print("Diagnostics - Goals count: \(goals.count)")
-          for goal in goals {
-            print("Goal - id: \(goal.id), name: \(goal.name)")
-          }
-        } catch {
-          print("Error during diagnostics fetch: \(error)")
+        if let cloudContainer = try? ModelContainer(
+            for: schema,
+            configurations: [
+                ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: .private("iCloud.com.heyjoshsmith.MoneyMap"))
+            ]
+        ) {
+            self.container = cloudContainer
+            return
         }
-        
+
+        if let localContainer = try? ModelContainer(
+            for: schema,
+            configurations: [
+                ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: .none)
+            ]
+        ) {
+            self.container = localContainer
+            return
+        }
+
+        self.container = ShareExtensionApp.makeInMemoryContainer(for: schema)
     }
 
     var body: some Scene {
@@ -367,10 +354,8 @@ struct ShareView: View {
             } else {
                 fetchCreditCardsStatus = "Found \(allBills.count) bills, \(creditCards.count) credit cards."
             }
-            print(fetchCreditCardsStatus!)
         } catch {
             fetchCreditCardsStatus = "Failed to fetch credit cards: \(error.localizedDescription)"
-            print("❌ \(fetchCreditCardsStatus!)")
             creditCards = []
         }
     }
@@ -570,9 +555,19 @@ extension Goal {
             let data = try Data(contentsOf: tmpURL)
             return UIImage(data: data)
         } catch {
-            print("Temp image load error: \(error)")
             return nil
         }
     }
 }
 
+private extension ShareExtensionApp {
+    static func makeInMemoryContainer(for schema: Schema) -> ModelContainer {
+        if let container = try? ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        ) {
+            return container
+        }
+        preconditionFailure("Could not create any SwiftData container configuration for share extension.")
+    }
+}

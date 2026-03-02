@@ -12,6 +12,7 @@ import SwiftData
 // MARK: - ContentView (TabView)
 struct ContentView: View {
     
+    @Environment(\.modelContext) private var modelContext
     @State private var selection: Tab = .bills
     
     @State private var pendingCSVURLs: [URL] = []
@@ -57,7 +58,8 @@ struct ContentView: View {
                     if url.startAccessingSecurityScopedResource() {
                         defer { url.stopAccessingSecurityScopedResource() }
                         do {
-                            _ = try importTransactions(fromCSVAt: url, to: selectedBill, context: selectedBill.modelContext!)
+                            let context = selectedBill.modelContext ?? modelContext
+                            _ = try importTransactions(fromCSVAt: url, to: selectedBill, context: context)
                         } catch {
                             print("Error importing CSV: \(error)")
                         }

@@ -23,8 +23,14 @@ class PaydayManager: ObservableObject {
     
     func savePayday(_ date: Date) {
         nextPayday = date
-        let paydayConfig = PaydayConfig(nextPayday: date)
-        context.insert(paydayConfig)
+        let paydayConfig: PaydayConfig
+        if let existing = fetchPrimaryPaydayConfig() {
+            paydayConfig = existing
+        } else {
+            paydayConfig = PaydayConfig(nextPayday: date)
+            context.insert(paydayConfig)
+        }
+        paydayConfig.nextPayday = date
         
         do {
             try context.save()
@@ -34,9 +40,7 @@ class PaydayManager: ObservableObject {
     }
     
     private func loadPayday() {
-        let request = FetchDescriptor<PaydayConfig>()
-        
-        if let savedPaydayConfig = try? context.fetch(request).first {
+        if let savedPaydayConfig = fetchPrimaryPaydayConfig() {
             var nextPayday = savedPaydayConfig.nextPayday ?? Date()
             let today = Date()
             
@@ -60,6 +64,21 @@ class PaydayManager: ObservableObject {
             // No stored payday exists yet, keep `nextPayday` nil (until user selects one)
             self.nextPayday = nil
         }
+    }
+
+    private func fetchPrimaryPaydayConfig() -> PaydayConfig? {
+        let request = FetchDescriptor<PaydayConfig>()
+        guard let configs = try? context.fetch(request), !configs.isEmpty else {
+            return nil
+        }
+
+        let primary = configs[0]
+        if configs.count > 1 {
+            for duplicate in configs.dropFirst() {
+                context.delete(duplicate)
+            }
+        }
+        return primary
     }
     
     /// Returns the number of paydays between the next payday and the specified end date.
@@ -121,10 +140,12 @@ class PaydayManager: ObservableObject {
 // MARK: - Preview Data
 struct PreviewDataProvider {
     @MainActor static func createContainer() -> (ModelContainer, PaydayManager) {
-        let container = try! ModelContainer(
+        guard let container = try? ModelContainer(
             for: Goal.self, PaydayConfig.self, Bill.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true) // In-memory store for previews
-        )
+        ) else {
+            preconditionFailure("Failed to create in-memory preview container.")
+        }
         let mockContext = container.mainContext
         let paydayManager = PaydayManager(context: mockContext)
         
@@ -186,7 +207,11 @@ struct PreviewDataProvider {
         
         mockContext.insert(sampleGoal1)
         mockContext.insert(sampleGoal2)
-        try! mockContext.save()
+        do {
+            try mockContext.save()
+        } catch {
+            assertionFailure("Failed to save preview data: \(error)")
+        }
         
         return (container, paydayManager)
     }
