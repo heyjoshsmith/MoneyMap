@@ -11,6 +11,8 @@ import SwiftData
 struct BillsHome: View {
     
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var deepLinkManager: DeepLinkManager
+    @EnvironmentObject private var notificationManager: NotificationManager
     @Query private var bills: [Bill]
     @Query private var goals: [Goal]
     
@@ -21,6 +23,7 @@ struct BillsHome: View {
     @State private var alertValue: String = ""
     @State private var makingPayment = false
     @State private var viewingBill: Bill?
+    @State private var destination: BillsNavigationTarget?
     
     var body: some View {
         NavigationStack {
@@ -44,7 +47,7 @@ struct BillsHome: View {
             .background(Color(uiColor: .systemGroupedBackground))
             .toolbar {
                 ToolbarItem(placement: .automatic) {
-                    Button("Add Bill", systemImage: "plus") {
+                    Button(MoneyMapAction.addBill.title, systemImage: MoneyMapAction.addBill.systemImage) {
                         addingBill.toggle()
                     }
                 }
@@ -53,8 +56,16 @@ struct BillsHome: View {
                 BillEditor()
             }
             .navigationDestination(item: $viewingBill, destination: { bill in
-                
+                BillView(bill: bill)
             })
+            .navigationDestination(item: $destination) { destination in
+                switch destination {
+                case .upcomingBills:
+                    BillsView(mode: .upcoming)
+                case .cardUtilization:
+                    CardUtilizationView()
+                }
+            }
             .alert(billToEdit?.name ?? "Current Balance", isPresented: $editingBalance) {
                 TextField(balancePlaceholder, text: $alertValue)
                     .keyboardType(.decimalPad)
@@ -84,14 +95,105 @@ struct BillsHome: View {
                     .keyboardType(.decimalPad)
                 Button("Cancel", role: .cancel) { }
                 Button("Done") {
-                    billToEdit?.makePayment(of: Double(alertValue) ?? 0)
+                    if let bill = billToEdit {
+                        let amount = Double(alertValue) ?? 0
+                        let previousBalance = bill.creditCardDetails?.cardBalance
+                        let previousDatePaid = bill.datePaid
+                        let previousDueDate = bill.dueDate
+                        let previousStatus = bill.status
+                        bill.makePayment(of: amount)
+                        AuditService.logBillPayment(
+                            bill: bill,
+                            previousBalance: previousBalance,
+                            previousDatePaid: previousDatePaid,
+                            previousDueDate: previousDueDate,
+                            previousStatus: previousStatus,
+                            amount: amount,
+                            context: modelContext
+                        )
+                    }
                     makingPayment = false
                     alertValue.removeAll()
                 }
             } message: {
                 Text("How much would you like to pay off this bill?")
             }
+            .onAppear {
+                routeToRequestedBillIfNeeded()
+                routeToRequestedDestinationIfNeeded()
+                syncSystemIntegrations()
+            }
+            .onChange(of: deepLinkManager.requestedBillID) { _, _ in
+                routeToRequestedBillIfNeeded()
+            }
+            .onChange(of: deepLinkManager.requestedBillsDestination) { _, _ in
+                routeToRequestedDestinationIfNeeded()
+            }
+            .onChange(of: bills.count) { _, _ in
+                routeToRequestedBillIfNeeded()
+            }
+            .onChange(of: billsIntegrationSignature) { _, _ in
+                syncSystemIntegrations()
+            }
         }
+    }
+
+    private var billsIntegrationSignature: String {
+        bills
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { bill in
+                let name = bill.name ?? ""
+                let amount = bill.amount ?? 0
+                let due = bill.dueDate?.timeIntervalSince1970 ?? 0
+                let paid = bill.datePaid?.timeIntervalSince1970 ?? 0
+                return "\(bill.id.uuidString)|\(name)|\(amount)|\(due)|\(paid)"
+            }
+            .joined(separator: ";")
+    }
+
+    private func syncSystemIntegrations() {
+        refreshBillStatuses()
+        SpotlightIndexer.reindexBills(bills)
+        notificationManager.scheduleBillDueNotifications(for: bills)
+    }
+
+    private func refreshBillStatuses() {
+        var didChange = false
+
+        for bill in bills {
+            let previousDueDate = bill.dueDate
+            let previousDatePaid = bill.datePaid
+            let previousStatus = bill.status
+
+            bill.checkStatus()
+
+            if previousDueDate != bill.dueDate ||
+                previousDatePaid != bill.datePaid ||
+                previousStatus != bill.status {
+                didChange = true
+            }
+        }
+
+        if didChange {
+            try? modelContext.save()
+        }
+    }
+
+    private func routeToRequestedBillIfNeeded() {
+        guard let requestedBillID = deepLinkManager.requestedBillID,
+              let targetBill = bills.first(where: { $0.id == requestedBillID }) else {
+            return
+        }
+        viewingBill = targetBill
+        deepLinkManager.requestedBillID = nil
+    }
+
+    private func routeToRequestedDestinationIfNeeded() {
+        guard let requestedDestination = deepLinkManager.requestedBillsDestination else {
+            return
+        }
+        destination = requestedDestination
+        deepLinkManager.requestedBillsDestination = nil
     }
     
     var paymentPlaceholder: String {
@@ -134,5 +236,7 @@ struct BillsHome: View {
       let (container, paydayManager) = PreviewDataProvider.createContainer()
       BillsHome()
           .environmentObject(paydayManager)
+          .environmentObject(DeepLinkManager())
+          .environmentObject(NotificationManager())
           .modelContainer(container)
   }

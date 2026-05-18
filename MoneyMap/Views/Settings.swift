@@ -8,7 +8,6 @@
 import SwiftUI
 import UserNotifications
 import SwiftData
-import CloudKit
 
 struct Settings: View {
     @State private var showDeleteAllDataConfirmation = false
@@ -18,6 +17,15 @@ struct Settings: View {
     var body: some View {
         NavigationStack {
             List {
+                NavigationLink("Activity") {
+                    ActivityFeedView(title: "Activity")
+                }
+                NavigationLink("Smart Features") {
+                    SmartFeaturesGuideView()
+                }
+                NavigationLink("What's New") {
+                    WhatsNewView(releases: WhatsNewRepository.releases, onDone: nil)
+                }
                 NavigationLink("Notifications") {
                     ScheduledNotificationsView()
                 }
@@ -45,61 +53,7 @@ extension Settings {
         isDeletingAllData = true
         defer { isDeletingAllData = false }
         do {
-            // 1. Delete all SwiftData models
-            for goal in try modelContext.fetch(FetchDescriptor<Goal>()) {
-                modelContext.delete(goal)
-            }
-            for bill in try modelContext.fetch(FetchDescriptor<Bill>()) {
-                modelContext.delete(bill)
-            }
-            for paydayConfig in try modelContext.fetch(FetchDescriptor<PaydayConfig>()) {
-                modelContext.delete(paydayConfig)
-            }
-            try modelContext.save()
-
-            // 2. Remove all UserDefaults for known keys
-            let keys = ["notifyDayBeforeEnabled", "notifyDayOfEnabled", "notificationTime"]
-            let defaults = UserDefaults(suiteName: "group.com.heyjoshsmith.MoneyMap") ?? .standard
-            for key in keys { defaults.removeObject(forKey: key) }
-            defaults.synchronize()
-
-            // 3. Remove all files in shared app group container
-            let fm = FileManager.default
-            if let groupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: "group.com.heyjoshsmith.MoneyMap") {
-                let contents = try? fm.contentsOfDirectory(at: groupURL, includingPropertiesForKeys: nil)
-                contents?.forEach { try? fm.removeItem(at: $0) }
-            }
-            // 4. Remove iCloud/CloudKit records
-            let privateDB = CKContainer.default().privateCloudDatabase
-            do {
-                // Fetch all record zones
-                let zonesResult = try await privateDB.allRecordZones()
-                for _ in zonesResult {
-                    // Query all records in each zone
-                    let query = CKQuery(recordType: "__default__", predicate: NSPredicate(value: true))
-                    let op = CKQueryOperation(query: query)
-                    var recordIDs: [CKRecord.ID] = []
-                    op.recordMatchedBlock = { recordID, result in
-                        switch result {
-                        case .success(let record):
-                            recordIDs.append(record.recordID)
-                        case .failure(let error):
-                            print("Error fetching record \(recordID): \(error)")
-                        }
-                    }
-                    let _: Void = await withCheckedContinuation { continuation in
-                        op.queryResultBlock = { _ in continuation.resume() }
-                        privateDB.add(op)
-                    }
-                    if !recordIDs.isEmpty {
-                        let deleteOp = CKModifyRecordsOperation(recordsToSave: nil, recordIDsToDelete: recordIDs)
-                        deleteOp.savePolicy = .ifServerRecordUnchanged
-                        privateDB.add(deleteOp)
-                    }
-                }
-            } catch {
-                print("CloudKit data removal failed: \(error)")
-            }
+            try await AppResetService.removeAllAppData(modelContext: modelContext)
         } catch {
             print("Failed to remove all app data: \(error)")
         }

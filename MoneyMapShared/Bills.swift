@@ -11,7 +11,7 @@ import AppIntents
 
 // MARK: - Bill Category
 
-enum BillCategory: String, CaseIterable, Codable {
+public enum BillCategory: String, CaseIterable, Codable {
     case utilities
     case creditCard
     case rent
@@ -24,7 +24,7 @@ enum BillCategory: String, CaseIterable, Codable {
     case entertainment
     case other
 
-    var name: String {
+    public var name: String {
         switch self {
         case .utilities:      return "Utilities"
         case .creditCard:     return "Credit Card"
@@ -40,7 +40,7 @@ enum BillCategory: String, CaseIterable, Codable {
         }
     }
 
-    var icon: String {
+    public var icon: String {
         switch self {
         case .utilities:      return "lightbulb"
         case .creditCard:     return "creditcard"
@@ -56,7 +56,7 @@ enum BillCategory: String, CaseIterable, Codable {
         }
     }
 
-    var color: Color {
+    public var color: Color {
         switch self {
         case .utilities:      return .yellow
         case .creditCard:     return .blue
@@ -71,7 +71,7 @@ enum BillCategory: String, CaseIterable, Codable {
         case .other:          return .gray
         }
     }
-    
+
     static func < (lhs: BillCategory, rhs: BillCategory) -> Bool {
         return lhs.name < rhs.name
     }
@@ -79,7 +79,7 @@ enum BillCategory: String, CaseIterable, Codable {
 
 // MARK: - Recurrence Unit
 
-enum RecurrenceUnit: String, CaseIterable, Codable {
+public enum RecurrenceUnit: String, CaseIterable, Codable {
     case day
     case week
     case month
@@ -88,24 +88,31 @@ enum RecurrenceUnit: String, CaseIterable, Codable {
 
 // MARK: - Credit Card Details
 
-struct CreditCardDetails: Codable {
-    var creditLimit: Double
-    var cardBalance: Double
-    
-    var utilization: Double {
+public struct CreditCardDetails: Codable {
+    public var creditLimit: Double
+    public var cardBalance: Double
+    public var annualPercentageRate: Double?
+    public var minimumPayment: Double?
+    public var statementBalance: Double?
+    public var issuerName: String?
+    public var lastFourDigits: String?
+    public var statementClosingDate: Date?
+    public var promoAPRExpiration: Date?
+
+    public var utilization: Double {
         guard creditLimit > 0 else { return 0 }
         return cardBalance / creditLimit
     }
-    
-    var overExcellentThreshold: Bool {
+
+    public var overExcellentThreshold: Bool {
         utilization > 0.1
     }
-    
-    var overUtilized: Bool {
+
+    public var overUtilized: Bool {
         utilization > 0.3
     }
     
-    var recommendedPayment: Double {
+    public var recommendedPayment: Double {
         if overUtilized {
             return roundedToCents(cardBalance - (creditLimit * 0.3))
         } else if overExcellentThreshold {
@@ -113,6 +120,32 @@ struct CreditCardDetails: Codable {
         } else {
             return 0
         }
+    }
+
+    public var effectiveMinimumPayment: Double {
+        max(minimumPayment ?? 0, 0)
+    }
+
+    public init(
+        creditLimit: Double,
+        cardBalance: Double,
+        annualPercentageRate: Double? = nil,
+        minimumPayment: Double? = nil,
+        statementBalance: Double? = nil,
+        issuerName: String? = nil,
+        lastFourDigits: String? = nil,
+        statementClosingDate: Date? = nil,
+        promoAPRExpiration: Date? = nil
+    ) {
+        self.creditLimit = creditLimit
+        self.cardBalance = cardBalance
+        self.annualPercentageRate = annualPercentageRate
+        self.minimumPayment = minimumPayment
+        self.statementBalance = statementBalance
+        self.issuerName = issuerName
+        self.lastFourDigits = lastFourDigits
+        self.statementClosingDate = statementClosingDate
+        self.promoAPRExpiration = promoAPRExpiration
     }
     
     private func roundedToCents(_ value: Double) -> Double {
@@ -124,24 +157,33 @@ struct CreditCardDetails: Codable {
 
 /// Represents a bill, which can also represent a credit card with related transactions.
 @Model
-class Bill {
-    
-    var id: UUID = UUID()
-    var name: String?
-    var amount: Double?
-    var dueDate: Date?
-    var datePaid: Date?
-    var category: BillCategory?
-    var recurrenceInterval: Int?
-    var recurrenceUnit: RecurrenceUnit?
-    var creditCardDetails: CreditCardDetails?
-    var status: Status?
-    var imageData: Data?
-    
-    @Relationship(inverse: \Transaction.creditCard) var transactions: [Transaction]?
-    
-    var image: Image? {
-        #if os(iOS) || os(tvOS) || os(watchOS)
+public class Bill {
+
+    public var id: UUID = UUID()
+    public var name: String?
+    public var amount: Double?
+    public var dueDate: Date?
+    public var datePaid: Date?
+    public var category: BillCategory?
+    public var recurrenceInterval: Int?
+    public var recurrenceUnit: RecurrenceUnit?
+    public var creditCardDetails: CreditCardDetails?
+    public var notes: String?
+    public var autopaySource: String?
+    public var gracePeriodDays: Int?
+    public var status: Status?
+    public var imageData: Data?
+    private var storedAutopayEnabled: Bool?
+
+    @Relationship(inverse: \Transaction.creditCard) public var transactions: [Transaction]?
+
+    public var autopayEnabled: Bool {
+        get { storedAutopayEnabled ?? false }
+        set { storedAutopayEnabled = newValue }
+    }
+
+    public var image: Image? {
+        #if os(iOS) || os(tvOS) || os(visionOS)
         guard let data = imageData, let uiImage = UIImage(data: data) else { return nil }
         return Image(uiImage: uiImage)
         #elseif os(macOS)
@@ -152,7 +194,7 @@ class Bill {
         #endif
     }
     
-    #if os(iOS) || os(tvOS) || os(watchOS)
+    #if os(iOS) || os(tvOS) || os(visionOS)
     func setImage(_ image: UIImage, compressionQuality: CGFloat = 0.9) {
         self.imageData = image.jpegData(compressionQuality: compressionQuality)
     }
@@ -168,7 +210,7 @@ class Bill {
     }
     #endif
 
-    init(name: String?, amount: Double?, dueDate: Date?, category: BillCategory?, recurrenceInterval: Int?, recurrenceUnit: RecurrenceUnit?, creditCardDetails: CreditCardDetails? = nil, imageData: Data? = nil) {
+    public init(name: String?, amount: Double?, dueDate: Date?, category: BillCategory?, recurrenceInterval: Int?, recurrenceUnit: RecurrenceUnit?, creditCardDetails: CreditCardDetails? = nil, imageData: Data? = nil, autopayEnabled: Bool = false, notes: String? = nil, autopaySource: String? = nil, gracePeriodDays: Int? = nil) {
         self.name = name
         self.amount = amount
         self.dueDate = dueDate
@@ -177,9 +219,13 @@ class Bill {
         self.recurrenceUnit = recurrenceUnit
         self.creditCardDetails = creditCardDetails
         self.imageData = imageData
+        self.storedAutopayEnabled = autopayEnabled
+        self.notes = notes
+        self.autopaySource = autopaySource
+        self.gracePeriodDays = gracePeriodDays
     }
     
-    func makePayment(of amount: Double) {
+    public func makePayment(of amount: Double) {
         if let currentBalance = self.creditCardDetails?.cardBalance {
             self.creditCardDetails?.cardBalance = currentBalance - amount
         }
@@ -190,13 +236,13 @@ class Bill {
 
 }
 
-enum Status: Codable, Equatable {
+public enum Status: Codable, Equatable {
     
     case paid
     case overdue
     case upcoming(date: Date)
     
-    static func == (lhs: Status, rhs: Status) -> Bool {
+    public static func == (lhs: Status, rhs: Status) -> Bool {
         switch (lhs, rhs) {
         case (.paid, .paid):
             return true
@@ -209,7 +255,7 @@ enum Status: Codable, Equatable {
         }
     }
     
-    var name: String {
+    public var name: String {
         switch self {
         case .paid:
             return "Paid"
@@ -220,7 +266,7 @@ enum Status: Codable, Equatable {
         }
     }
     
-    var color: Color {
+    public var color: Color {
         switch self {
         case .paid:
             return .green
@@ -247,7 +293,7 @@ extension Bill {
     
     // MARK: - Sorting
     
-    static func byDate(lhs: Bill, rhs: Bill) -> Bool {
+    public static func byDate(lhs: Bill, rhs: Bill) -> Bool {
         let lhsDate = Calendar.current.startOfDay(for: lhs.dueDate ?? .distantPast)
         let rhsDate = Calendar.current.startOfDay(for: rhs.dueDate ?? .distantPast)
         if lhsDate == rhsDate {
@@ -256,14 +302,14 @@ extension Bill {
         return lhsDate < rhsDate
     }
     
-    static func byName(lhs: Bill, rhs: Bill) -> Bool {
+    public static func byName(lhs: Bill, rhs: Bill) -> Bool {
         if lhs.name == rhs.name {
             return (lhs.amount ?? 0) > (rhs.amount ?? 0)
         }
         return (lhs.name ?? "") < (rhs.name ?? "")
     }
     
-    static func byBalance(lhs: Bill, rhs: Bill) -> Bool {
+    public static func byBalance(lhs: Bill, rhs: Bill) -> Bool {
         let lhsBalance = lhs.creditCardDetails?.cardBalance ?? 0
         let rhsBalance = rhs.creditCardDetails?.cardBalance ?? 0
         if lhsBalance == rhsBalance {
@@ -272,7 +318,7 @@ extension Bill {
         return lhsBalance < rhsBalance
     }
     
-    static func byLimit(lhs: Bill, rhs: Bill) -> Bool {
+    public static func byLimit(lhs: Bill, rhs: Bill) -> Bool {
         let lhsLimit = lhs.creditCardDetails?.creditLimit ?? 0
         let rhsLimit = rhs.creditCardDetails?.creditLimit ?? 0
         if lhsLimit == rhsLimit {
@@ -281,7 +327,7 @@ extension Bill {
         return lhsLimit < rhsLimit
     }
     
-    static func byStatusDateUtilization(lhs: Bill, rhs: Bill) -> Bool {
+    public static func byStatusDateUtilization(lhs: Bill, rhs: Bill) -> Bool {
         let lhsIsPaid = lhs.status == .paid
         let rhsIsPaid = rhs.status == .paid
         if lhsIsPaid != rhsIsPaid {
@@ -318,18 +364,33 @@ extension Bill {
     
     // MARK: - Functions
     
-    func checkStatus() {
+    public func checkStatus() {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         guard let dueDate = self.dueDate else {
             status = .overdue
             return
         }
-        let dueDay = calendar.startOfDay(for: dueDate)
+        var dueDay = calendar.startOfDay(for: dueDate)
 
-        // Automatically mark non-credit card bills as paid if due date is today or earlier
-        if category != .creditCard && dueDay <= today {
-            datePaid = dueDate
+        if autopayEnabled {
+            if dueDay < today {
+                if let advancedDueDate = advancedDueDateIfNeeded(from: dueDate, untilAtLeast: today, calendar: calendar) {
+                    self.dueDate = advancedDueDate
+                    dueDay = calendar.startOfDay(for: advancedDueDate)
+                    datePaid = nil
+                    status = .upcoming(date: dueDay)
+                    return
+                }
+
+                datePaid = dueDate
+                status = .paid
+                return
+            }
+
+            datePaid = nil
+            status = .upcoming(date: dueDay)
+            return
         }
 
         if let _ = datePaid {
@@ -384,8 +445,38 @@ extension Bill {
             }
         }
     }
+
+    private func advancedDueDateIfNeeded(from currentDueDate: Date, untilAtLeast targetDay: Date, calendar: Calendar) -> Date? {
+        guard let recurrenceUnit, let recurrenceInterval else { return nil }
+
+        var nextDueDate = currentDueDate
+        var nextDueDay = calendar.startOfDay(for: currentDueDate)
+
+        while nextDueDay < targetDay {
+            guard let advanced = advance(date: nextDueDate, unit: recurrenceUnit, interval: recurrenceInterval, calendar: calendar) else {
+                return nil
+            }
+            nextDueDate = advanced
+            nextDueDay = calendar.startOfDay(for: advanced)
+        }
+
+        return nextDueDate
+    }
+
+    private func advance(date: Date, unit: RecurrenceUnit, interval: Int, calendar: Calendar) -> Date? {
+        switch unit {
+        case .day:
+            return calendar.date(byAdding: .day, value: interval, to: date)
+        case .week:
+            return calendar.date(byAdding: .day, value: 7 * interval, to: date)
+        case .month:
+            return calendar.date(byAdding: .month, value: interval, to: date)
+        case .year:
+            return calendar.date(byAdding: .year, value: interval, to: date)
+        }
+    }
     
-    static func calculateTotal(for category: BillCategory?) async throws -> Double {
+    public static func calculateTotal(for category: BillCategory?) async throws -> Double {
         let bills = sampleBills()
         if let billCategory = category {
             let filteredBills = bills.filter { $0.category == billCategory }
@@ -397,7 +488,7 @@ extension Bill {
     
     // MARK: - Sample Data
     
-    static func sampleBills(type: BillCategory? = nil) -> Bills {
+    public static func sampleBills(type: BillCategory? = nil) -> Bills {
         let bills = [
             Bill(name: "Electricity", amount: 100.0, dueDate: Date(), category: .utilities, recurrenceInterval: 1, recurrenceUnit: .month),
             Bill(name: "Water", amount: 50.0, dueDate: Date(), category: .utilities, recurrenceInterval: 1, recurrenceUnit: .month),
@@ -417,7 +508,7 @@ extension Bill {
         return bills
     }
     
-    static func getSampleCreditCard(name: String) -> Bill {
+    public static func getSampleCreditCard(name: String) -> Bill {
         
         let limit = Double.random(in: 1_000...50_000)
         let balance = Double.random(in: 0...limit)
@@ -435,11 +526,10 @@ extension Bill {
     }
 }
 
-#if DEBUG
 extension Bill {
     @MainActor static var preview: ModelContainer {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        guard let container = try? ModelContainer(for: Bill.self, configurations: config) else {
+        guard let container = try? ModelContainer(for: Bill.self, Transaction.self, AuditEvent.self, configurations: config) else {
             preconditionFailure("Failed to create in-memory preview container for Bill.")
         }
         let context = container.mainContext
@@ -450,7 +540,6 @@ extension Bill {
         return container
     }
 }
-#endif
 
 extension Double {
     var abbreviatedCurrency: String {
@@ -469,7 +558,7 @@ extension Double {
     }
 }
 
-typealias Bills = [Bill]
+public typealias Bills = [Bill]
 extension Bills {
     
     var totalAmount: Double {

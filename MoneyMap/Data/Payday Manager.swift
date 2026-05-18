@@ -22,6 +22,7 @@ class PaydayManager: ObservableObject {
     }
     
     func savePayday(_ date: Date) {
+        let previousPayday = nextPayday
         nextPayday = date
         let paydayConfig: PaydayConfig
         if let existing = fetchPrimaryPaydayConfig() {
@@ -31,6 +32,7 @@ class PaydayManager: ObservableObject {
             context.insert(paydayConfig)
         }
         paydayConfig.nextPayday = date
+        AuditService.logPaydayUpdated(previous: previousPayday, new: date, context: context)
         
         do {
             try context.save()
@@ -42,10 +44,11 @@ class PaydayManager: ObservableObject {
     private func loadPayday() {
         if let savedPaydayConfig = fetchPrimaryPaydayConfig() {
             var nextPayday = savedPaydayConfig.nextPayday ?? Date()
-            let today = Date()
+            let today = Calendar.current.startOfDay(for: Date())
+            nextPayday = Calendar.current.startOfDay(for: nextPayday)
             
-            // Keep advancing by 14 days if the stored payday is in the past
-            while nextPayday < today {
+            // Keep advancing by 14 days until the payday is in the future.
+            while nextPayday <= today {
                 nextPayday = Calendar.current.date(byAdding: .day, value: 14, to: nextPayday)!
             }
             
@@ -96,8 +99,9 @@ class PaydayManager: ObservableObject {
     /// Returns the number of days remaining until the next payday.
     func daysUntilNextPayday() -> Int {
         guard let payday = nextPayday else { return 0 }
-        guard let startOfDay = Calendar.current.date(bySettingHour: 0, minute: 0, second: 0, of: payday) else { return 0 }
-        let components = Calendar.current.dateComponents([.day], from: Date(), to: startOfDay)
+        let today = Calendar.current.startOfDay(for: Date())
+        let paydayDay = Calendar.current.startOfDay(for: payday)
+        let components = Calendar.current.dateComponents([.day], from: today, to: paydayDay)
         return components.day ?? 0
     }
     
@@ -141,7 +145,7 @@ class PaydayManager: ObservableObject {
 struct PreviewDataProvider {
     @MainActor static func createContainer() -> (ModelContainer, PaydayManager) {
         guard let container = try? ModelContainer(
-            for: Goal.self, PaydayConfig.self, Bill.self,
+            for: Goal.self, PaydayConfig.self, Bill.self, Transaction.self, AuditEvent.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true) // In-memory store for previews
         ) else {
             preconditionFailure("Failed to create in-memory preview container.")

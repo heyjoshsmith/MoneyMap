@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import TipKit
 
 struct BillEditor: View {
     @Environment(\.modelContext) private var modelContext
@@ -24,10 +25,23 @@ struct BillEditor: View {
     // Recurrence Details
     @State private var recurrenceInterval: Int = 1
     @State private var selectedRecurrenceUnit: RecurrenceUnit = .month
+    @State private var autopayEnabled = false
+    @State private var notes = ""
+    @State private var autopaySource = ""
+    @State private var gracePeriodDays = 0
 
     // Credit Card Details
     @State private var creditLimit: Double = 0.0
     @State private var cardBalance: Double = 0.0
+    @State private var statementBalance: Double = 0.0
+    @State private var annualPercentageRate: Double = 0.0
+    @State private var minimumPayment: Double = 0.0
+    @State private var issuerName = ""
+    @State private var lastFourDigits = ""
+    @State private var statementClosingDate = Date()
+    @State private var promoAPRExpiration = Date()
+    @State private var hasStatementClosingDate = false
+    @State private var hasPromoAPRExpiration = false
 
     var body: some View {
         NavigationStack {
@@ -68,6 +82,25 @@ struct BillEditor: View {
                             Text(unit.rawValue.capitalized)
                         }
                     }
+                    Toggle("Autopay", isOn: $autopayEnabled)
+                    if autopayEnabled {
+                        HStack {
+                            Text("Autopay Source")
+                            Spacer()
+                            TextField("Checking Account", text: $autopaySource)
+                                .multilineTextAlignment(.trailing)
+                        }
+                    }
+                    Stepper("Grace Period: \(gracePeriodDays) day\(gracePeriodDays == 1 ? "" : "s")", value: $gracePeriodDays, in: 0...31)
+                }
+
+                Section {
+                    TipView(AutopayBillTip())
+                }
+
+                Section(header: Text("Notes")) {
+                    TextField("Optional notes", text: $notes, axis: .vertical)
+                        .lineLimit(3...6)
                 }
 
                 // Credit Card Details Section (only if category is creditCard)
@@ -88,6 +121,53 @@ struct BillEditor: View {
                                 .multilineTextAlignment(.trailing)
                                 .keyboardType(.decimalPad)
                                 .focused($focusedField, equals: .cardBalance)
+                        }
+                        HStack {
+                            Text("Statement Balance")
+                            Spacer()
+                            TextField("Statement Balance", value: $statementBalance, format: .currency(code: "USD"))
+                                .multilineTextAlignment(.trailing)
+                                .keyboardType(.decimalPad)
+                                .focused($focusedField, equals: .statementBalance)
+                        }
+                        HStack {
+                            Text("APR")
+                            Spacer()
+                            TextField("APR", value: $annualPercentageRate, format: .percent.precision(.fractionLength(2)))
+                                .multilineTextAlignment(.trailing)
+                                .keyboardType(.decimalPad)
+                                .focused($focusedField, equals: .annualPercentageRate)
+                        }
+                        HStack {
+                            Text("Minimum Payment")
+                            Spacer()
+                            TextField("Minimum Payment", value: $minimumPayment, format: .currency(code: "USD"))
+                                .multilineTextAlignment(.trailing)
+                                .keyboardType(.decimalPad)
+                                .focused($focusedField, equals: .minimumPayment)
+                        }
+                        HStack {
+                            Text("Issuer")
+                            Spacer()
+                            TextField("Chase", text: $issuerName)
+                                .multilineTextAlignment(.trailing)
+                                .focused($focusedField, equals: .issuerName)
+                        }
+                        HStack {
+                            Text("Last 4 Digits")
+                            Spacer()
+                            TextField("1234", text: $lastFourDigits)
+                                .multilineTextAlignment(.trailing)
+                                .keyboardType(.numberPad)
+                                .focused($focusedField, equals: .lastFourDigits)
+                        }
+                        Toggle("Track Statement Closing Date", isOn: $hasStatementClosingDate)
+                        if hasStatementClosingDate {
+                            DatePicker("Closing Date", selection: $statementClosingDate, displayedComponents: .date)
+                        }
+                        Toggle("Track Promo APR Expiration", isOn: $hasPromoAPRExpiration)
+                        if hasPromoAPRExpiration {
+                            DatePicker("Promo APR Ends", selection: $promoAPRExpiration, displayedComponents: .date)
                         }
                     }
                 }
@@ -128,7 +208,7 @@ struct BillEditor: View {
         // Determine the order of fields based on whether credit card fields are visible
         var fields: [Field] = [.name, .amount]
         if selectedCategory == .creditCard {
-            fields.append(contentsOf: [.creditLimit, .cardBalance])
+            fields.append(contentsOf: [.creditLimit, .cardBalance, .statementBalance, .annualPercentageRate, .minimumPayment, .issuerName, .lastFourDigits])
         }
 
         guard let current = focusedField, let currentIndex = fields.firstIndex(of: current) else {
@@ -149,14 +229,36 @@ struct BillEditor: View {
         var newBill: Bill
 
         if selectedCategory == .creditCard {
-            let creditDetails = CreditCardDetails(creditLimit: creditLimit, cardBalance: cardBalance)
-            newBill = Bill(name: name, amount: billAmount, dueDate: dueDate, category: .creditCard, recurrenceInterval: recurrenceInterval, recurrenceUnit: selectedRecurrenceUnit, creditCardDetails: creditDetails)
+            let creditDetails = CreditCardDetails(
+                creditLimit: creditLimit,
+                cardBalance: cardBalance,
+                annualPercentageRate: annualPercentageRate > 0 ? annualPercentageRate : nil,
+                minimumPayment: minimumPayment > 0 ? minimumPayment : nil,
+                statementBalance: statementBalance > 0 ? statementBalance : nil,
+                issuerName: issuerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : issuerName.trimmingCharacters(in: .whitespacesAndNewlines),
+                lastFourDigits: lastFourDigits.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : lastFourDigits.trimmingCharacters(in: .whitespacesAndNewlines),
+                statementClosingDate: hasStatementClosingDate ? statementClosingDate : nil,
+                promoAPRExpiration: hasPromoAPRExpiration ? promoAPRExpiration : nil
+            )
+            newBill = Bill(name: name, amount: billAmount, dueDate: dueDate, category: .creditCard, recurrenceInterval: recurrenceInterval, recurrenceUnit: selectedRecurrenceUnit, creditCardDetails: creditDetails, autopayEnabled: autopayEnabled, notes: normalizedNotes, autopaySource: normalizedAutopaySource, gracePeriodDays: gracePeriodDays > 0 ? gracePeriodDays : nil)
         } else {
-            newBill = Bill(name: name, amount: billAmount, dueDate: dueDate, category: selectedCategory, recurrenceInterval: recurrenceInterval, recurrenceUnit: selectedRecurrenceUnit)
+            newBill = Bill(name: name, amount: billAmount, dueDate: dueDate, category: selectedCategory, recurrenceInterval: recurrenceInterval, recurrenceUnit: selectedRecurrenceUnit, autopayEnabled: autopayEnabled, notes: normalizedNotes, autopaySource: normalizedAutopaySource, gracePeriodDays: gracePeriodDays > 0 ? gracePeriodDays : nil)
         }
 
         modelContext.insert(newBill)
+        AuditService.logBillCreated(newBill, context: modelContext)
+        try? modelContext.save()
         dismiss()
+    }
+
+    private var normalizedNotes: String? {
+        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private var normalizedAutopaySource: String? {
+        let trimmed = autopaySource.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -166,9 +268,14 @@ private enum Field: Hashable {
     case amount
     case creditLimit
     case cardBalance
+    case statementBalance
+    case annualPercentageRate
+    case minimumPayment
+    case issuerName
+    case lastFourDigits
 }
 
 #Preview {
     BillEditor()
-        .modelContainer(for: Bill.self)
+        .modelContainer(for: [Bill.self, Transaction.self, AuditEvent.self], inMemory: true)
 }

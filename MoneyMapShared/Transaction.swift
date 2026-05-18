@@ -11,21 +11,21 @@ import SwiftUI
 
 /// Models a credit card transaction based on the provided CSV export.
 /// Includes an optional relationship to a credit card (Bill).
-@Model class Transaction {
+@Model public class Transaction {
     
-    var transactionDate: Date?
-    var clearingDate: Date?
-    var transactionDescription: String?
-    var merchant: String?
-    var category: String?
-    var type: String?
-    var amountUSD: Double?
-    var purchasedBy: String?
-    var friendlyName: String?
+    public var transactionDate: Date?
+    public var clearingDate: Date?
+    public var transactionDescription: String?
+    public var merchant: String?
+    public var category: String?
+    public var type: String?
+    public var amountUSD: Double?
+    public var purchasedBy: String?
+    public var friendlyName: String?
     
-    @Relationship var creditCard: Bill?
+    @Relationship public var creditCard: Bill?
     
-    init(transactionDate: String?, clearingDate: String?, transactionDescription: String?, merchant: String?, category: String?, type: String?, amountUSD: Double?, purchasedBy: String?, creditCard: Bill? = nil, friendlyName: String? = nil) {
+    public init(transactionDate: String?, clearingDate: String?, transactionDescription: String?, merchant: String?, category: String?, type: String?, amountUSD: Double?, purchasedBy: String?, creditCard: Bill? = nil, friendlyName: String? = nil) {
         if let transactionDate = transactionDate { self.transactionDate = Transaction.dateFormatter.date(from: transactionDate) } else { self.transactionDate = nil }
         if let clearingDate = clearingDate { self.clearingDate = Transaction.dateFormatter.date(from: clearingDate) } else { self.clearingDate = nil }
         self.transactionDescription = transactionDescription
@@ -38,7 +38,7 @@ import SwiftUI
         self.friendlyName = friendlyName
     }
     
-    static let dateFormatter: DateFormatter = {
+    public static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "MM-dd-yyyy" // Adjust as needed for your CSV date format
         return formatter

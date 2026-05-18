@@ -16,35 +16,7 @@ struct ShareExtensionApp: App {
     let container: ModelContainer
 
     init() {
-        let schema = Schema([Goal.self, PaydayConfig.self, Bill.self])
-        guard let containerURL = FileManager.default
-            .containerURL(forSecurityApplicationGroupIdentifier: "group.com.heyjoshsmith.MoneyMap") else {
-            self.container = ShareExtensionApp.makeInMemoryContainer(for: schema)
-            return
-        }
-        let storeURL = containerURL.appendingPathComponent("shared.sqlite")
-
-        if let cloudContainer = try? ModelContainer(
-            for: schema,
-            configurations: [
-                ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: .private("iCloud.com.heyjoshsmith.MoneyMap"))
-            ]
-        ) {
-            self.container = cloudContainer
-            return
-        }
-
-        if let localContainer = try? ModelContainer(
-            for: schema,
-            configurations: [
-                ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: .none)
-            ]
-        ) {
-            self.container = localContainer
-            return
-        }
-
-        self.container = ShareExtensionApp.makeInMemoryContainer(for: schema)
+        self.container = (try? MoneyMapSharedContainerFactory.make()) ?? MoneyMapSharedContainerFactory.makeInMemory()
     }
 
     var body: some Scene {
@@ -64,8 +36,6 @@ struct ShareView: View {
     @State private var existingGoals: [Goal] = []
     @State private var targetAmount: Double?
     @State private var selectedGoal: Goal?
-    @State private var saveToNewGoal = true
-
     @State private var pageURL: URL?
     @State private var nameText = ""
     @State private var selectedDeadline = Date()
@@ -367,7 +337,7 @@ struct ShareView: View {
         DispatchQueue.global(qos: .userInitiated).async {
             for url in csvURLs {
                 do {
-                    try importTransactions(fromCSVAt: url, to: bill, context: modelContext)
+                    _ = try importTransactions(fromCSVAt: url, to: bill, context: modelContext)
                 } catch {
                     DispatchQueue.main.async {
                         importErrorMessage = error.localizedDescription
@@ -444,13 +414,11 @@ struct ShareView: View {
     public func saveAndComplete() {
         guard let url = pageURL else { return }
 
-        if saveToNewGoal {
-            
+        if selectedGoal == nil {
             let imageData = selectedImage?.jpegData(compressionQuality: 0.8)
             let goal = Goal(nameText, targetAmount: targetAmount ?? 0, deadline: selectedDeadline, weight: priorityWeight, paydaysUntil: 1, imageData: imageData)
             goal.addURL(url.absoluteString)
             modelContext.insert(goal)
-            
         } else if let goal = selectedGoal {
             goal.addURL(url.absoluteString)
         }
@@ -529,12 +497,6 @@ struct ShareView: View {
     }
 }
 
-// Stub for importTransactions to ensure compilation if not defined elsewhere
-func importTransactions(fromCSVAt url: URL, to bill: Bill, context: ModelContext) throws {
-    // Implement CSV parsing and transaction creation here.
-    // Stub does nothing
-}
-
 extension Goal {
     /// Copies the image file into the extension sandbox and returns a UIImage.
     /// - Warning: Deprecated. Use imageData/uiImage for synced images. This method is only for migration/legacy support.
@@ -557,17 +519,5 @@ extension Goal {
         } catch {
             return nil
         }
-    }
-}
-
-private extension ShareExtensionApp {
-    static func makeInMemoryContainer(for schema: Schema) -> ModelContainer {
-        if let container = try? ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
-        ) {
-            return container
-        }
-        preconditionFailure("Could not create any SwiftData container configuration for share extension.")
     }
 }

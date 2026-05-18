@@ -32,15 +32,12 @@ fileprivate func summarize(bills: [Bill]) -> BillSummaries {
     let voiceMax = 3
     let visualMax = 10
 
-    let formatter = DateFormatter()
-    formatter.dateStyle = .medium
-
     // Build items
     func line(for bill: Bill) -> (spoken: String, visual: String) {
         let name = bill.name ?? "Unnamed bill"
         let amount = bill.amount ?? 0
-        let amountStr = NumberFormatter.currency.string(from: NSNumber(value: amount)) ?? String(format: "$%.2f", amount)
-        let dateStr = bill.dueDate.map { formatter.string(from: $0) } ?? "no due date"
+        let amountStr = MoneyMapFormatters.currencyString(for: amount)
+        let dateStr = bill.dueDate.map { MoneyMapFormatters.mediumDateString(for: $0) } ?? "no due date"
         return (
             spoken: "\(name) \(amountStr) on \(dateStr)",
             visual: "• \(name) — \(amountStr) — due \(dateStr)"
@@ -63,14 +60,6 @@ fileprivate func summarize(bills: [Bill]) -> BillSummaries {
     return BillSummaries(spoken: spoken, visual: visual)
 }
 
-extension NumberFormatter {
-    static let currency: NumberFormatter = {
-        let nf = NumberFormatter()
-        nf.numberStyle = .currency
-        return nf
-    }()
-}
-
 struct UpcomingBillsIntent: AppIntent {
     static var title: LocalizedStringResource = "Upcoming Bills"
     static var description = IntentDescription("Get a summary of bills due soon and not yet paid.")
@@ -84,34 +73,22 @@ struct UpcomingBillsIntent: AppIntent {
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
         let days = max(1, withinDays ?? 14)
-        let now = Date()
-        guard let upper = Calendar.current.date(byAdding: .day, value: days, to: now) else {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        guard let upper = calendar.date(byAdding: .day, value: days, to: today) else {
             return .result(value: "Couldn't calculate the date range.", dialog: IntentDialog(stringLiteral: "Couldn't calculate the date range."))
         }
 
-        // Fetch from Swift Data using the shared app group store
-        let modelContainer: ModelContainer
         do {
-            modelContainer = try SharedModelContainerFactory.make()
+            let bills = try MoneyMapBillStore.fetchBills().filter { bill in
+                guard bill.datePaid == nil, let dueDate = bill.dueDate else { return false }
+                return dueDate >= today && dueDate <= upper
+            }
+            let summaries = summarize(bills: bills)
+            return .result(value: summaries.visual, dialog: IntentDialog(stringLiteral: summaries.spoken))
         } catch {
             return .result(value: "Couldn't open the data store: \(error.localizedDescription)", dialog: IntentDialog(stringLiteral: "Couldn't open the data store: \(error.localizedDescription)"))
         }
-        let context = ModelContext(modelContainer)
-
-        // Build predicate: dueDate in [now, upper], and (datePaid == nil)
-        let predicate = #Predicate<Bill> { bill in
-            if let due = bill.dueDate {
-                return due >= now && due <= upper && bill.datePaid == nil
-            } else {
-                return false
-            }
-        }
-
-        let descriptor = FetchDescriptor<Bill>(predicate: predicate)
-        let results = try context.fetch(descriptor)
-
-        let summaries = summarize(bills: results)
-        return .result(value: summaries.visual, dialog: IntentDialog(stringLiteral: summaries.spoken))
     }
 }
 
@@ -129,8 +106,89 @@ struct MoneyMapShortcuts: AppShortcutsProvider {
                 ],
                 shortTitle: "Upcoming Bills",
                 systemImageName: "calendar.badge.exclamationmark"
+            ),
+            AppShortcut(
+                intent: OpenBillIntent(),
+                phrases: [
+                    "Open a bill in \(.applicationName)",
+                    "Open my bill in \(.applicationName)"
+                ],
+                shortTitle: "Open Bill",
+                systemImageName: "doc.text.magnifyingglass"
+            ),
+            AppShortcut(
+                intent: AddBillIntent(),
+                phrases: [
+                    "Add a bill in \(.applicationName)",
+                    "Create a bill in \(.applicationName)",
+                    "Add a credit card in \(.applicationName)"
+                ],
+                shortTitle: "Add Bill",
+                systemImageName: "plus.circle"
+            ),
+            AppShortcut(
+                intent: OpenRecommendationsIntent(),
+                phrases: [
+                    "Open recommendations in \(.applicationName)",
+                    "Show paycheck recommendations in \(.applicationName)"
+                ],
+                shortTitle: "Recommendations",
+                systemImageName: "wand.and.stars"
+            ),
+            AppShortcut(
+                intent: GetPaycheckRecommendationIntent(),
+                phrases: [
+                    "What should I do with my paycheck in \(.applicationName)",
+                    "Plan my paycheck in \(.applicationName)"
+                ],
+                shortTitle: "Paycheck Plan",
+                systemImageName: "banknote"
+            ),
+            AppShortcut(
+                intent: ComparePaycheckScenariosIntent(),
+                phrases: [
+                    "Compare paycheck scenarios in \(.applicationName)",
+                    "What if I had more paycheck cash in \(.applicationName)"
+                ],
+                shortTitle: "Compare Scenarios",
+                systemImageName: "arrow.left.arrow.right"
+            ),
+            AppShortcut(
+                intent: ShowCardUtilizationIntent(),
+                phrases: [
+                    "Show card utilization in \(.applicationName)",
+                    "What's my card utilization in \(.applicationName)"
+                ],
+                shortTitle: "Card Utilization",
+                systemImageName: "chart.pie"
+            ),
+            AppShortcut(
+                intent: MarkBillPaidIntent(),
+                phrases: [
+                    "Mark bill paid in \(.applicationName)",
+                    "Pay a bill in \(.applicationName)"
+                ],
+                shortTitle: "Mark Paid",
+                systemImageName: "checkmark.circle"
+            ),
+            AppShortcut(
+                intent: OpenNextDueBillIntent(),
+                phrases: [
+                    "Open my next due bill in \(.applicationName)",
+                    "Show next bill due in \(.applicationName)"
+                ],
+                shortTitle: "Next Due Bill",
+                systemImageName: "calendar.badge.clock"
+            ),
+            AppShortcut(
+                intent: PayRecommendedCardIntent(),
+                phrases: [
+                    "Pay recommended card amount in \(.applicationName)",
+                    "Apply recommended payment in \(.applicationName)"
+                ],
+                shortTitle: "Pay Recommended",
+                systemImageName: "creditcard.and.123"
             )
         ]
     }
 }
-

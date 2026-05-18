@@ -168,6 +168,8 @@ struct AddGoalView: View {
                     
                     let newGoal = Goal(name.isEmpty ? nil : name, targetAmount: target, deadline: deadline, weight: priority, paydaysUntil: paydayManager.numberOfPaydaysUntil(deadline), imageData: selectedImage?.jpegData(compressionQuality: 0.8))
                     modelContext.insert(newGoal)
+                    AuditService.logGoalCreated(newGoal, context: modelContext)
+                    try? modelContext.save()
                     dismiss()
                 }
             }

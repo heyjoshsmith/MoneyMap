@@ -39,25 +39,25 @@ func deleteAndPrintStoreURL() {
 // Usage: In either your app or extension, temporarily call `deleteAndPrintStoreURL()` (e.g. from AppDelegate, SceneDelegate, or inside a SwiftUI button or .onAppear for testing).
 
 @Model
-class PaydayConfig {
-    var nextPayday: Date?
-    var amountPerPayday: Double?
-    var savingsPerPaycheck: Double?
+public class PaydayConfig {
+    public var nextPayday: Date?
+    public var amountPerPayday: Double?
+    public var savingsPerPaycheck: Double?
     
     private var storedStrategy: SaveStrategy? // Allow old data without a value
-    var strategy: SaveStrategy {
+    public var strategy: SaveStrategy {
         get { storedStrategy ?? SaveStrategy.oneItem } // Fallback for existing data
         set { storedStrategy = newValue }
     }
     
-    init(nextPayday: Date?, strategy: SaveStrategy = .oneItem) {
+    public init(nextPayday: Date?, strategy: SaveStrategy = .oneItem) {
         self.nextPayday = nextPayday
         self.strategy = strategy
     }
     
 }
 
-enum SaveStrategy: String, Codable, CaseIterable, Identifiable {
+public enum SaveStrategy: String, Codable, CaseIterable, Identifiable {
     case oneItem, allItems
-    var id: String { rawValue }
+    public var id: String { rawValue }
 }

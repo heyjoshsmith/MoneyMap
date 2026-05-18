@@ -13,15 +13,7 @@ import MoneyMapShared
 class ShareViewController: UIViewController {
     
     private lazy var container: ModelContainer? = {
-        guard let groupURL = FileManager.default
-            .containerURL(forSecurityApplicationGroupIdentifier: "group.com.heyjoshsmith.MoneyMap") else {
-            return nil
-        }
-
-        let storeURL = groupURL.appendingPathComponent("shared.sqlite")
-        let config = ModelConfiguration(url: storeURL)
-        let schema = Schema([Goal.self])
-        return try? ModelContainer(for: schema, configurations: [config])
+        try? MoneyMapSharedContainerFactory.make()
     }()
     
     override func viewDidLoad() {

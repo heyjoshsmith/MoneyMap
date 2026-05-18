@@ -12,6 +12,7 @@ import SwiftData
 struct GoalsView: View {
     
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var deepLinkManager: DeepLinkManager
     @EnvironmentObject var paydayManager: PaydayManager
     @Query(sort: \Goal.deadline, order: .forward) var goals: [Goal]
     
@@ -22,6 +23,7 @@ struct GoalsView: View {
     @State private var allocation: [Goal: Double] = [:]
     
     @State private var showingResetAlert = false
+    @State private var viewingGoal: Goal?
     
     let listView = false
     
@@ -37,6 +39,9 @@ struct GoalsView: View {
                 }
                 
             }
+            .navigationDestination(item: $viewingGoal) { goal in
+                GoalDetailView(goal)
+            }
             .navigationTitle("Goals")
             .onAppear {
                 DispatchQueue.main.async {
@@ -44,6 +49,13 @@ struct GoalsView: View {
                         editingPayday = true
                     }
                 }
+                routeToRequestedGoalIfNeeded()
+            }
+            .onChange(of: deepLinkManager.requestedGoalID) { _, _ in
+                routeToRequestedGoalIfNeeded()
+            }
+            .onChange(of: goals.count) { _, _ in
+                routeToRequestedGoalIfNeeded()
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -134,6 +146,15 @@ struct GoalsView: View {
         
         return allocation
     }
+
+    func routeToRequestedGoalIfNeeded() {
+        guard let requestedGoalID = deepLinkManager.requestedGoalID,
+              let targetGoal = goals.first(where: { $0.id == requestedGoalID }) else {
+            return
+        }
+        viewingGoal = targetGoal
+        deepLinkManager.requestedGoalID = nil
+    }
     
 }
 
@@ -143,6 +164,7 @@ struct GoalsView: View {
     
     GoalsView()
         .environmentObject(paydayManager)
+        .environmentObject(DeepLinkManager())
         .modelContainer(container)
     
 }

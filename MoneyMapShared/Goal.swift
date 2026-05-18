@@ -21,7 +21,6 @@ public class Goal: Identifiable {
     // Store image data for CloudKit syncing and general use
     public var imageData: Data?
     
-    @available(*, deprecated, message: "Use imageData instead. imageFileName is only for legacy migration.")
     public var imageFileName: String?
 
     
@@ -99,6 +98,7 @@ public class Goal: Identifiable {
         return groupURL.appendingPathComponent(fileName)
     }
 
+    #if os(iOS) || os(tvOS) || os(visionOS)
     /// Returns the loaded UIImage for this goal, using imageData if available.
     public var uiImage: UIImage? {
         guard let data = imageData else { return nil }
@@ -121,6 +121,7 @@ public class Goal: Identifiable {
         }
         return nil
     }
+    #endif
     
 }
 

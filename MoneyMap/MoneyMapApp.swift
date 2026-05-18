@@ -7,40 +7,18 @@
 
 import SwiftUI
 import SwiftData
+import CoreSpotlight
+import TipKit
 
 
 @main
 struct MoneyMapApp: App {
+    @StateObject private var deepLinkManager = DeepLinkManager()
+    @StateObject private var notificationManager = NotificationManager()
+    @StateObject private var payCycleLiveActivityManager = PayCycleLiveActivityManager()
     
     var modelContainer: ModelContainer = {
-        let schema = Schema([Goal.self, PaydayConfig.self, Bill.self])
-
-        guard let containerURL = FileManager.default
-            .containerURL(forSecurityApplicationGroupIdentifier: "group.com.heyjoshsmith.MoneyMap") else {
-            return Self.makeInMemoryContainer(for: schema)
-        }
-
-        let storeURL = containerURL.appendingPathComponent("shared.sqlite")
-
-        if let cloudContainer = try? ModelContainer(
-            for: schema,
-            configurations: [
-                ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: .private("iCloud.com.heyjoshsmith.MoneyMap"))
-            ]
-        ) {
-            return cloudContainer
-        }
-
-        if let localContainer = try? ModelContainer(
-            for: schema,
-            configurations: [
-                ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: .none)
-            ]
-        ) {
-            return localContainer
-        }
-
-        return Self.makeInMemoryContainer(for: schema)
+        (try? SharedModelContainerFactory.make()) ?? SharedModelContainerFactory.makeInMemory()
     }()
     
     var body: some Scene {
@@ -48,24 +26,27 @@ struct MoneyMapApp: App {
             let context = modelContainer.mainContext
             ContentView()
                 .environmentObject(PaydayManager(context: context))
+                .environmentObject(deepLinkManager)
+                .environmentObject(notificationManager)
+                .environmentObject(payCycleLiveActivityManager)
                 .modelContainer(modelContainer)
-                .onOpenURL(perform: handleURL)
+                .onOpenURL { url in
+                    deepLinkManager.handle(url: url)
+                }
+                .onContinueUserActivity(CSSearchableItemActionType) { userActivity in
+                    if let route = SpotlightIndexer.routeFromSearchableItemActivity(userActivity) {
+                        deepLinkManager.pendingRoute = route
+                    }
+                }
+                .task {
+                    notificationManager.attach(deepLinkManager: deepLinkManager)
+                    try? Tips.configure([
+                        .displayFrequency(.daily)
+                    ])
+                }
         }
     }
     
-    func handleURL(url: URL) {
-        
-    }
-    
-    private static func makeInMemoryContainer(for schema: Schema) -> ModelContainer {
-        if let container = try? ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
-        ) {
-            return container
-        }
-        preconditionFailure("Could not create any SwiftData container configuration.")
-    }
 }
 
 #Preview("MoneyMap") {
@@ -73,5 +54,8 @@ struct MoneyMapApp: App {
     let (container, paydayManager) = PreviewDataProvider.createContainer()
     ContentView()
         .environmentObject(paydayManager)
+        .environmentObject(DeepLinkManager())
+        .environmentObject(NotificationManager())
+        .environmentObject(PayCycleLiveActivityManager())
         .modelContainer(container)
 }

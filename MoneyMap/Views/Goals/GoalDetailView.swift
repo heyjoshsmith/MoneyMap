@@ -76,6 +76,15 @@ struct GoalDetailView: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("Goal Details")
         .toolbarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                NavigationLink {
+                    ActivityFeedView(title: "Goal History", entityID: goal.id, entityTypes: [.goal])
+                } label: {
+                    Label("History", systemImage: "clock.arrow.circlepath")
+                }
+            }
+        }
         .onAppear {
             savedFiles = getSavedFiles().count
         }

@@ -107,18 +107,18 @@ private struct CardRowWithDelete: View {
     var body: some View {
         CreditCardRow(for: card)
             .swipeActions(edge: .leading) {
-                Button("Pay", systemImage: "dollarsign.arrow.trianglehead.counterclockwise.rotate.90") {
+                Button(MoneyMapAction.makePayment.title, systemImage: MoneyMapAction.makePayment.systemImage) {
                     billToEdit = card
                     alertValue = ""
                     makingPayment = true
                 }.tint(.green)
-                Button("Balance", systemImage: "dollarsign.gauge.chart.lefthalf.righthalf") {
+                Button(MoneyMapAction.editBalance.title, systemImage: MoneyMapAction.editBalance.systemImage) {
                     billToEdit = card
                     editingBalance = true
                 }.tint(.blue)
             }
             .swipeActions(edge: .trailing) {
-                Button("Limit", systemImage: "dollarsign.gauge.chart.lefthalf.righthalf") {
+                Button(MoneyMapAction.editLimit.title, systemImage: MoneyMapAction.editLimit.systemImage) {
                     billToEdit = card
                     editingLimit = true
                 }.tint(.purple)

@@ -9,6 +9,7 @@ import SwiftUI
 
 
 struct GridView: View {
+    @Environment(\.modelContext) private var modelContext
     
     init(_ goal: Goal, choosingImage: Binding<Bool>) {
         self.goal = goal
@@ -136,10 +137,25 @@ struct GridView: View {
             TextField(goal.amountSaved.formatted(.currency(code: "USD").precision(.fractionLength(0))), value: $amountSaved, format: .currency(code: "USD").precision(.fractionLength(0)))
             Button("Cancel", role: .cancel) { }
             Button("Add Amount") {
-                goal.amountSaved += (amountSaved ?? 0)
+                let amountToAdd = amountSaved ?? 0
+                let previousAmountSaved = goal.amountSaved
+                goal.amountSaved += amountToAdd
+                AuditService.logGoalContribution(
+                    goal: goal,
+                    previousAmountSaved: previousAmountSaved,
+                    contributionAmount: amountToAdd,
+                    context: modelContext
+                )
             }
             Button("Save Total") {
+                let previousAmountSaved = goal.amountSaved
                 goal.amountSaved = amountSaved ?? 0
+                AuditService.logGoalTotalAdjusted(
+                    goal: goal,
+                    previousAmountSaved: previousAmountSaved,
+                    newAmountSaved: goal.amountSaved,
+                    context: modelContext
+                )
             }
         }, message: {
             Text("You currently have \(goal.amountSaved, format: .currency(code: "USD").precision(.fractionLength(0))) saved.")

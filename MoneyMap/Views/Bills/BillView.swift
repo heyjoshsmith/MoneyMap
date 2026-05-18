@@ -185,6 +185,8 @@ struct BillView: View {
                     
                     // Recurrence
                     recurrenceSection
+
+                    billMetaSection
                     
                     transactionView
                     
@@ -198,6 +200,15 @@ struct BillView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
+                    NavigationLink {
+                        ActivityFeedView(
+                            title: bill.category == .creditCard ? "Card History" : "Bill History",
+                            entityID: bill.id,
+                            entityTypes: [bill.category == .creditCard ? .creditCard : .bill]
+                        )
+                    } label: {
+                        Label("History", systemImage: "clock.arrow.circlepath")
+                    }
                     Section("Add Image") {
                         ForEach(ImagePickerSource.allCases, id: \.self) { source in
                             Button {
@@ -213,13 +224,13 @@ struct BillView: View {
                         }
                     }
                     Section {
-                        Button("Import Transactions") {
+                        Button(MoneyMapAction.importTransactions.title, systemImage: MoneyMapAction.importTransactions.systemImage) {
                             showingImporter = true
                         }
                     }
                     if bill.category == .creditCard {
                         Section {
-                            Button("Edit Card Limit") {
+                            Button(MoneyMapAction.editCardLimit.title, systemImage: MoneyMapAction.editCardLimit.systemImage) {
                                 cardLimit = bill.creditCardDetails?.creditLimit.formatted(.number) ?? ""
                                 editingLimit = true
                             }
@@ -428,19 +439,6 @@ struct BillView: View {
         return sortedTransactions.filter { $0.category == selected }
     }
     
-    static func createTransaction(from dict: [String: String]) -> Transaction? {
-        return Transaction(
-            transactionDate: dict["Transaction Date"]?.replacingOccurrences(of: "\"", with: ""),
-            clearingDate: dict["Clearing Date"]?.replacingOccurrences(of: "\"", with: ""),
-            transactionDescription: dict["Description"]?.replacingOccurrences(of: "\"", with: ""),
-            merchant: dict["Merchant"]?.replacingOccurrences(of: "\"", with: ""),
-            category: dict["Category"]?.replacingOccurrences(of: "\"", with: ""),
-            type: dict["Type"]?.replacingOccurrences(of: "\"", with: ""),
-            amountUSD: Double(dict["Amount (USD)"]?.replacingOccurrences(of: "\"", with: "") ?? ""),
-            purchasedBy: dict["Purchased By"]?.replacingOccurrences(of: "\"", with: "")
-        )
-    }
-    
     private var billHeaderSection: some View {
         ZStack {
             if let billImage = bill.image {
@@ -526,6 +524,76 @@ struct BillView: View {
                     }
                     .padding(.horizontal)
                 }
+
+                if let apr = details.annualPercentageRate {
+                    HStack {
+                        Text("APR")
+                        Spacer()
+                        Text(apr, format: .percent.precision(.fractionLength(2)))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                }
+
+                if details.effectiveMinimumPayment > 0 {
+                    HStack {
+                        Text("Minimum Payment")
+                        Spacer()
+                        Text(details.effectiveMinimumPayment, format: .currency(code: "USD"))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                }
+
+                if let statementBalance = details.statementBalance {
+                    HStack {
+                        Text("Statement Balance")
+                        Spacer()
+                        Text(statementBalance, format: .currency(code: "USD"))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                }
+
+                if let issuerName = details.issuerName, !issuerName.isEmpty {
+                    HStack {
+                        Text("Issuer")
+                        Spacer()
+                        Text(issuerName)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                }
+
+                if let lastFour = details.lastFourDigits, !lastFour.isEmpty {
+                    HStack {
+                        Text("Card")
+                        Spacer()
+                        Text("•••• \(lastFour)")
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                }
+
+                if let closingDate = details.statementClosingDate {
+                    HStack {
+                        Text("Statement Closes")
+                        Spacer()
+                        Text(closingDate, style: .date)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                }
+
+                if let promoDate = details.promoAPRExpiration {
+                    HStack {
+                        Text("Promo APR Ends")
+                        Spacer()
+                        Text(promoDate, style: .date)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                }
             }
         }
     }
@@ -538,6 +606,52 @@ struct BillView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal)
+    }
+
+    private var billMetaSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if bill.autopayEnabled || bill.autopaySource != nil || bill.gracePeriodDays != nil {
+                HStack {
+                    Text("Autopay")
+                    Spacer()
+                    Text(bill.autopayEnabled ? "Enabled" : "Off")
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal)
+
+                if let autopaySource = bill.autopaySource, !autopaySource.isEmpty {
+                    HStack {
+                        Text("Autopay Source")
+                        Spacer()
+                        Text(autopaySource)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                }
+
+                if let gracePeriodDays = bill.gracePeriodDays, gracePeriodDays > 0 {
+                    HStack {
+                        Text("Grace Period")
+                        Spacer()
+                        Text("\(gracePeriodDays) day\(gracePeriodDays == 1 ? "" : "s")")
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                }
+            }
+
+            if let notes = bill.notes, !notes.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Notes")
+                        .font(.headline)
+                    Text(notes)
+                        .foregroundStyle(.secondary)
+                }
+                .padding()
+                .background(Color(uiColor: .secondarySystemGroupedBackground))
+                .clipShape(.rect(cornerRadius: 15))
+            }
+        }
     }
     
     var recommendedPayment: Double? {
@@ -740,94 +854,6 @@ struct DocumentPicker: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
 }
-
-func importTransactions(fromCSVAt url: URL, to bill: Bill, context: ModelContext) throws -> Int {
-    let content = try String(contentsOf: url, encoding: .utf8)
-    let rows = parseCSVRows(content)
-    guard let headerRow = rows.first, rows.count > 1 else { return 0 }
-    let header = headerRow.map { sanitizeCSVField($0) }
-    let dataRows = rows.dropFirst()
-    var importedCount = 0
-    
-    for row in dataRows {
-        guard row.count == header.count else { continue }
-        var dict = [String: String]()
-        for (index, key) in header.enumerated() {
-            dict[key] = sanitizeCSVField(row[index])
-        }
-        if let transaction = BillView.createTransaction(from: dict) {
-            transaction.creditCard = bill
-            if let merchant = transaction.merchant {
-                if let existingFriendly = (bill.transactions ?? []).first(where: { $0.merchant == merchant && ($0.friendlyName?.isEmpty == false) })?.friendlyName {
-                    transaction.friendlyName = existingFriendly
-                }
-            }
-            context.insert(transaction)
-            importedCount += 1
-        }
-    }
-    try context.save()
-    return importedCount
-}
-
-private func sanitizeCSVField(_ value: String) -> String {
-    value
-        .replacingOccurrences(of: "\u{FEFF}", with: "")
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-}
-
-private func parseCSVRows(_ input: String) -> [[String]] {
-    var rows: [[String]] = []
-    var row: [String] = []
-    var field = ""
-    var isInsideQuotes = false
-    var index = input.startIndex
-
-    while index < input.endIndex {
-        let char = input[index]
-
-        if char == "\"" {
-            let next = input.index(after: index)
-            if isInsideQuotes, next < input.endIndex, input[next] == "\"" {
-                field.append("\"")
-                index = next
-            } else {
-                isInsideQuotes.toggle()
-            }
-        } else if char == "," && !isInsideQuotes {
-            row.append(field)
-            field = ""
-        } else if (char == "\n" || char == "\r") && !isInsideQuotes {
-            row.append(field)
-            let cleaned = row.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            if cleaned.contains(where: { !$0.isEmpty }) {
-                rows.append(cleaned)
-            }
-            row = []
-            field = ""
-
-            if char == "\r" {
-                let next = input.index(after: index)
-                if next < input.endIndex, input[next] == "\n" {
-                    index = next
-                }
-            }
-        } else {
-            field.append(char)
-        }
-
-        index = input.index(after: index)
-    }
-
-    row.append(field)
-    let cleaned = row.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-    if cleaned.contains(where: { !$0.isEmpty }) {
-        rows.append(cleaned)
-    }
-
-    return rows
-}
-
 
 #Preview {
     // Create a sample bill for preview purposes

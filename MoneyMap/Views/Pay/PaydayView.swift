@@ -19,9 +19,11 @@ struct PaydayRow: Identifiable {
 struct PaydayView: View {
     
     @EnvironmentObject var paydayManager: PaydayManager
+    @EnvironmentObject private var notificationManager: NotificationManager
     @State private var selectedDate = Date()
     @AppStorage("notifyDayBeforeEnabled") private var notifyDayBeforeEnabled: Bool = true
     @AppStorage("notifyDayOfEnabled") private var notifyDayOfEnabled: Bool = true
+    @AppStorage("notifyGoalBehindEnabled") private var notifyGoalBehindEnabled: Bool = true
     @AppStorage("notificationTime") private var notificationTime: Date = {
         var components = DateComponents()
         components.hour = 9
@@ -31,7 +33,7 @@ struct PaydayView: View {
     @State private var showingTimePicker = false
     
     @Query private var bills: [Bill]
-
+    @Query(sort: \Goal.deadline, order: .forward) private var goals: [Goal]
     private var timeString: String {
         notificationTime.formatted(.dateTime.hour().minute())
     }
@@ -105,6 +107,7 @@ struct PaydayView: View {
                         Section("Notification Settings") {
                             Toggle("Notify Day Before", isOn: $notifyDayBeforeEnabled)
                             Toggle("Notify on Payday", isOn: $notifyDayOfEnabled)
+                            Toggle("Notify if Goals Are Behind", isOn: $notifyGoalBehindEnabled)
                             Button("Time: \(timeString)") {
                                 showingTimePicker = true
                             }
@@ -116,16 +119,22 @@ struct PaydayView: View {
             }
             .onAppear {
                 UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
-                scheduleNotifications(paydayManager.upcomingPaydaysForNextYear())
+                rescheduleNotifications()
             }
             .onChange(of: notifyDayBeforeEnabled) {
-                scheduleNotifications(paydayManager.upcomingPaydaysForNextYear())
+                rescheduleNotifications()
             }
             .onChange(of: notifyDayOfEnabled) {
-                scheduleNotifications(paydayManager.upcomingPaydaysForNextYear())
+                rescheduleNotifications()
+            }
+            .onChange(of: notifyGoalBehindEnabled) {
+                rescheduleNotifications()
             }
             .onChange(of: notificationTime) {
-                scheduleNotifications(paydayManager.upcomingPaydaysForNextYear())
+                rescheduleNotifications()
+            }
+            .onChange(of: paydayManager.nextPayday) {
+                rescheduleNotifications()
             }
             .popover(isPresented: $showingTimePicker) {
                 ZStack {
@@ -151,6 +160,14 @@ struct PaydayView: View {
 }
 
 private extension PaydayView {
+    func rescheduleNotifications() {
+        scheduleNotifications(paydayManager.upcomingPaydaysForNextYear())
+        notificationManager.scheduleGoalProgressNotifications(
+            for: goals,
+            nextPayday: paydayManager.nextPayday
+        )
+    }
+
     private func batchedPaydays(_ paydays: [Date]) -> [PaydayRow] {
         var rows: [PaydayRow] = []
         var i = 0
@@ -189,6 +206,8 @@ private extension PaydayView {
     
     PaydayView()
         .environmentObject(paydayManager)
+        .environmentObject(DeepLinkManager())
+        .environmentObject(NotificationManager())
         .modelContainer(container)
 }
 

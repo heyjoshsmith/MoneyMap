@@ -9,12 +9,39 @@ import SwiftUI
 import SwiftData
 
 struct BillsView: View {
-    
+    enum Mode {
+        case all
+        case upcoming
+    }
+
     @Query private var bills: Bills
-    
+    let mode: Mode
+
+    init(mode: Mode = .all) {
+        self.mode = mode
+    }
+
+    private var visibleTimeframes: [Timeframe] {
+        switch mode {
+        case .all:
+            return Timeframe.allCases
+        case .upcoming:
+            return [.overdue, .today, .tomorrow, .thisWeek, .thisMonth]
+        }
+    }
+
+    private var title: String {
+        switch mode {
+        case .all:
+            return "Bills"
+        case .upcoming:
+            return "Upcoming Bills"
+        }
+    }
+
     var body: some View {
         List {
-            ForEach(Timeframe.allCases) { timeframe in
+            ForEach(visibleTimeframes) { timeframe in
                 
                 let billsForTimeframe = bills.due(timeframe)
                 
@@ -34,7 +61,7 @@ struct BillsView: View {
             }
         }
         .listStyle(.plain)
-        .navigationTitle("Bills")
+        .navigationTitle(title)
         .background(Color(uiColor: .systemGroupedBackground))
     }
     
