@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import AppIntents
 
 
 struct GoalsListView: View {
@@ -77,6 +78,14 @@ struct GoalsListView: View {
                         
                     }
                     .padding(.vertical, 5)
+                }
+                .simultaneousGesture(TapGesture().onEnded {
+                    MoneyMapIntentDonations.donateOpenGoal(goal)
+                })
+                .userActivity("com.heyjoshsmith.MoneyMap.viewingGoalRow") { activity in
+                    let entity = GoalEntity(goal)
+                    activity.title = "Reviewing \(entity.name)"
+                    activity.appEntityIdentifier = EntityIdentifier(for: entity)
                 }
                 .swipeActions {
                     Button("Delete", systemImage: "trash") {

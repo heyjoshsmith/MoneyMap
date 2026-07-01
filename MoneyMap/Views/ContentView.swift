@@ -18,11 +18,10 @@ struct ContentView: View {
     @EnvironmentObject private var deepLinkManager: DeepLinkManager
     @EnvironmentObject private var paydayManager: PaydayManager
     @EnvironmentObject private var notificationManager: NotificationManager
-    @EnvironmentObject private var payCycleLiveActivityManager: PayCycleLiveActivityManager
     @Query(sort: \Goal.deadline, order: .forward) private var goals: [Goal]
     @Query private var bills: [Bill]
     @Query private var paydayConfigs: [PaydayConfig]
-    @State private var selection: Tab = .bills
+    @State private var selection: Tab = .home
     
     @AppStorage("lastSeenWhatsNewVersion") private var lastSeenWhatsNewVersion = ""
     @State private var pendingCSVURLs: [URL] = []
@@ -31,34 +30,21 @@ struct ContentView: View {
     
     var body: some View {
         TabView(selection: $selection) {
-            GoalsView().tag(Tab.goals)
-                .tabItem {
-                    Image(systemName: "dollarsign.circle")
-                    Text("Goals")
-                }
-            PaydayView().tag(Tab.pay)
-                .tabItem {
-                    Image(systemName: "dollarsign.arrow.circlepath")
-                    Text("Pay")
-                }
-            NavigationStack {
-                RecommendationsView()
+            SwiftUI.Tab("Home", systemImage: "house", value: Tab.home) {
+                HomeView()
             }
-            .tag(Tab.recommendations)
-                .tabItem {
-                    Image(systemName: "wand.and.stars")
-                    Text("Plan")
-                }
-            BillsHome().tag(Tab.bills)
-                .tabItem {
-                    Image(systemName: "banknote")
-                    Text("Bills")
-                }
-            Settings().tag(Tab.settings)
-                .tabItem {
-                    Image(systemName: "gear")
-                    Text("Settings")
-                }
+            SwiftUI.Tab("Bills", systemImage: "banknote", value: Tab.bills) {
+                BillsHome()
+            }
+            SwiftUI.Tab("Goals", systemImage: "target", value: Tab.goals) {
+                GoalsView()
+            }
+            SwiftUI.Tab("Settings", systemImage: "gear", value: Tab.settings) {
+                Settings()
+            }
+            SwiftUI.Tab("Search", systemImage: "magnifyingglass", value: Tab.search, role: .search) {
+                MoneyMapAssistantView()
+            }
         }
         .onReceive(deepLinkManager.$pendingRoute) { route in
             guard let route else { return }
@@ -85,7 +71,7 @@ struct ContentView: View {
         .sheet(isPresented: $showingWhatsNew) {
             if let latest = WhatsNewRepository.latest {
                 WhatsNewView(releases: [latest]) {
-                    lastSeenWhatsNewVersion = MoneyMapVersion.marketingVersion
+                    lastSeenWhatsNewVersion = WhatsNewRepository.currentPresentationID
                     showingWhatsNew = false
                 }
             }
@@ -93,17 +79,19 @@ struct ContentView: View {
         .onAppear {
             maybePresentWhatsNew()
             consumePendingRouteIfNeeded()
+            refreshBillStatuses()
+            syncBillNotifications()
             syncGoalNotifications()
             syncSearchIndex()
-            syncPayCycleLiveActivity()
             reloadWidgetTimelines()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 consumePendingRouteIfNeeded()
+                refreshBillStatuses()
+                syncBillNotifications()
                 syncGoalNotifications()
                 syncSearchIndex()
-                syncPayCycleLiveActivity()
                 reloadWidgetTimelines()
             }
         }
@@ -111,8 +99,8 @@ struct ContentView: View {
             syncGoalNotifications()
         }
         .onChange(of: searchIndexSignature) { _, _ in
+            syncBillNotifications()
             syncSearchIndex()
-            syncPayCycleLiveActivity()
             reloadWidgetTimelines()
         }
     }
@@ -135,12 +123,12 @@ struct ContentView: View {
             selection = .bills
             deepLinkManager.requestedBillsDestination = .cardUtilization
         case .showRecommendations:
-            selection = .recommendations
+            selection = .home
         }
     }
 
     private func maybePresentWhatsNew() {
-        if lastSeenWhatsNewVersion != MoneyMapVersion.marketingVersion {
+        if lastSeenWhatsNewVersion != WhatsNewRepository.currentPresentationID {
             showingWhatsNew = true
         }
     }
@@ -167,6 +155,10 @@ struct ContentView: View {
         )
     }
 
+    private func syncBillNotifications() {
+        notificationManager.scheduleBillDueNotifications(for: bills)
+    }
+
     private var searchIndexSignature: String {
         let goalSignature = goals
             .sorted { $0.id.uuidString < $1.id.uuidString }
@@ -174,15 +166,25 @@ struct ContentView: View {
             .joined(separator: ";")
         let billSignature = bills
             .sorted { $0.id.uuidString < $1.id.uuidString }
-            .map { "\($0.id.uuidString)|\($0.amount ?? 0)|\($0.dueDate?.timeIntervalSince1970 ?? 0)|\($0.datePaid?.timeIntervalSince1970 ?? 0)" }
+            .map {
+                "\($0.id.uuidString)|\($0.amount ?? 0)|\($0.dueDate?.timeIntervalSince1970 ?? 0)|\($0.datePaid?.timeIntervalSince1970 ?? 0)|\($0.autopayEnabled)|\($0.gracePeriodDays ?? 0)"
+            }
+            .joined(separator: ";")
+        let transactionSignature = bills
+            .flatMap { $0.transactions ?? [] }
+            .sorted { MoneyMapTransactionStore.mostRecentFirst(lhs: $0, rhs: $1) }
+            .map { transaction in
+                "\(transactionEntityID(for: transaction))|\(transaction.amountUSD ?? 0)|\((transaction.transactionDate ?? transaction.clearingDate)?.timeIntervalSince1970 ?? 0)"
+            }
             .joined(separator: ";")
         let paydayAmount = paydayConfigs.first?.amountPerPayday ?? 0
-        return "\(goalSignature)#\(billSignature)#\(paydayAmount)#\(paydayManager.nextPayday?.timeIntervalSince1970 ?? 0)"
+        return "\(goalSignature)#\(billSignature)#\(transactionSignature)#\(paydayAmount)#\(paydayManager.nextPayday?.timeIntervalSince1970 ?? 0)"
     }
 
     private func syncSearchIndex() {
         SpotlightIndexer.reindexBills(bills)
         SpotlightIndexer.reindexGoals(goals)
+        SpotlightIndexer.reindexTransactions(bills.flatMap { $0.transactions ?? [] })
         let digest = FinancialPlanningEngine.digest(
             availableCash: paydayConfigs.first?.amountPerPayday ?? 0,
             goals: goals,
@@ -194,13 +196,26 @@ struct ContentView: View {
         SpotlightIndexer.reindexRecommendations(digest)
     }
 
-    private func syncPayCycleLiveActivity() {
-        payCycleLiveActivityManager.sync(
-            availableCash: paydayConfigs.first?.amountPerPayday ?? 0,
-            goals: goals,
-            bills: bills,
-            nextPayday: paydayManager.nextPayday
-        )
+    private func refreshBillStatuses() {
+        var didChange = false
+
+        for bill in bills {
+            let previousDueDate = bill.dueDate
+            let previousDatePaid = bill.datePaid
+            let previousStatus = bill.status
+
+            bill.checkStatus()
+
+            if previousDueDate != bill.dueDate ||
+                previousDatePaid != bill.datePaid ||
+                previousStatus != bill.status {
+                didChange = true
+            }
+        }
+
+        if didChange {
+            try? modelContext.save()
+        }
     }
 
     private func reloadWidgetTimelines() {
@@ -211,7 +226,7 @@ struct ContentView: View {
     }
     
     enum Tab: String, CaseIterable, Identifiable {
-        case goals, pay, recommendations, bills, settings
+        case home, bills, search, goals, settings
         var id: Self { return self }
     }
 }
@@ -258,6 +273,5 @@ struct CreditCardPickerSheet: View {
         .environmentObject(paydayManager)
         .environmentObject(DeepLinkManager())
         .environmentObject(NotificationManager())
-        .environmentObject(PayCycleLiveActivityManager())
         .modelContainer(container)
 }

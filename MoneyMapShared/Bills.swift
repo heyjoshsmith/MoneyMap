@@ -401,7 +401,7 @@ extension Bill {
                     let recurrenceInterval = recurrenceInterval,
                     let currentDueDate = self.dueDate
                 else {
-                    status = .overdue
+                    status = .paid
                     return
                 }
                 // Assign to self.dueDate, not local let dueDate

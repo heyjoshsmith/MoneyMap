@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppIntents
 
 struct BillRow: View {
     
@@ -48,6 +49,24 @@ struct BillRow: View {
 struct BillButton: View {
     
     var bill: Bill
+
+    private var dueLabel: String {
+        guard let dueDate = bill.dueDate else { return "No due date" }
+        let daysUntilDue = Calendar.current.dateComponents([.day], from: Date(), to: dueDate).day ?? 0
+        if bill.status == .paid {
+            return "Paid"
+        }
+        if daysUntilDue < 0 {
+            return "Overdue"
+        }
+        if daysUntilDue == 0 {
+            return "Due today"
+        }
+        if daysUntilDue == 1 {
+            return "1 day"
+        }
+        return "\(daysUntilDue) days"
+    }
     
     var body: some View {
         NavigationLink {
@@ -59,8 +78,7 @@ struct BillButton: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(bill.name ?? "Untitled")
                         .font(.title3.weight(.semibold))
-                    let daysUntilDue = Calendar.current.dateComponents([.day], from: Date(), to: bill.dueDate ?? Date()).day ?? 0
-                    Text("\(daysUntilDue) days")
+                    Text(dueLabel)
                         .font(.footnote)
                         .opacity(0.7)
                 }
@@ -72,6 +90,14 @@ struct BillButton: View {
             .foregroundStyle(.white)
             .background(bill.category?.color.gradient ?? Color.gray.gradient)
             .clipShape(.rect(cornerRadius: 10))
+        }
+        .simultaneousGesture(TapGesture().onEnded {
+            MoneyMapIntentDonations.donateOpenBill(bill)
+        })
+        .userActivity("com.heyjoshsmith.MoneyMap.viewingBillCard") { activity in
+            let entity = BillEntity(bill)
+            activity.title = "Browsing \(entity.name)"
+            activity.appEntityIdentifier = EntityIdentifier(for: entity)
         }
         .task {
             bill.checkStatus()

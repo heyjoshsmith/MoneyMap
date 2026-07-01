@@ -2,3 +2,7 @@ build/
 DerivedData/
 .DS_Store
 *.xcresult
+server-prototype/data/
+server-prototype/inbox/
+server-prototype/processed/
+server-prototype/node_modules/

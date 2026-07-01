@@ -32,14 +32,16 @@ struct AddGoalView: View {
     @State private var errorMessage: String? = nil
     
     @State private var choosingSavedImage: Bool = false
+    @State private var showingPriorityOptions = false
+    @State private var showingImageOptions = false
     
     var body: some View {
         Form {
             
             if paydayManager.nextPayday == nil {
-                Section("Warning") {
-                    Text("Please set your next payday in the settings first.")
-                        .foregroundColor(.red)
+                Section("Before You Plan") {
+                    Text("You can create this goal now. Add your payday later if you want paycheck pacing and better recommendations.")
+                        .foregroundStyle(.secondary)
                 }
             }
                 
@@ -72,7 +74,7 @@ struct AddGoalView: View {
                 
             }
             
-            Section("Deadline") {
+            Section("Target Date") {
                 DatePicker("Deadline", selection: $deadline, displayedComponents: .date)
                     .datePickerStyle(.graphical)
                 
@@ -82,55 +84,49 @@ struct AddGoalView: View {
                 }
             }
             
-            Section("Priority") {
-                Picker("Priority", selection: $priority) {
-                    HStack(spacing: 15) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)  // ✅ Ensures red icon
-                        Text("High")
-                    }
-                    .tag(2.0)
+            Section("More Options") {
+                DisclosureGroup("Priority", isExpanded: $showingPriorityOptions) {
+                    Picker("Priority", selection: $priority) {
+                        HStack(spacing: 15) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                            Text("High")
+                        }
+                        .tag(2.0)
 
-                    HStack(spacing: 15) {
-                        Image(systemName: "flag")
-                            .foregroundStyle(.orange)  // ✅ Medium priority color
-                        Text("Medium")
-                    }
-                    .tag(1.0)
+                        HStack(spacing: 15) {
+                            Image(systemName: "flag")
+                                .foregroundStyle(.orange)
+                            Text("Medium")
+                        }
+                        .tag(1.0)
 
-                    HStack(spacing: 15) {
-                        Image(systemName: "circle.dashed")
-                            .foregroundStyle(.gray)  // ✅ Low priority color
-                        Text("Low")
+                        HStack(spacing: 15) {
+                            Image(systemName: "circle.dashed")
+                                .foregroundStyle(.gray)
+                            Text("Low")
+                        }
+                        .tag(0.5)
                     }
-                    .tag(0.5)
+                    .pickerStyle(.inline)
+                    .labelsHidden()
                 }
-                .pickerStyle(.inline) // ✅ Ensures SwiftUI respects custom styling
-                .labelsHidden()
-            }
-            
-            Section {
-                if let image = selectedImage {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(height: 200)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .listRowInsets(EdgeInsets())
-                } else {
-                    imagePicker
-                }
-            } header: {
-                HStack {
-                    Text("Image")
-                    if selectedImage != nil {
-                        Spacer()
-                        Button("Remove") {
+
+                DisclosureGroup("Image", isExpanded: $showingImageOptions) {
+                    if let image = selectedImage {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(height: 200)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .listRowInsets(EdgeInsets())
+
+                        Button("Remove Image") {
                             selectedItem = nil
                             selectedImage = nil
                         }
-                        .textCase(.none)
-                        .font(.callout)
+                    } else {
+                        imagePicker
                     }
                 }
             }
@@ -153,11 +149,7 @@ struct AddGoalView: View {
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
-                    guard paydayManager.nextPayday != nil else {
-                        errorMessage = "Set your next payday first."
-                        return
-                    }
-                    guard computedPaydayCount != nil else {
+                    if paydayManager.nextPayday != nil && computedPaydayCount == nil {
                         errorMessage = "Deadline must be after your next payday."
                         return
                     }
@@ -166,7 +158,8 @@ struct AddGoalView: View {
                         return
                     }
                     
-                    let newGoal = Goal(name.isEmpty ? nil : name, targetAmount: target, deadline: deadline, weight: priority, paydaysUntil: paydayManager.numberOfPaydaysUntil(deadline), imageData: selectedImage?.jpegData(compressionQuality: 0.8))
+                    let paydaysUntil = paydayManager.nextPayday == nil ? nil : paydayManager.numberOfPaydaysUntil(deadline)
+                    let newGoal = Goal(name.isEmpty ? nil : name, targetAmount: target, deadline: deadline, weight: priority, paydaysUntil: paydaysUntil, imageData: selectedImage?.jpegData(compressionQuality: 0.8))
                     modelContext.insert(newGoal)
                     AuditService.logGoalCreated(newGoal, context: modelContext)
                     try? modelContext.save()

@@ -8,6 +8,7 @@
 import SwiftUI
 import SwiftData
 import TipKit
+import FoundationModels
 
 struct RecommendationsView: View {
     @Environment(\.modelContext) private var modelContext
@@ -23,6 +24,9 @@ struct RecommendationsView: View {
     @State private var didApplyGoalPlan = false
     @State private var didApplyCardPlan = false
     @State private var showingWelcome = false
+    @State private var generatedExplanation: String?
+    @State private var explanationError: String?
+    @State private var isGeneratingExplanation = false
     @FocusState private var amountFieldFocused: Bool
 
     private var creditCards: [Bill] {
@@ -60,6 +64,14 @@ struct RecommendationsView: View {
             allocationStrategy: allocationStrategy,
             payoffStrategy: payoffStrategy
         )
+    }
+
+    private var modelAvailability: SystemLanguageModel.Availability {
+        RecommendationPlanExplainer.model.availability
+    }
+
+    private var availabilityMessage: String? {
+        RecommendationPlanExplainer.availabilityMessage(for: modelAvailability)
     }
 
     var body: some View {
@@ -140,6 +152,44 @@ struct RecommendationsView: View {
                         Text(goalName)
                     }
                 }
+            }
+
+            Section("Apple Intelligence") {
+                if let availabilityMessage {
+                    Label(availabilityMessage, systemImage: "sparkles")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Use the on-device model to explain why this plan favors certain cards, goals, and timing.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let generatedExplanation, !generatedExplanation.isEmpty {
+                    Text(generatedExplanation)
+                        .font(.subheadline)
+                }
+
+                if let explanationError {
+                    Text(explanationError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+
+                Button {
+                    Task {
+                        await generateExplanation()
+                    }
+                } label: {
+                    if isGeneratingExplanation {
+                        Label("Explaining Plan...", systemImage: "sparkles")
+                    } else if generatedExplanation == nil {
+                        Label("Explain This Plan", systemImage: "sparkles")
+                    } else {
+                        Label("Refresh Explanation", systemImage: "arrow.clockwise")
+                    }
+                }
+                .disabled(isGeneratingExplanation || availabilityMessage != nil)
             }
 
             Section("Scenario Compare") {
@@ -290,22 +340,28 @@ struct RecommendationsView: View {
                 showingWelcome = true
             }
         }
+        .onChange(of: plan) { _, _ in
+            clearExplanation()
+        }
         .onChange(of: availableCash) { _, newValue in
             guard let paydayConfig = paydayConfigs.first else { return }
             paydayConfig.amountPerPayday = newValue > 0 ? newValue : nil
             try? modelContext.save()
             didApplyGoalPlan = false
             didApplyCardPlan = false
+            clearExplanation()
         }
         .onChange(of: payoffStrategy) { _, newValue in
             RecommendationPreferencesStore.cardStrategy = newValue
             didApplyGoalPlan = false
             didApplyCardPlan = false
+            clearExplanation()
         }
         .onChange(of: allocationStrategy) { _, newValue in
             RecommendationPreferencesStore.paycheckStrategy = newValue
             didApplyGoalPlan = false
             didApplyCardPlan = false
+            clearExplanation()
         }
     }
 
@@ -327,6 +383,7 @@ struct RecommendationsView: View {
         let totalAmount = plan.goalContributions.reduce(0) { $0 + $1.recommendedContribution }
         AuditService.logRecommendationBatch(cardCount: 0, goalCount: plan.goalContributions.count, totalAmount: totalAmount, context: modelContext, groupID: groupID)
         try? modelContext.save()
+        MoneyMapIntentDonations.donatePaycheckPlan(availableCash: availableCash)
         didApplyGoalPlan = true
     }
 
@@ -354,7 +411,33 @@ struct RecommendationsView: View {
         let totalAmount = plan.creditCardPayments.reduce(0) { $0 + $1.recommendedPayment }
         AuditService.logRecommendationBatch(cardCount: plan.creditCardPayments.count, goalCount: 0, totalAmount: totalAmount, context: modelContext, groupID: groupID)
         try? modelContext.save()
+        AppRefreshEvents.notifyBillsDidChange()
+        MoneyMapIntentDonations.donatePaycheckPlan(availableCash: availableCash)
         didApplyCardPlan = true
+    }
+
+    @MainActor
+    private func generateExplanation() async {
+        guard availabilityMessage == nil else { return }
+        isGeneratingExplanation = true
+        explanationError = nil
+
+        do {
+            generatedExplanation = try await RecommendationPlanExplainer.explain(
+                plan: plan,
+                digest: digest,
+                nextPayday: paydayManager.nextPayday
+            )
+        } catch {
+            explanationError = "MoneyMap couldn't generate an explanation right now."
+        }
+
+        isGeneratingExplanation = false
+    }
+
+    private func clearExplanation() {
+        generatedExplanation = nil
+        explanationError = nil
     }
 }
 

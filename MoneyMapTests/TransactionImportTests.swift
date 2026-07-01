@@ -71,4 +71,51 @@ final class TransactionImportTests: XCTestCase {
             XCTFail("Expected recurring autopay bill to be marked upcoming.")
         }
     }
+
+    func testRecurringManualBillMarkedPaidRollsForwardToNextCycle() {
+        let calendar = Calendar.current
+        let pastDueDate = calendar.date(byAdding: .month, value: -1, to: .now) ?? .now
+
+        let bill = Bill(
+            name: "Internet",
+            amount: 60,
+            dueDate: pastDueDate,
+            category: .internet,
+            recurrenceInterval: 1,
+            recurrenceUnit: .month
+        )
+
+        bill.datePaid = .now
+        bill.status = .paid
+        bill.checkStatus()
+
+        XCTAssertNil(bill.datePaid)
+        if case .upcoming(let dueDate) = bill.status {
+            XCTAssertGreaterThanOrEqual(calendar.startOfDay(for: dueDate), calendar.startOfDay(for: .now))
+        } else {
+            XCTFail("Expected recurring paid bill to roll forward to an upcoming cycle.")
+        }
+    }
+
+    func testPaidNonRecurringOverdueBillStaysPaid() {
+        let calendar = Calendar.current
+        let pastDueDate = calendar.date(byAdding: .day, value: -10, to: .now) ?? .now
+
+        let bill = Bill(
+            name: "One-Time Fee",
+            amount: 120,
+            dueDate: pastDueDate,
+            category: .other,
+            recurrenceInterval: nil,
+            recurrenceUnit: nil
+        )
+
+        bill.datePaid = .now
+        bill.status = .paid
+        bill.checkStatus()
+
+        XCTAssertEqual(bill.status, .paid)
+        XCTAssertNotNil(bill.datePaid)
+        XCTAssertEqual(calendar.startOfDay(for: bill.dueDate ?? .distantPast), calendar.startOfDay(for: pastDueDate))
+    }
 }

@@ -111,6 +111,9 @@ struct BillsHome: View {
                             amount: amount,
                             context: modelContext
                         )
+                        try? modelContext.save()
+                        AppRefreshEvents.notifyBillsDidChange()
+                        MoneyMapIntentDonations.donateMarkBillPaid(bill, paymentAmount: amount)
                     }
                     makingPayment = false
                     alertValue.removeAll()
@@ -154,6 +157,7 @@ struct BillsHome: View {
     private func syncSystemIntegrations() {
         refreshBillStatuses()
         SpotlightIndexer.reindexBills(bills)
+        SpotlightIndexer.reindexTransactions(bills.flatMap { $0.transactions ?? [] })
         notificationManager.scheduleBillDueNotifications(for: bills)
     }
 

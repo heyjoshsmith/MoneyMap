@@ -7,6 +7,7 @@
 
 import SwiftUI
 import PhotosUI
+import AppIntents
 //import Glur
 
 
@@ -76,6 +77,11 @@ struct GoalDetailView: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("Goal Details")
         .toolbarTitleDisplayMode(.inline)
+        .userActivity("com.heyjoshsmith.MoneyMap.viewingGoal") { activity in
+            let entity = GoalEntity(goal)
+            activity.title = "Viewing \(entity.name)"
+            activity.appEntityIdentifier = EntityIdentifier(for: entity)
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 NavigationLink {

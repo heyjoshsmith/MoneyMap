@@ -15,8 +15,5 @@ struct MainWidgetBundle: WidgetBundle {
         PaydayCountdownWidget()
         NextBillWidget()
         UpcomingBillsListWidget()
-        if #available(iOS 16.2, *) {
-            PayCycleLiveActivityWidget()
-        }
     }
 }

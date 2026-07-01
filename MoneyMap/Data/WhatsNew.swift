@@ -12,6 +12,7 @@ struct WhatsNewRelease: Identifiable {
     let version: String
     let releaseDate: String
     let highlights: [String]
+    let featuredQuestions: [String]
 }
 
 enum MoneyMapVersion {
@@ -23,6 +24,26 @@ enum MoneyMapVersion {
 enum WhatsNewRepository {
     static let releases: [WhatsNewRelease] = [
         WhatsNewRelease(
+            id: "1.3.0-2026-06-16",
+            version: "1.3.0",
+            releaseDate: "June 16, 2026",
+            highlights: [
+                "Siri now understands richer MoneyMap data for bills, goals, payday timing, transactions, and spending summaries.",
+                "New Siri answers for next payday, money left after bills, recent transactions, and spending totals.",
+                "Transactions now appear as searchable app entities, and Spotlight ties bills, goals, and transaction activity back into MoneyMap.",
+                "MoneyMap now donates key actions like opening bills or goals, marking bills paid, checking savings, and planning a paycheck so Siri suggestions feel more personal over time.",
+                "Bill, goal, and home screens now provide broader onscreen context for Siri when you ask about what you are viewing.",
+                "New Ask MoneyMap assistant uses Apple Intelligence on device to answer finance questions from your own MoneyMap data.",
+                "Updated What's New experience now highlights the newest release on first open and keeps example Siri questions easy to revisit."
+            ],
+            featuredQuestions: [
+                "When is my car bill due?",
+                "How much do I have left after bills?",
+                "How much did I spend at Starbucks?",
+                "What should I do with my paycheck?"
+            ]
+        ),
+        WhatsNewRelease(
             id: "1.2.0-2026-04-27",
             version: "1.2.0",
             releaseDate: "April 27, 2026",
@@ -33,10 +54,11 @@ enum WhatsNewRepository {
                 "New Siri + Shortcuts actions to add bills, open goals, open recommendations, and summarize paycheck plans.",
                 "Spotlight now indexes goals and paycheck recommendations alongside bills.",
                 "New widgets for next payday countdown, next bill due, and upcoming bills list.",
-                "New pay-cycle Live Activity support for glanceable bill and goal pressure before payday.",
+                "Bill reminders now support background mark-as-paid actions, and autopay bills can remind you without requiring a manual checkoff.",
                 "Bill and credit-card data are more flexible with notes, autopay source, grace period, issuer, last four digits, statement close date, and promo APR tracking.",
                 "TipKit guidance now introduces autopay and paycheck recommendation features in context."
-            ]
+            ],
+            featuredQuestions: []
         ),
         WhatsNewRelease(
             id: "1.1.1-2026-03-04",
@@ -51,11 +73,16 @@ enum WhatsNewRepository {
                 "Spotlight indexing for bills with tap-to-open routing into the exact bill screen.",
                 "Actionable bill reminders with Open Bill, Mark Paid, and Snooze 1h actions.",
                 "Interactive widget extension with quick actions for Upcoming Bills and Card Utilization."
-            ]
+            ],
+            featuredQuestions: []
         )
     ]
 
     static var latest: WhatsNewRelease? {
         releases.first
+    }
+
+    static var currentPresentationID: String {
+        latest?.id ?? MoneyMapVersion.marketingVersion
     }
 }

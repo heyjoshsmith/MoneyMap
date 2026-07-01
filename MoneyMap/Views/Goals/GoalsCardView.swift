@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import AppIntents
 
 
 struct GoalsCardView: View {
@@ -30,6 +31,14 @@ struct GoalsCardView: View {
                     NavigationLink(destination: GoalDetailView(goal)) {
                         CardView(for: goal)
                             .shadow(radius: 5)
+                    }
+                    .simultaneousGesture(TapGesture().onEnded {
+                        MoneyMapIntentDonations.donateOpenGoal(goal)
+                    })
+                    .userActivity("com.heyjoshsmith.MoneyMap.viewingGoalCard") { activity in
+                        let entity = GoalEntity(goal)
+                        activity.title = "Browsing \(entity.name)"
+                        activity.appEntityIdentifier = EntityIdentifier(for: entity)
                     }
                     .contextMenu {
                         Button("Delete", systemImage: "trash", role: .destructive) {

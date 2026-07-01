@@ -15,6 +15,14 @@ struct WhatsNewView: View {
         NavigationStack {
             List {
                 ForEach(releases) { release in
+                    if !release.featuredQuestions.isEmpty {
+                        Section("Try Asking") {
+                            ForEach(release.featuredQuestions, id: \.self) { item in
+                                Label(item, systemImage: "waveform")
+                                    .padding(.vertical, 2)
+                            }
+                        }
+                    }
                     Section {
                         ForEach(release.highlights, id: \.self) { item in
                             HStack(alignment: .top, spacing: 10) {

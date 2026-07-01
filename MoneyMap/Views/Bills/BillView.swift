@@ -10,6 +10,7 @@ import SwiftData
 import UIKit
 import UniformTypeIdentifiers
 import ImagePlayground
+import AppIntents
 
 struct BillView: View {
     
@@ -35,6 +36,12 @@ struct BillView: View {
     @State private var transactionForFriendlyName: Transaction? = nil
     @State private var matchPrefix = false
     @State private var prefixSearchText = ""
+    @State private var makingPayment = false
+    @State private var paymentAmount = ""
+    @State private var showMarkPaidConfirmation = false
+    @State private var autopayEnabled = false
+    @State private var autopaySource = ""
+    @State private var gracePeriodDays = 0
     
     enum TransactionSortField: String, CaseIterable, Identifiable {
         case date = "Date"
@@ -179,6 +186,7 @@ struct BillView: View {
                 billHeaderSection
                 
                 VStack(spacing: 10) {
+                    billActionSection
                     
                     // Credit Card Details (if applicable)
                     creditCardDetailsSection
@@ -197,6 +205,16 @@ struct BillView: View {
         .navigationTitle("Bill Details")
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(uiColor: .systemGroupedBackground))
+        .userActivity("com.heyjoshsmith.MoneyMap.viewingBill") { activity in
+            let entity = BillEntity(bill)
+            activity.title = "Viewing \(entity.name)"
+            activity.appEntityIdentifier = EntityIdentifier(for: entity)
+        }
+        .onAppear {
+            bill.checkStatus()
+            loadBillMeta()
+            try? modelContext.save()
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
@@ -226,6 +244,18 @@ struct BillView: View {
                     Section {
                         Button(MoneyMapAction.importTransactions.title, systemImage: MoneyMapAction.importTransactions.systemImage) {
                             showingImporter = true
+                        }
+                    }
+                    Section {
+                        if bill.category == .creditCard {
+                            Button(MoneyMapAction.makePayment.title, systemImage: MoneyMapAction.makePayment.systemImage) {
+                                paymentAmount = ""
+                                makingPayment = true
+                            }
+                        } else if bill.status != .paid {
+                            Button("Mark Paid", systemImage: "checkmark.circle") {
+                                showMarkPaidConfirmation = true
+                            }
                         }
                     }
                     if bill.category == .creditCard {
@@ -265,6 +295,26 @@ struct BillView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text(importErrorMessage.isEmpty ? "Failed to import transactions from selected file." : importErrorMessage)
+        }
+        .alert(paymentAlertTitle, isPresented: $makingPayment) {
+            TextField(paymentPlaceholder, text: $paymentAmount)
+                .keyboardType(.decimalPad)
+            Button("Cancel", role: .cancel) { }
+            Button("Done") {
+                recordPayment()
+            }
+        } message: {
+            Text("How much would you like to pay?")
+        }
+        .confirmationDialog(
+            "Mark \(bill.name ?? "this bill") as paid?",
+            isPresented: $showMarkPaidConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Mark Paid") {
+                markPaid()
+            }
+            Button("Cancel", role: .cancel) { }
         }
         .sheet(item: $imagePickerSource) { source in
             switch source {
@@ -482,6 +532,34 @@ struct BillView: View {
         }
         .frame(maxWidth: .infinity, idealHeight: 300)
     }
+
+    private var billActionSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Status")
+                Spacer()
+                Text(bill.status?.name ?? "Unknown")
+                    .foregroundStyle(bill.status?.color ?? .secondary)
+                    .fontWeight(.semibold)
+            }
+
+            if bill.category == .creditCard {
+                Button(MoneyMapAction.makePayment.title, systemImage: MoneyMapAction.makePayment.systemImage) {
+                    paymentAmount = ""
+                    makingPayment = true
+                }
+                .buttonStyle(.borderedProminent)
+            } else if bill.status != .paid {
+                Button("Mark Paid", systemImage: "checkmark.circle") {
+                    showMarkPaidConfirmation = true
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding()
+        .background(Color(uiColor: .secondarySystemGroupedBackground))
+        .clipShape(.rect(cornerRadius: 15))
+    }
     
     private var creditCardDetailsSection: some View {
         Group {
@@ -610,34 +688,35 @@ struct BillView: View {
 
     private var billMetaSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if bill.autopayEnabled || bill.autopaySource != nil || bill.gracePeriodDays != nil {
+            Toggle("Autopay", isOn: $autopayEnabled)
+                .padding(.horizontal)
+                .onChange(of: autopayEnabled) { _, isEnabled in
+                    if !isEnabled {
+                        autopaySource = ""
+                    }
+                    saveBillMeta()
+                }
+
+            if autopayEnabled {
                 HStack {
-                    Text("Autopay")
+                    Text("Autopay Source")
                     Spacer()
-                    Text(bill.autopayEnabled ? "Enabled" : "Off")
+                    TextField("Checking Account", text: $autopaySource)
+                        .multilineTextAlignment(.trailing)
                         .foregroundStyle(.secondary)
+                        .onSubmit(saveBillMeta)
                 }
                 .padding(.horizontal)
+            }
 
-                if let autopaySource = bill.autopaySource, !autopaySource.isEmpty {
-                    HStack {
-                        Text("Autopay Source")
-                        Spacer()
-                        Text(autopaySource)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal)
-                }
-
-                if let gracePeriodDays = bill.gracePeriodDays, gracePeriodDays > 0 {
-                    HStack {
-                        Text("Grace Period")
-                        Spacer()
-                        Text("\(gracePeriodDays) day\(gracePeriodDays == 1 ? "" : "s")")
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal)
-                }
+            Stepper(
+                "Grace Period: \(gracePeriodDays) day\(gracePeriodDays == 1 ? "" : "s")",
+                value: $gracePeriodDays,
+                in: 0...31
+            )
+            .padding(.horizontal)
+            .onChange(of: gracePeriodDays) { _, _ in
+                saveBillMeta()
             }
 
             if let notes = bill.notes, !notes.isEmpty {
@@ -651,6 +730,93 @@ struct BillView: View {
                 .background(Color(uiColor: .secondarySystemGroupedBackground))
                 .clipShape(.rect(cornerRadius: 15))
             }
+        }
+        .onDisappear {
+            saveBillMeta()
+        }
+    }
+
+    private var paymentPlaceholder: String {
+        if let payment = bill.creditCardDetails?.recommendedPayment {
+            return "Recommended: \(payment.currency)"
+        }
+        return "Enter Payment"
+    }
+
+    private var paymentAlertTitle: String {
+        bill.name ?? "Payment Amount"
+    }
+
+    private func recordPayment() {
+        let normalized = paymentAmount.replacingOccurrences(of: ",", with: "")
+        let amount = Double(normalized) ?? 0
+        guard amount > 0 else {
+            importErrorMessage = "Enter a valid payment amount greater than zero."
+            importErrorAlert = true
+            return
+        }
+
+        let previousBalance = bill.creditCardDetails?.cardBalance
+        let previousDatePaid = bill.datePaid
+        let previousDueDate = bill.dueDate
+        let previousStatus = bill.status
+
+        bill.makePayment(of: amount)
+        AuditService.logBillPayment(
+            bill: bill,
+            previousBalance: previousBalance,
+            previousDatePaid: previousDatePaid,
+            previousDueDate: previousDueDate,
+            previousStatus: previousStatus,
+            amount: amount,
+            context: modelContext
+        )
+        try? modelContext.save()
+        AppRefreshEvents.notifyBillsDidChange()
+        paymentAmount.removeAll()
+    }
+
+    private func markPaid() {
+        let previousBalance = bill.creditCardDetails?.cardBalance
+        let previousDatePaid = bill.datePaid
+        let previousDueDate = bill.dueDate
+        let previousStatus = bill.status
+
+        bill.datePaid = .now
+        bill.status = .paid
+        bill.checkStatus()
+
+        AuditService.logBillPayment(
+            bill: bill,
+            previousBalance: previousBalance,
+            previousDatePaid: previousDatePaid,
+            previousDueDate: previousDueDate,
+            previousStatus: previousStatus,
+            amount: bill.amount ?? 0,
+            context: modelContext
+        )
+        try? modelContext.save()
+        AppRefreshEvents.notifyBillsDidChange()
+    }
+
+    private func loadBillMeta() {
+        autopayEnabled = bill.autopayEnabled
+        autopaySource = bill.autopaySource ?? ""
+        gracePeriodDays = bill.gracePeriodDays ?? 0
+    }
+
+    private func saveBillMeta() {
+        bill.autopayEnabled = autopayEnabled
+        let normalizedAutopaySource = autopaySource.trimmingCharacters(in: .whitespacesAndNewlines)
+        bill.autopaySource = autopayEnabled && !normalizedAutopaySource.isEmpty ? normalizedAutopaySource : nil
+        bill.gracePeriodDays = gracePeriodDays > 0 ? gracePeriodDays : nil
+        bill.checkStatus()
+        do {
+            try modelContext.save()
+            AppRefreshEvents.notifyBillsDidChange()
+        } catch {
+            importErrorMessage = "Could not update bill settings: \(error.localizedDescription)"
+            importErrorAlert = true
         }
     }
     

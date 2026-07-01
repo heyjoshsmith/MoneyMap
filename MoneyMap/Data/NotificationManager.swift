@@ -7,9 +7,11 @@
 
 import Foundation
 import UserNotifications
+import WidgetKit
 
 final class NotificationManager: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     static let billDueCategoryID = "BILL_DUE_REMINDER"
+    static let autopayBillDueCategoryID = "AUTOPAY_BILL_DUE_REMINDER"
     static let openBillActionID = "OPEN_BILL"
     static let markPaidActionID = "MARK_BILL_PAID"
     static let snoozeActionID = "SNOOZE_BILL_REMINDER"
@@ -61,10 +63,12 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
             let name = bill.name ?? "Your bill"
             let amount = MoneyMapFormatters.currencyString(for: bill.amount ?? 0)
             let dueText = MoneyMapFormatters.mediumDateString(for: bill.dueDate ?? date)
-            content.title = "Bill Due Soon"
-            content.body = "\(name) for \(amount) is due \(dueText)."
+            content.title = bill.autopayEnabled ? "Autopay Bill Due Soon" : "Bill Due Soon"
+            content.body = bill.autopayEnabled
+                ? "\(name) for \(amount) is due \(dueText). Autopay is on, so no manual checkoff is needed."
+                : "\(name) for \(amount) is due \(dueText)."
             content.sound = .default
-            content.categoryIdentifier = Self.billDueCategoryID
+            content.categoryIdentifier = bill.autopayEnabled ? Self.autopayBillDueCategoryID : Self.billDueCategoryID
             content.userInfo = [Self.billIDUserInfoKey: bill.id.uuidString]
 
             let triggerDate = Calendar.current.dateComponents(
@@ -163,20 +167,26 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         let markPaidAction = UNNotificationAction(
             identifier: Self.markPaidActionID,
             title: "Mark Paid",
-            options: [.foreground]
+            options: []
         )
         let snoozeAction = UNNotificationAction(
             identifier: Self.snoozeActionID,
             title: "Snooze 1h",
             options: []
         )
-        let category = UNNotificationCategory(
+        let manualCategory = UNNotificationCategory(
             identifier: Self.billDueCategoryID,
             actions: [openBillAction, markPaidAction, snoozeAction],
             intentIdentifiers: [],
             options: []
         )
-        center.setNotificationCategories([category])
+        let autopayCategory = UNNotificationCategory(
+            identifier: Self.autopayBillDueCategoryID,
+            actions: [openBillAction, snoozeAction],
+            intentIdentifiers: [],
+            options: []
+        )
+        center.setNotificationCategories([manualCategory, autopayCategory])
     }
 
     private func reminderDate(for dueDate: Date) -> Date? {
@@ -282,7 +292,9 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     private func handleMarkPaid(billID: UUID) {
         do {
             try MoneyMapBillStore.markPaid(billID: billID, amount: nil)
-            queueRouteToBill(billID)
+            clearPendingBillNotifications(for: billID)
+            scheduleBillDueNotifications(for: try MoneyMapBillStore.fetchBills())
+            WidgetCenter.shared.reloadAllTimelines()
         } catch {
             print("Mark paid from notification failed: \(error.localizedDescription)")
         }
@@ -303,6 +315,18 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         UNUserNotificationCenter.current().add(request) { error in
             if let error {
                 print("Snooze scheduling error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func clearPendingBillNotifications(for billID: UUID) {
+        let identifierPrefix = reminderIdentifier(for: billID)
+        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
+            let identifiers = requests
+                .map(\.identifier)
+                .filter { $0 == identifierPrefix || $0.hasPrefix("\(identifierPrefix)_") }
+            if !identifiers.isEmpty {
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
             }
         }
     }

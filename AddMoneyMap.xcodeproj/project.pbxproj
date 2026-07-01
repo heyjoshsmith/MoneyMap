@@ -16,12 +16,10 @@
 		A79F7D882F58B83600736215 /* MainWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A79F7D792F58B83500736215 /* MainWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A7DF69152DBE99A400071A0C /* MoneyMapShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A7DF690B2DBE99A400071A0C /* MoneyMapShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A7FF14072E0CB75100EF0464 /* MoneyMap.icon in Resources */ = {isa = PBXBuildFile; fileRef = A7FF14062E0CB75100EF0464 /* MoneyMap.icon */; };
-		B20000012F65000000000001 /* MoneyMapWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = B20000082F65000000000001 /* MoneyMapWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		B20000022F65000000000001 /* MoneyMapShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A726FAEC2DC2C602006D6A82 /* MoneyMapShared.framework */; };
-		B20000032F65000000000001 /* MoneyMapShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A726FAEC2DC2C602006D6A82 /* MoneyMapShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B10100012F5E100000000001 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B10100002F5E100000000001 /* XCTest.framework */; };
 		B10100022F5E100000000001 /* MoneyMapShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A726FAEC2DC2C602006D6A82 /* MoneyMapShared.framework */; };
 		B10100122F5E100000000001 /* MoneyMapShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A726FAEC2DC2C602006D6A82 /* MoneyMapShared.framework */; };
+		B20000012F65000000000001 /* MoneyMapWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = B20000082F65000000000001 /* MoneyMapWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -73,13 +71,6 @@
 			proxyType = 1;
 			remoteGlobalIDString = B200000E2F65000000000001;
 			remoteInfo = MoneyMapWatch;
-		};
-		B20000052F65000000000001 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 34AF794A2D5C448E001CEE30 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = A726FAEB2DC2C602006D6A82;
-			remoteInfo = MoneyMapShared;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -149,9 +140,9 @@
 		A79F7D7C2F58B83500736215 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = /System/Library/Frameworks/SwiftUI.framework; sourceTree = "<absolute>"; };
 		A7DF690B2DBE99A400071A0C /* MoneyMapShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MoneyMapShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		A7FF14062E0CB75100EF0464 /* MoneyMap.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = MoneyMap.icon; sourceTree = "<group>"; };
-		B20000082F65000000000001 /* MoneyMapWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MoneyMapWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10100002F5E100000000001 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = "/Applications/Xcode-beta.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/Library/Frameworks/XCTest.framework"; sourceTree = "<absolute>"; };
 		B10100032F5E100000000001 /* MoneyMapTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MoneyMapTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B20000082F65000000000001 /* MoneyMapWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MoneyMapWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -472,8 +463,8 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				B200000A2F65000000000001 /* MoneyMapWatch */,
 				A726FAED2DC2C602006D6A82 /* MoneyMapShared */,
+				B200000A2F65000000000001 /* MoneyMapWatch */,
 			);
 			name = MoneyMapWatch;
 			packageProductDependencies = (
@@ -504,12 +495,12 @@
 					A7DF690A2DBE99A400071A0C = {
 						CreatedOnToolsVersion = 16.3;
 					};
-					B200000E2F65000000000001 = {
-						CreatedOnToolsVersion = 26.3;
-					};
 					B10100062F5E100000000001 = {
 						CreatedOnToolsVersion = 16.2;
 						TestTargetID = 34AF79512D5C448E001CEE30;
+					};
+					B200000E2F65000000000001 = {
+						CreatedOnToolsVersion = 26.3;
 					};
 				};
 			};
@@ -670,11 +661,6 @@
 			isa = PBXTargetDependency;
 			target = B200000E2F65000000000001 /* MoneyMapWatch */;
 			targetProxy = B20000042F65000000000001 /* PBXContainerItemProxy */;
-		};
-		B20000102F65000000000001 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = A726FAEB2DC2C602006D6A82 /* MoneyMapShared */;
-			targetProxy = B20000052F65000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 

@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import AppIntents
 
 struct BillsView: View {
     enum Mode {
@@ -78,6 +79,9 @@ fileprivate struct Row: View {
     var bill: Bill
     
     @State private var deletingBill = false
+    @State private var makingPayment = false
+    @State private var paymentAmount = ""
+    @State private var showMarkPaidConfirmation = false
     
     var body: some View {
         NavigationLink {
@@ -109,6 +113,14 @@ fileprivate struct Row: View {
                     .padding(.leading)
             }
         }
+        .simultaneousGesture(TapGesture().onEnded {
+            MoneyMapIntentDonations.donateOpenBill(bill)
+        })
+        .userActivity("com.heyjoshsmith.MoneyMap.viewingBillRow") { activity in
+            let entity = BillEntity(bill)
+            activity.title = "Reviewing \(entity.name)"
+            activity.appEntityIdentifier = EntityIdentifier(for: entity)
+        }
         .listRowInsets(EdgeInsets(top: 5, leading: 15, bottom: 5, trailing: 15))
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
@@ -124,6 +136,19 @@ fileprivate struct Row: View {
                 deletingBill.toggle()
             }.tint(.red)
         }
+        .swipeActions(edge: .leading) {
+            if bill.status != .paid {
+                Button(bill.category == .creditCard ? "Pay" : "Mark Paid", systemImage: "checkmark.circle") {
+                    if bill.category == .creditCard {
+                        paymentAmount = ""
+                        makingPayment = true
+                    } else {
+                        showMarkPaidConfirmation = true
+                    }
+                }
+                .tint(.green)
+            }
+        }
         .alert("Delete \(bill.name ?? "Bill") Bill", isPresented: $deletingBill) {
             Button("Delete", role: .destructive) {
                 withAnimation {
@@ -133,7 +158,87 @@ fileprivate struct Row: View {
         } message: {
             Text("Are you sure you want to delete your \(bill.name ?? "this") bill? This cannot be undone.")
         }
+        .alert(paymentAlertTitle, isPresented: $makingPayment) {
+            TextField(paymentPlaceholder, text: $paymentAmount)
+                .keyboardType(.decimalPad)
+            Button("Cancel", role: .cancel) { }
+            Button("Done") {
+                recordPayment()
+            }
+        } message: {
+            Text("How much would you like to pay?")
+        }
+        .confirmationDialog(
+            "Mark \(bill.name ?? "this bill") as paid?",
+            isPresented: $showMarkPaidConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Mark Paid") {
+                markPaid()
+            }
+            Button("Cancel", role: .cancel) { }
+        }
 
+    }
+
+    private var paymentPlaceholder: String {
+        if let payment = bill.creditCardDetails?.recommendedPayment {
+            return "Recommended: \(payment.currency)"
+        }
+        return "Enter Payment"
+    }
+
+    private var paymentAlertTitle: String {
+        bill.name ?? "Payment Amount"
+    }
+
+    private func recordPayment() {
+        let previousBalance = bill.creditCardDetails?.cardBalance
+        let previousDatePaid = bill.datePaid
+        let previousDueDate = bill.dueDate
+        let previousStatus = bill.status
+        let amount = Double(paymentAmount) ?? 0
+
+        guard amount > 0 else { return }
+
+        bill.makePayment(of: amount)
+        AuditService.logBillPayment(
+            bill: bill,
+            previousBalance: previousBalance,
+            previousDatePaid: previousDatePaid,
+            previousDueDate: previousDueDate,
+            previousStatus: previousStatus,
+            amount: amount,
+            context: modelContext
+        )
+        try? modelContext.save()
+        AppRefreshEvents.notifyBillsDidChange()
+        MoneyMapIntentDonations.donateMarkBillPaid(bill, paymentAmount: amount)
+        paymentAmount.removeAll()
+    }
+
+    private func markPaid() {
+        let previousBalance = bill.creditCardDetails?.cardBalance
+        let previousDatePaid = bill.datePaid
+        let previousDueDate = bill.dueDate
+        let previousStatus = bill.status
+
+        bill.datePaid = .now
+        bill.status = .paid
+        bill.checkStatus()
+
+        AuditService.logBillPayment(
+            bill: bill,
+            previousBalance: previousBalance,
+            previousDatePaid: previousDatePaid,
+            previousDueDate: previousDueDate,
+            previousStatus: previousStatus,
+            amount: bill.amount ?? 0,
+            context: modelContext
+        )
+        try? modelContext.save()
+        AppRefreshEvents.notifyBillsDidChange()
+        MoneyMapIntentDonations.donateMarkBillPaid(bill)
     }
     
 }

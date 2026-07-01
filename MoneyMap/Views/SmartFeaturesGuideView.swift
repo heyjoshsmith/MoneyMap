@@ -20,34 +20,37 @@ struct SmartFeaturesGuideView: View {
                 .padding(.vertical, 4)
             }
 
-            Section("Live Activity") {
-                GuideRow(
-                    icon: "rectangle.badge.clock",
-                    title: "What it shows",
-                    detail: "A quick plan for the period before your next payday: when that payday is, how many upcoming bills you still have, how many goals are behind, and how much the app currently suggests for cards and goals."
-                )
-                GuideRow(
-                    icon: "lightbulb",
-                    title: "How to read it",
-                    detail: "\"Suggested for cards\" is the total the recommendation engine wants you to pay across credit cards right now. \"Suggested for goals\" is the total it wants you to put toward savings goals. \"Top focus\" is the single most urgent card or goal."
-                )
-                GuideRow(
-                    icon: "arrow.triangle.2.circlepath",
-                    title: "When it updates",
-                    detail: "It refreshes when your goals, bills, payday amount, or recommendation inputs change while you use the app."
-                )
-            }
-
             Section("Siri & Shortcuts") {
                 GuideRow(
                     icon: "waveform",
                     title: "What it can do",
-                    detail: "You can ask Siri or run Shortcuts to open bills, open goals, add bills, show upcoming bills, open recommendations, compare paycheck scenarios, and mark a bill paid."
+                    detail: "You can ask Siri about bill due dates, next payday, cash left after bills, savings progress, recent transactions, spending totals, recommendations, and more."
                 )
                 GuideRow(
                     icon: "sparkles",
                     title: "Best uses",
-                    detail: "Use Shortcuts when you want quick actions without opening the full app, like checking what bill is due next or asking what to do with a paycheck amount."
+                    detail: "Use Siri for quick answers like what is due next, what you spent recently, or what to do with a paycheck. Use Shortcuts when you want repeatable one-tap actions."
+                )
+            }
+
+            Section("Search and Ask") {
+                GuideRow(
+                    icon: "magnifyingglass",
+                    title: "Search with answers",
+                    detail: "Search bills, goals, transactions, and paycheck recommendations, then ask MoneyMap for grounded Apple Intelligence answers from the same data."
+                )
+            }
+
+            Section("Notifications") {
+                GuideRow(
+                    icon: "bell.badge",
+                    title: "Bill reminders",
+                    detail: "Upcoming bill reminders can open the bill, snooze for an hour, or mark a manual bill paid right from the notification."
+                )
+                GuideRow(
+                    icon: "arrow.triangle.2.circlepath",
+                    title: "Autopay bills",
+                    detail: "Turn on autopay for a bill when you still want the reminder but do not want to manually mark it paid each cycle."
                 )
             }
 

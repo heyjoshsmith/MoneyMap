@@ -36,6 +36,7 @@ class PaydayManager: ObservableObject {
         
         do {
             try context.save()
+            MoneyMapIntentDonations.donateNextPayday()
         } catch {
             print("Error saving payday:", error)
         }

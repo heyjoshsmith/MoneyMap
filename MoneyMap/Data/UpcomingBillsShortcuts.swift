@@ -108,34 +108,6 @@ struct MoneyMapShortcuts: AppShortcutsProvider {
                 systemImageName: "calendar.badge.exclamationmark"
             ),
             AppShortcut(
-                intent: OpenBillIntent(),
-                phrases: [
-                    "Open a bill in \(.applicationName)",
-                    "Open my bill in \(.applicationName)"
-                ],
-                shortTitle: "Open Bill",
-                systemImageName: "doc.text.magnifyingglass"
-            ),
-            AppShortcut(
-                intent: AddBillIntent(),
-                phrases: [
-                    "Add a bill in \(.applicationName)",
-                    "Create a bill in \(.applicationName)",
-                    "Add a credit card in \(.applicationName)"
-                ],
-                shortTitle: "Add Bill",
-                systemImageName: "plus.circle"
-            ),
-            AppShortcut(
-                intent: OpenRecommendationsIntent(),
-                phrases: [
-                    "Open recommendations in \(.applicationName)",
-                    "Show paycheck recommendations in \(.applicationName)"
-                ],
-                shortTitle: "Recommendations",
-                systemImageName: "wand.and.stars"
-            ),
-            AppShortcut(
                 intent: GetPaycheckRecommendationIntent(),
                 phrases: [
                     "What should I do with my paycheck in \(.applicationName)",
@@ -145,31 +117,22 @@ struct MoneyMapShortcuts: AppShortcutsProvider {
                 systemImageName: "banknote"
             ),
             AppShortcut(
-                intent: ComparePaycheckScenariosIntent(),
+                intent: GetNextPaydayIntent(),
                 phrases: [
-                    "Compare paycheck scenarios in \(.applicationName)",
-                    "What if I had more paycheck cash in \(.applicationName)"
+                    "When is my next payday in \(.applicationName)",
+                    "What's my next payday in \(.applicationName)"
                 ],
-                shortTitle: "Compare Scenarios",
-                systemImageName: "arrow.left.arrow.right"
+                shortTitle: "Next Payday",
+                systemImageName: "calendar"
             ),
             AppShortcut(
-                intent: ShowCardUtilizationIntent(),
+                intent: GetCashAfterBillsIntent(),
                 phrases: [
-                    "Show card utilization in \(.applicationName)",
-                    "What's my card utilization in \(.applicationName)"
+                    "How much is left after bills in \(.applicationName)",
+                    "How much money do I have left after bills in \(.applicationName)"
                 ],
-                shortTitle: "Card Utilization",
-                systemImageName: "chart.pie"
-            ),
-            AppShortcut(
-                intent: MarkBillPaidIntent(),
-                phrases: [
-                    "Mark bill paid in \(.applicationName)",
-                    "Pay a bill in \(.applicationName)"
-                ],
-                shortTitle: "Mark Paid",
-                systemImageName: "checkmark.circle"
+                shortTitle: "Cash After Bills",
+                systemImageName: "banknote"
             ),
             AppShortcut(
                 intent: OpenNextDueBillIntent(),
@@ -181,13 +144,51 @@ struct MoneyMapShortcuts: AppShortcutsProvider {
                 systemImageName: "calendar.badge.clock"
             ),
             AppShortcut(
-                intent: PayRecommendedCardIntent(),
+                intent: GetBillDueDateIntent(),
                 phrases: [
-                    "Pay recommended card amount in \(.applicationName)",
-                    "Apply recommended payment in \(.applicationName)"
+                    "When is my bill due in \(.applicationName)",
+                    "When is my car bill due in \(.applicationName)",
+                    "What's the due date for a bill in \(.applicationName)"
                 ],
-                shortTitle: "Pay Recommended",
-                systemImageName: "creditcard.and.123"
+                shortTitle: "Bill Due Date",
+                systemImageName: "calendar"
+            ),
+            AppShortcut(
+                intent: GetSavingsSummaryIntent(),
+                phrases: [
+                    "How much do I have in savings in \(.applicationName)",
+                    "How much have I saved in \(.applicationName)",
+                    "What's my savings total in \(.applicationName)"
+                ],
+                shortTitle: "Savings Summary",
+                systemImageName: "dollarsign.circle"
+            ),
+            AppShortcut(
+                intent: GetRecentTransactionsIntent(),
+                phrases: [
+                    "Show my recent transactions in \(.applicationName)",
+                    "What transactions do I have in \(.applicationName)"
+                ],
+                shortTitle: "Recent Transactions",
+                systemImageName: "list.bullet.rectangle"
+            ),
+            AppShortcut(
+                intent: GetSpendingSummaryIntent(),
+                phrases: [
+                    "How much did I spend in \(.applicationName)",
+                    "What's my spending in \(.applicationName)"
+                ],
+                shortTitle: "Spending Summary",
+                systemImageName: "creditcard"
+            ),
+            AppShortcut(
+                intent: ShowCardUtilizationIntent(),
+                phrases: [
+                    "Show card utilization in \(.applicationName)",
+                    "What's my card utilization in \(.applicationName)"
+                ],
+                shortTitle: "Card Utilization",
+                systemImageName: "chart.pie"
             )
         ]
     }

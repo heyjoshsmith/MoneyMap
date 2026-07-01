@@ -42,6 +42,8 @@ struct BillEditor: View {
     @State private var promoAPRExpiration = Date()
     @State private var hasStatementClosingDate = false
     @State private var hasPromoAPRExpiration = false
+    @State private var showingBillDetails = false
+    @State private var showingCardDetails = false
 
     var body: some View {
         NavigationStack {
@@ -74,33 +76,29 @@ struct BillEditor: View {
                     }
                 }
 
-                // Recurrence Section
-                Section(header: Text("Recurrence")) {
-                    Stepper("Every \(recurrenceInterval) \(selectedRecurrenceUnit.rawValue)\(recurrenceInterval > 1 ? "s" : "")", value: $recurrenceInterval, in: 1...12)
-                    Picker("Recurrence Unit", selection: $selectedRecurrenceUnit) {
-                        ForEach(RecurrenceUnit.allCases, id: \ .self) { unit in
-                            Text(unit.rawValue.capitalized)
+                Section("More Details") {
+                    DisclosureGroup("Bill Details", isExpanded: $showingBillDetails) {
+                        Stepper("Every \(recurrenceInterval) \(selectedRecurrenceUnit.rawValue)\(recurrenceInterval > 1 ? "s" : "")", value: $recurrenceInterval, in: 1...12)
+                        Picker("Recurrence Unit", selection: $selectedRecurrenceUnit) {
+                            ForEach(RecurrenceUnit.allCases, id: \ .self) { unit in
+                                Text(unit.rawValue.capitalized)
+                            }
                         }
-                    }
-                    Toggle("Autopay", isOn: $autopayEnabled)
-                    if autopayEnabled {
-                        HStack {
-                            Text("Autopay Source")
-                            Spacer()
-                            TextField("Checking Account", text: $autopaySource)
-                                .multilineTextAlignment(.trailing)
+                        Toggle("Autopay", isOn: $autopayEnabled)
+                        if autopayEnabled {
+                            HStack {
+                                Text("Autopay Source")
+                                Spacer()
+                                TextField("Checking Account", text: $autopaySource)
+                                    .multilineTextAlignment(.trailing)
+                            }
                         }
+                        Stepper("Grace Period: \(gracePeriodDays) day\(gracePeriodDays == 1 ? "" : "s")", value: $gracePeriodDays, in: 0...31)
+                        TextField("Optional notes", text: $notes, axis: .vertical)
+                            .lineLimit(3...6)
+
+                        TipView(AutopayBillTip())
                     }
-                    Stepper("Grace Period: \(gracePeriodDays) day\(gracePeriodDays == 1 ? "" : "s")", value: $gracePeriodDays, in: 0...31)
-                }
-
-                Section {
-                    TipView(AutopayBillTip())
-                }
-
-                Section(header: Text("Notes")) {
-                    TextField("Optional notes", text: $notes, axis: .vertical)
-                        .lineLimit(3...6)
                 }
 
                 // Credit Card Details Section (only if category is creditCard)
@@ -123,22 +121,6 @@ struct BillEditor: View {
                                 .focused($focusedField, equals: .cardBalance)
                         }
                         HStack {
-                            Text("Statement Balance")
-                            Spacer()
-                            TextField("Statement Balance", value: $statementBalance, format: .currency(code: "USD"))
-                                .multilineTextAlignment(.trailing)
-                                .keyboardType(.decimalPad)
-                                .focused($focusedField, equals: .statementBalance)
-                        }
-                        HStack {
-                            Text("APR")
-                            Spacer()
-                            TextField("APR", value: $annualPercentageRate, format: .percent.precision(.fractionLength(2)))
-                                .multilineTextAlignment(.trailing)
-                                .keyboardType(.decimalPad)
-                                .focused($focusedField, equals: .annualPercentageRate)
-                        }
-                        HStack {
                             Text("Minimum Payment")
                             Spacer()
                             TextField("Minimum Payment", value: $minimumPayment, format: .currency(code: "USD"))
@@ -146,33 +128,52 @@ struct BillEditor: View {
                                 .keyboardType(.decimalPad)
                                 .focused($focusedField, equals: .minimumPayment)
                         }
-                        HStack {
-                            Text("Issuer")
-                            Spacer()
-                            TextField("Chase", text: $issuerName)
-                                .multilineTextAlignment(.trailing)
-                                .focused($focusedField, equals: .issuerName)
-                        }
-                        HStack {
-                            Text("Last 4 Digits")
-                            Spacer()
-                            TextField("1234", text: $lastFourDigits)
-                                .multilineTextAlignment(.trailing)
-                                .keyboardType(.numberPad)
-                                .focused($focusedField, equals: .lastFourDigits)
-                        }
-                        Toggle("Track Statement Closing Date", isOn: $hasStatementClosingDate)
-                        if hasStatementClosingDate {
-                            DatePicker("Closing Date", selection: $statementClosingDate, displayedComponents: .date)
-                        }
-                        Toggle("Track Promo APR Expiration", isOn: $hasPromoAPRExpiration)
-                        if hasPromoAPRExpiration {
-                            DatePicker("Promo APR Ends", selection: $promoAPRExpiration, displayedComponents: .date)
+
+                        DisclosureGroup("Advanced Card Details", isExpanded: $showingCardDetails) {
+                            HStack {
+                                Text("Statement Balance")
+                                Spacer()
+                                TextField("Statement Balance", value: $statementBalance, format: .currency(code: "USD"))
+                                    .multilineTextAlignment(.trailing)
+                                    .keyboardType(.decimalPad)
+                                    .focused($focusedField, equals: .statementBalance)
+                            }
+                            HStack {
+                                Text("APR")
+                                Spacer()
+                                TextField("APR", value: $annualPercentageRate, format: .percent.precision(.fractionLength(2)))
+                                    .multilineTextAlignment(.trailing)
+                                    .keyboardType(.decimalPad)
+                                    .focused($focusedField, equals: .annualPercentageRate)
+                            }
+                            HStack {
+                                Text("Issuer")
+                                Spacer()
+                                TextField("Chase", text: $issuerName)
+                                    .multilineTextAlignment(.trailing)
+                                    .focused($focusedField, equals: .issuerName)
+                            }
+                            HStack {
+                                Text("Last 4 Digits")
+                                Spacer()
+                                TextField("1234", text: $lastFourDigits)
+                                    .multilineTextAlignment(.trailing)
+                                    .keyboardType(.numberPad)
+                                    .focused($focusedField, equals: .lastFourDigits)
+                            }
+                            Toggle("Track Statement Closing Date", isOn: $hasStatementClosingDate)
+                            if hasStatementClosingDate {
+                                DatePicker("Closing Date", selection: $statementClosingDate, displayedComponents: .date)
+                            }
+                            Toggle("Track Promo APR Expiration", isOn: $hasPromoAPRExpiration)
+                            if hasPromoAPRExpiration {
+                                DatePicker("Promo APR Ends", selection: $promoAPRExpiration, displayedComponents: .date)
+                            }
                         }
                     }
                 }
             }
-            .navigationTitle("Bill Editor")
+            .navigationTitle("New Bill")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
@@ -248,6 +249,7 @@ struct BillEditor: View {
         modelContext.insert(newBill)
         AuditService.logBillCreated(newBill, context: modelContext)
         try? modelContext.save()
+        AppRefreshEvents.notifyBillsDidChange()
         dismiss()
     }
 

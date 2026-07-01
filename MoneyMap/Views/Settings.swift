@@ -23,6 +23,9 @@ struct Settings: View {
                 NavigationLink("Smart Features") {
                     SmartFeaturesGuideView()
                 }
+                NavigationLink("Search and Ask MoneyMap") {
+                    MoneyMapAssistantView()
+                }
                 NavigationLink("What's New") {
                     WhatsNewView(releases: WhatsNewRepository.releases, onDone: nil)
                 }

@@ -15,7 +15,6 @@ import TipKit
 struct MoneyMapApp: App {
     @StateObject private var deepLinkManager = DeepLinkManager()
     @StateObject private var notificationManager = NotificationManager()
-    @StateObject private var payCycleLiveActivityManager = PayCycleLiveActivityManager()
     
     var modelContainer: ModelContainer = {
         (try? SharedModelContainerFactory.make()) ?? SharedModelContainerFactory.makeInMemory()
@@ -28,7 +27,6 @@ struct MoneyMapApp: App {
                 .environmentObject(PaydayManager(context: context))
                 .environmentObject(deepLinkManager)
                 .environmentObject(notificationManager)
-                .environmentObject(payCycleLiveActivityManager)
                 .modelContainer(modelContainer)
                 .onOpenURL { url in
                     deepLinkManager.handle(url: url)
@@ -56,6 +54,5 @@ struct MoneyMapApp: App {
         .environmentObject(paydayManager)
         .environmentObject(DeepLinkManager())
         .environmentObject(NotificationManager())
-        .environmentObject(PayCycleLiveActivityManager())
         .modelContainer(container)
 }

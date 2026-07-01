@@ -153,6 +153,7 @@ enum MoneyMapBillStore {
         }
 
         try context.save()
+        AppRefreshEvents.notifyBillsDidChange()
         return bill
     }
 
@@ -192,6 +193,7 @@ enum MoneyMapBillStore {
         )
 
         try context.save()
+        AppRefreshEvents.notifyBillsDidChange()
         return bill
     }
 

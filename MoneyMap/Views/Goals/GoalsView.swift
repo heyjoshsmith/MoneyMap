@@ -16,7 +16,6 @@ struct GoalsView: View {
     @EnvironmentObject var paydayManager: PaydayManager
     @Query(sort: \Goal.deadline, order: .forward) var goals: [Goal]
     
-    @State private var editingPayday = false
     @State private var addingGoal = false
     @State private var addingSavings = false
     @State private var savingsAmount = ""
@@ -44,11 +43,6 @@ struct GoalsView: View {
             }
             .navigationTitle("Goals")
             .onAppear {
-                DispatchQueue.main.async {
-                    if paydayManager.nextPayday == nil {
-                        editingPayday = true
-                    }
-                }
                 routeToRequestedGoalIfNeeded()
             }
             .onChange(of: deepLinkManager.requestedGoalID) { _, _ in
@@ -78,10 +72,6 @@ struct GoalsView: View {
                         }
                     }
                 }
-            }
-            .sheet(isPresented: $editingPayday) {
-                PaydayView()
-                    .interactiveDismissDisabled(paydayManager.nextPayday == nil)
             }
             .sheet(isPresented: $addingGoal) {
                 NavigationStack {
@@ -123,6 +113,7 @@ struct GoalsView: View {
                     goal.amountSaved += allocatedAmount
                 }
             }
+            MoneyMapIntentDonations.donateSavingsSummary()
         }
     }
     
