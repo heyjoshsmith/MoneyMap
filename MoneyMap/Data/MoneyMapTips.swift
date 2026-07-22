@@ -49,3 +49,17 @@ struct AutopayBillTip: Tip {
         Image(systemName: "arrow.triangle.2.circlepath")
     }
 }
+
+struct WalletRefreshTip: Tip {
+    var title: Text {
+        Text("Refresh Bank Data")
+    }
+
+    var message: Text? {
+        Text("Pull down on Wallet to check for new bank accounts, card updates, and transactions from your Mac.")
+    }
+
+    var image: Image? {
+        Image(systemName: "arrow.clockwise.icloud")
+    }
+}

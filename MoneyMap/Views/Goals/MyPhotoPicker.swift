@@ -13,34 +13,24 @@ struct MyPhotoPicker: View {
     @Binding var selection: PhotosPickerItem?
     let onSelection: (ImageType) -> Void
     
-    @State private var savedFiles = 0
-    
     var body: some View {
-        VStack(spacing: 10) {
-            PhotoButton("Image Playground", systemImage: "apple.image.playground", color: .pink) {
+        VStack(spacing: MoneyMapDesign.compactSpacing) {
+            PhotoButton("Image Playground", detail: "Generate art for this goal.", systemImage: "apple.image.playground", color: .pink) {
                 onSelection(.imagePlayground)
             }
             
             PhotosPicker(selection: $selection, matching: .images) {
-                PhotoButton("Photos", systemImage: "photo.on.rectangle.angled", color: .blue)
+                PhotoButton("Photos", detail: "Choose from your photo library.", systemImage: "photo.on.rectangle.angled", color: .blue)
             }
-            
-            PhotoButton("Saved Images", systemImage: "photo.badge.checkmark", color: .green, value: $savedFiles) {
-                onSelection(.savedImages)
-            }
-            
         }
         .padding()
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(Color(uiColor: .systemGroupedBackground))
-        .onAppear {
-            savedFiles = getSavedFiles().count
-        }
+        .background(MoneyMapDesign.groupedBackground)
     }
 }
 
 enum ImageType: String, CaseIterable, Identifiable {
-    case imagePlayground, photos, savedImages
+    case imagePlayground, photos
     
     var name: String {
         switch self {
@@ -48,8 +38,6 @@ enum ImageType: String, CaseIterable, Identifiable {
             return "Image Playground"
         case .photos:
             return "Photos"
-        case .savedImages:
-            return "Saved Images"
         }
     }
     
@@ -58,8 +46,9 @@ enum ImageType: String, CaseIterable, Identifiable {
 
 private struct PhotoButton: View {
     
-    init(_ title: String, systemImage: String, color: Color, value: Binding<Int>? = nil, action: (() -> Void)? = nil) {
+    init(_ title: String, detail: String, systemImage: String, color: Color, value: Binding<Int>? = nil, action: (() -> Void)? = nil) {
         self.title = title
+        self.detail = detail
         self.systemImage = systemImage
         self.color = color
         self.value = value
@@ -67,6 +56,7 @@ private struct PhotoButton: View {
     }
     
     var title: String
+    var detail: String
     var systemImage: String
     var color: Color
     var value: Binding<Int>?  // Optional binding
@@ -88,9 +78,15 @@ private struct PhotoButton: View {
         HStack {
             Image(systemName: systemImage)
                 .foregroundStyle(color)
-                .frame(width: 40, alignment: .center)
-            Text(title)
-                .foregroundStyle(Color.primary)
+                .frame(width: 30, alignment: .center)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(Color.primary)
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
             if let value = value?.wrappedValue {
                 Spacer()
                 Text("\(value) Image\(value == 1 ? "" : "s")")
@@ -101,8 +97,8 @@ private struct PhotoButton: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
         .imageScale(.large)
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
-        .clipShape(.rect(cornerRadius: 10))
+        .background(MoneyMapDesign.surfaceBackground)
+        .clipShape(.rect(cornerRadius: MoneyMapDesign.controlCornerRadius))
     }
 }
 

@@ -63,6 +63,7 @@ enum MoneyMapBillStore {
         notes: String? = nil,
         autopaySource: String? = nil,
         gracePeriodDays: Int? = nil,
+        paymentURLString: String? = nil,
         creditLimit: Double? = nil,
         cardBalance: Double? = nil,
         annualPercentageRate: Double? = nil,
@@ -96,7 +97,8 @@ enum MoneyMapBillStore {
             autopayEnabled: autopayEnabled,
             notes: notes,
             autopaySource: autopaySource,
-            gracePeriodDays: gracePeriodDays
+            gracePeriodDays: gracePeriodDays,
+            paymentURLString: paymentURLString
         )
         bill.checkStatus()
         context.insert(bill)

@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 
 struct GridView: View {
@@ -36,31 +37,23 @@ struct GridView: View {
     @State private var priority: Double?
     
     var body: some View {
-        Grid() {
+        VStack(alignment: .leading, spacing: MoneyMapDesign.compactSpacing) {
             
             if goal.imageData == nil, let name = goal.name {
-                GridRow {
-                    Button {
-                        choosingImage.toggle()
-                    } label: {
-                        HStack {
-                            Text(name)
-                            Image(systemName: "chevron.right")
-                                .foregroundStyle(.tertiary)
-                                .font(.callout)
-                        }
-                        .font(.title.weight(.bold))
-                        .padding()
-                        .frame(maxWidth: .infinity)
-                        .foregroundStyle(Color.primary)
-                        .background(Color(UIColor.secondarySystemGroupedBackground))
-                        .cornerRadius(10)
-                    }
-                    .gridCellColumns(2)
+                Button {
+                    choosingImage.toggle()
+                } label: {
+                    MoneyMapActionListRow(
+                        title: name,
+                        detail: "Add a goal image",
+                        systemImage: "photo",
+                        tint: MoneyMapDesign.calmGreen
+                    )
                 }
+                .buttonStyle(.plain)
             }
-            
-            GridRow {
+
+            LazyVGrid(columns: metricColumns, spacing: MoneyMapDesign.compactSpacing) {
                 
                 Widget(.targetAmount, value: goal.targetAmount ?? 0) {
                     editingTargetAmount.toggle()
@@ -69,34 +62,25 @@ struct GridView: View {
                 Widget(.deadline, date: goal.deadline ?? .now) {
                     editingDeadline.toggle()
                 }
-                
-            }
-            
-            GridRow {
+
                 Widget(.daysUntilDeadline, value: Double(daysUntilDeadline), currency: false)
                 Widget(.numberOfPaydays, value: Double(paydayManager.numberOfPaydaysUntil(goal.deadline ?? .now)), currency: false)
-            }
-            
-            GridRow {
+
                 Widget(.amountSaved, value: goal.amountSaved) {
                     editingAmountSaved.toggle()
                 }
                 Widget(.remainingValue, value: remainingAmount)
-            }
-            
-            GridRow {
+
                 Widget(.priority, value: goal.weight, currency: false) {
                     editingPriority.toggle()
                 }
-                .gridCellColumns(2)
             }
-            
-            GridRow {
-                URLCarousel(for: goal)
-            }
+
+            URLCarousel(for: goal)
             
         }
-        .padding()
+        .padding(.horizontal, MoneyMapDesign.sectionSpacing)
+        .padding(.vertical, MoneyMapDesign.compactSpacing)
         .sheet(isPresented: $editingPriority) {
             VStack(alignment: .leading) {
                 
@@ -118,13 +102,14 @@ struct GridView: View {
                             Spacer()
                         }
                         .padding()
-                        .background(Color(uiColor: .secondarySystemGroupedBackground))
-                        .clipShape(.rect(cornerRadius: 10))
+                        .background(MoneyMapDesign.surfaceBackground)
+                        .clipShape(.rect(cornerRadius: MoneyMapDesign.controlCornerRadius))
                     }
                 }
                 
             }
             .padding()
+            .background(MoneyMapDesign.groupedBackground)
             .presentationDetents([.fraction(0.33)])
         }
         .sheet(isPresented: $editingDeadline) {
@@ -184,6 +169,13 @@ struct GridView: View {
     }
     
     @EnvironmentObject var paydayManager: PaydayManager
+
+    private var metricColumns: [GridItem] {
+        [
+            GridItem(.flexible(minimum: 0), spacing: MoneyMapDesign.compactSpacing),
+            GridItem(.flexible(minimum: 0), spacing: MoneyMapDesign.compactSpacing)
+        ]
+    }
     
 }
 
@@ -197,7 +189,7 @@ enum Priority: Double, CaseIterable, Identifiable {
         case .medium:
             return "Medium"
         case .low:
-            return "Loa"
+            return "Low"
         }
     }
     

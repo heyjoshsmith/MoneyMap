@@ -23,33 +23,43 @@ struct GoalsCardView: View {
     var body: some View {
         ScrollView {
             let columns = [
-                // This will fit as many columns as possible with minimum width 250
-                GridItem(.adaptive(minimum: 250), spacing: 16)
+                GridItem(.adaptive(minimum: 260), spacing: MoneyMapDesign.sectionSpacing)
             ]
-            LazyVGrid(columns: columns, spacing: 16) {
-                ForEach(goals) { goal in
-                    NavigationLink(destination: GoalDetailView(goal)) {
-                        CardView(for: goal)
-                            .shadow(radius: 5)
-                    }
-                    .simultaneousGesture(TapGesture().onEnded {
-                        MoneyMapIntentDonations.donateOpenGoal(goal)
-                    })
-                    .userActivity("com.heyjoshsmith.MoneyMap.viewingGoalCard") { activity in
-                        let entity = GoalEntity(goal)
-                        activity.title = "Browsing \(entity.name)"
-                        activity.appEntityIdentifier = EntityIdentifier(for: entity)
-                    }
-                    .contextMenu {
-                        Button("Delete", systemImage: "trash", role: .destructive) {
-                            modelContext.delete(goal)
-                        }.tint(.red)
+            Group {
+                if goals.isEmpty {
+                    MoneyMapEmptyState(
+                        title: "No Goals Yet",
+                        message: "Add a savings goal to track progress toward something specific.",
+                        systemImage: "target"
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 280)
+                } else {
+                    LazyVGrid(columns: columns, spacing: MoneyMapDesign.sectionSpacing) {
+                        ForEach(goals) { goal in
+                            NavigationLink(destination: GoalDetailView(goal)) {
+                                CardView(for: goal)
+                            }
+                            .buttonStyle(.plain)
+                            .simultaneousGesture(TapGesture().onEnded {
+                                MoneyMapIntentDonations.donateOpenGoal(goal)
+                            })
+                            .userActivity("com.heyjoshsmith.MoneyMap.viewingGoalCard") { activity in
+                                let entity = GoalEntity(goal)
+                                activity.title = "Browsing \(entity.name)"
+                                activity.appEntityIdentifier = EntityIdentifier(for: entity)
+                            }
+                            .contextMenu {
+                                Button("Delete", systemImage: "trash", role: .destructive) {
+                                    modelContext.delete(goal)
+                                }
+                            }
+                        }
                     }
                 }
             }
-            .padding()
+            .padding(MoneyMapDesign.sectionSpacing)
         }
-        .background(Color(UIColor.systemGroupedBackground))
+        .background(MoneyMapDesign.groupedBackground)
     }
 }
 

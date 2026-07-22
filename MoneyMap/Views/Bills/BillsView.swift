@@ -31,6 +31,19 @@ struct BillsView: View {
         }
     }
 
+    private var inactiveBills: [Bill] {
+        switch mode {
+        case .all:
+            break
+        case .upcoming:
+            return []
+        }
+
+        return bills.withoutCreditCards
+            .filter { $0.lifecycleState != .active }
+            .sorted(by: Bill.byDate)
+    }
+
     private var title: String {
         switch mode {
         case .all:
@@ -60,10 +73,19 @@ struct BillsView: View {
                     }
                 }
             }
+
+            if !inactiveBills.isEmpty {
+                Section("Paused & Canceled") {
+                    ForEach(inactiveBills) { bill in
+                        Row(for: bill)
+                    }
+                }
+            }
         }
-        .listStyle(.plain)
+        .listStyle(.insetGrouped)
         .navigationTitle(title)
-        .background(Color(uiColor: .systemGroupedBackground))
+        .scrollContentBackground(.hidden)
+        .background(MoneyMapDesign.groupedBackground)
     }
     
 }
@@ -75,6 +97,7 @@ fileprivate struct Row: View {
     }
     
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \PaymentMethod.name) private var paymentMethods: [PaymentMethod]
     
     var bill: Bill
     
@@ -87,57 +110,25 @@ fileprivate struct Row: View {
         NavigationLink {
             BillView(bill: bill)
         } label: {
-            HStack(spacing: 10) {
-                
-                Image(systemName: bill.category?.icon ?? "questionmark.circle")
-                    .resizable()
-                    .scaledToFit()
-                    .padding(5)
-                    .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background((bill.category?.color.gradient) ?? Color.gray.gradient)
-                    .clipShape(.rect(cornerRadius: 5))
-                
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(bill.name ?? "Untitled")
-                        .font(.title3.weight(.semibold))
-                    Text(bill.status?.name ?? "N/A")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                
-                Spacer()
-                
-                Text((bill.amount ?? 0), format: .currency(code: "USD").precision(.fractionLength(0)))
-                    .font(.system(.title, design: .rounded, weight: .bold))
-                    .padding(.leading)
-            }
+            BillStateRow(bill: bill, paymentMethods: paymentMethods)
         }
-        .simultaneousGesture(TapGesture().onEnded {
-            MoneyMapIntentDonations.donateOpenBill(bill)
-        })
         .userActivity("com.heyjoshsmith.MoneyMap.viewingBillRow") { activity in
             let entity = BillEntity(bill)
             activity.title = "Reviewing \(entity.name)"
             activity.appEntityIdentifier = EntityIdentifier(for: entity)
         }
-        .listRowInsets(EdgeInsets(top: 5, leading: 15, bottom: 5, trailing: 15))
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .padding()
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
-        .clipShape(.rect(cornerRadius: 10))
-        .shadow(color: .black.opacity(0.15), radius: 3, x: 0, y: 5)
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
         .task {
             bill.checkStatus()
         }
         .swipeActions(edge: .trailing) {
             Button("Delete", systemImage: "trash") {
                 deletingBill.toggle()
-            }.tint(.red)
+            }
+            .tint(MoneyMapDesign.attentionRed)
         }
         .swipeActions(edge: .leading) {
-            if bill.status != .paid {
+            if canManuallyMarkPaid || canRecordCreditCardPayment {
                 Button(bill.category == .creditCard ? "Pay" : "Mark Paid", systemImage: "checkmark.circle") {
                     if bill.category == .creditCard {
                         paymentAmount = ""
@@ -146,7 +137,7 @@ fileprivate struct Row: View {
                         showMarkPaidConfirmation = true
                     }
                 }
-                .tint(.green)
+                .tint(MoneyMapDesign.calmGreen)
             }
         }
         .alert("Delete \(bill.name ?? "Bill") Bill", isPresented: $deletingBill) {
@@ -190,6 +181,14 @@ fileprivate struct Row: View {
 
     private var paymentAlertTitle: String {
         bill.name ?? "Payment Amount"
+    }
+
+    private var canManuallyMarkPaid: Bool {
+        bill.lifecycleState == .active && bill.status != .paid && !bill.autopayEnabled && bill.category != .creditCard
+    }
+
+    private var canRecordCreditCardPayment: Bool {
+        bill.lifecycleState == .active && bill.status != .paid && bill.category == .creditCard
     }
 
     private func recordPayment() {

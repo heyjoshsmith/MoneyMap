@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import AppIntents
 
 
 struct GoalsView: View {
@@ -24,20 +25,48 @@ struct GoalsView: View {
     @State private var showingResetAlert = false
     @State private var viewingGoal: Goal?
     
-    let listView = false
+    private var activeGoals: [Goal] {
+        goals.filter { $0.remainingAmount > 0 }
+    }
+
+    private var completedGoals: [Goal] {
+        goals.filter { $0.remainingAmount <= 0 && (($0.targetAmount ?? 0) > 0) }
+    }
+
+    private var totalSaved: Double {
+        goals.reduce(0) { $0 + $1.amountSaved }
+    }
+
+    private var totalTarget: Double {
+        goals.reduce(0) { $0 + ($1.targetAmount ?? 0) }
+    }
+
+    private var totalRemaining: Double {
+        goals.reduce(0) { $0 + $1.remainingAmount }
+    }
+
+    private var overallProgress: Double {
+        guard totalTarget > 0 else { return 0 }
+        return min(max(totalSaved / totalTarget, 0), 1)
+    }
     
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                
-                if listView {
-                    GoalsListView()
-                } else {
-                    GoalsCardView()
+            List {
+                overviewSection
+
+                if paydayManager.nextPayday == nil {
+                    paydayTimingSection
                 }
-                
+
+                activeGoalsSection
+                completedGoalsSection
+                actionsSection
             }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(MoneyMapDesign.groupedBackground)
             .navigationDestination(item: $viewingGoal) { goal in
                 GoalDetailView(goal)
             }
@@ -58,8 +87,7 @@ struct GoalsView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu("Add", systemImage: "ellipsis.circle") {
-                        
+                    Menu("Goal Actions", systemImage: "ellipsis.circle") {
                         Button("Add Savings", systemImage: "dollarsign.arrow.trianglehead.counterclockwise.rotate.90") {
                             addingSavings.toggle()
                         }
@@ -102,6 +130,128 @@ struct GoalsView: View {
                 Text("Are you sure you want to reset your savings? This action can't be undone.")
             }
 
+        }
+    }
+
+    private var overviewSection: some View {
+        Section {
+            GoalOverviewPanel(
+                goalCount: goals.count,
+                activeCount: activeGoals.count,
+                totalSaved: totalSaved,
+                totalRemaining: totalRemaining,
+                progress: overallProgress
+            )
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var paydayTimingSection: some View {
+        Section("Payday Timing") {
+            MoneyMapActionListRow(
+                title: "Payday not set",
+                detail: "Goals still work, but payday pacing and paycheck recommendations get better after you set the next payday.",
+                systemImage: "calendar.badge.exclamationmark",
+                tint: MoneyMapDesign.warningGold
+            )
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var activeGoalsSection: some View {
+        Section("Active Goals") {
+            if activeGoals.isEmpty {
+                MoneyMapEmptyState(
+                    title: goals.isEmpty ? "No Goals Yet" : "No Active Goals",
+                    message: goals.isEmpty ? "Add a savings goal to track progress toward something specific." : "Completed goals move out of your active list.",
+                    systemImage: "target"
+                )
+            } else {
+                ForEach(activeGoals) { goal in
+                    goalNavigationLink(goal)
+                }
+            }
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    @ViewBuilder
+    private var completedGoalsSection: some View {
+        if !completedGoals.isEmpty {
+            Section("Completed") {
+                ForEach(completedGoals) { goal in
+                    goalNavigationLink(goal)
+                }
+            }
+            .listRowBackground(MoneyMapDesign.surfaceBackground)
+        }
+    }
+
+    private var actionsSection: some View {
+        Section("Actions") {
+            Button {
+                addingSavings.toggle()
+            } label: {
+                MoneyMapActionListRow(
+                    title: "Add Savings",
+                    detail: "Distribute a savings amount across active goals by urgency and priority.",
+                    systemImage: "dollarsign.arrow.trianglehead.counterclockwise.rotate.90",
+                    tint: MoneyMapDesign.calmGreen
+                )
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                modelContext.insert(Goal.example)
+            } label: {
+                MoneyMapActionListRow(
+                    title: "Add Example Goal",
+                    detail: "Create a sample goal to try the goals workflow.",
+                    systemImage: "text.badge.star",
+                    tint: .blue
+                )
+            }
+            .buttonStyle(.plain)
+
+            if !goals.isEmpty {
+                Button(role: .destructive) {
+                    showingResetAlert.toggle()
+                } label: {
+                    MoneyMapActionListRow(
+                        title: "Reset Savings",
+                        detail: "Set every goal's saved amount back to zero.",
+                        systemImage: "trash",
+                        tint: MoneyMapDesign.attentionRed
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private func goalNavigationLink(_ goal: Goal) -> some View {
+        Button {
+            viewingGoal = goal
+            MoneyMapIntentDonations.donateOpenGoal(goal)
+        } label: {
+            GoalRowView(goal: goal)
+        }
+        .buttonStyle(.plain)
+        .userActivity("com.heyjoshsmith.MoneyMap.viewingGoalRow") { activity in
+            let entity = GoalEntity(goal)
+            activity.title = "Reviewing \(entity.name)"
+            activity.appEntityIdentifier = EntityIdentifier(for: entity)
+        }
+        .swipeActions {
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                modelContext.delete(goal)
+            }
+        }
+        .contextMenu {
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                modelContext.delete(goal)
+            }
         }
     }
     
@@ -147,6 +297,65 @@ struct GoalsView: View {
         deepLinkManager.requestedGoalID = nil
     }
     
+}
+
+private struct GoalOverviewPanel: View {
+    let goalCount: Int
+    let activeCount: Int
+    let totalSaved: Double
+    let totalRemaining: Double
+    let progress: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(goalCount == 1 ? "1 goal tracked" : "\(goalCount) goals tracked")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    MoneyMapMoneyText(
+                        amount: totalSaved,
+                        font: .title2.weight(.semibold),
+                        foregroundStyle: .primary
+                    )
+                    Text(activeCount == 1 ? "1 still in progress" : "\(activeCount) still in progress")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: "target")
+                    .font(.title3)
+                    .foregroundStyle(MoneyMapDesign.calmGreen)
+                    .frame(width: 30, alignment: .center)
+            }
+
+            ProgressView(value: progress)
+                .tint(MoneyMapDesign.calmGreen)
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], spacing: 10) {
+                MoneyMapMetricTile(
+                    title: "Saved",
+                    value: MoneyMapFormatters.currencyString(for: totalSaved),
+                    systemImage: "banknote",
+                    tint: MoneyMapDesign.calmGreen
+                )
+                MoneyMapMetricTile(
+                    title: "Remaining",
+                    value: MoneyMapFormatters.currencyString(for: totalRemaining),
+                    systemImage: "dollarsign.circle",
+                    tint: .blue
+                )
+                MoneyMapMetricTile(
+                    title: "Progress",
+                    value: progress.formatted(.percent.precision(.fractionLength(0))),
+                    systemImage: "chart.line.uptrend.xyaxis",
+                    tint: .purple
+                )
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+    }
 }
 
 #Preview("Goals") {

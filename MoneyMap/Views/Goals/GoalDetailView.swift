@@ -30,52 +30,43 @@ struct GoalDetailView: View {
     @State private var selectedImage: UIImage? = nil
     @State private var isLoading: Bool = false
     @State private var errorMessage: String? = nil
-    @State private var choosingSavedImage: Bool = false
-    @State private var savedFiles = 0
     @State private var testing = false
     
     var body: some View {
-        
-        ScrollView {
-            VStack {
-                
-                if let errorMessage {
-                    Text(errorMessage)
-                        .foregroundStyle(.red)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding()
-                        .background(Color(uiColor: .secondarySystemGroupedBackground))
-                        .clipShape(.rect(cornerRadius: 10))
-                        .padding()
-                }
-                
-                ZStack {
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: MoneyMapDesign.sectionSpacing) {
                     
-                    Text("Saved Files: \(savedFiles)")
-                        .opacity(0)
-                    
-                    if let uiImage = goal.uiImage {
-                        HeroImage(goal.name ?? "", image: Image(uiImage: uiImage))
-                    } else if let selectedImage {
-                        HeroImage(goal.name ?? "", image: Image(uiImage: selectedImage))
-                    } else if isLoading {
-                        ProgressView("Loading Image...")
-                    } else if testing {
-                        HeroImage(goal.name ?? "Test Goal", image: Image(.test))
+                    if let errorMessage {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .font(.subheadline)
+                            .foregroundStyle(MoneyMapDesign.attentionRed)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .background(MoneyMapDesign.surfaceBackground, in: RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius))
+                            .padding(.horizontal, MoneyMapDesign.sectionSpacing)
                     }
                     
+                    Button {
+                        choosingImage.toggle()
+                    } label: {
+                        goalHero
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, MoneyMapDesign.sectionSpacing)
+
+                    GoalDetailProgressPanel(goal: goal)
+
+                    GridView(goal, choosingImage: $choosingImage)
                 }
-                .onTapGesture {
-                    print("Loading Saved Files: \(savedFiles)")
-                    choosingImage.toggle()
-                }
-                
-                GridView(goal, choosingImage: $choosingImage)
-                
+                .frame(width: proxy.size.width, alignment: .leading)
+                .clipped()
+                .padding(.vertical, MoneyMapDesign.sectionSpacing)
             }
+            .background(MoneyMapDesign.groupedBackground)
         }
-        .background(Color(uiColor: .systemGroupedBackground))
-        .navigationTitle("Goal Details")
+        .background(MoneyMapDesign.groupedBackground)
+        .navigationTitle(goal.name ?? "Goal Details")
         .toolbarTitleDisplayMode(.inline)
         .userActivity("com.heyjoshsmith.MoneyMap.viewingGoal") { activity in
             let entity = GoalEntity(goal)
@@ -91,9 +82,6 @@ struct GoalDetailView: View {
                 }
             }
         }
-        .onAppear {
-            savedFiles = getSavedFiles().count
-        }
         .sheet(isPresented: $choosingImage) {
             
             MyPhotoPicker(selection: $selectedItem) { imageType in
@@ -101,10 +89,8 @@ struct GoalDetailView: View {
                 switch imageType {
                 case .imagePlayground:
                     creatingImage.toggle()
-                case .savedImages:
-                    choosingSavedImage.toggle()
                 case .photos:
-                    print("Lauching PhotosPicker")
+                    print("Launching PhotosPicker")
                 }
             }
             .presentationDetents([.fraction(0.3)])
@@ -120,21 +106,125 @@ struct GoalDetailView: View {
                 self.imageURL = url
             }
         })
-        .sheet(isPresented: $choosingSavedImage) {
-            Text("This feature is deprecated.")
-//            ChooseImageView() { url in
-//                goal.imageFileName = url.lastPathComponent
-//            }
-        }
         .onChange(of: selectedItem) { oldItem, newItem in
             Task {
                 await loadImage(newItem)
             }
         }
     }
-    
-    
-    
+
+    @ViewBuilder
+    private var goalHero: some View {
+        ZStack {
+            if let uiImage = goal.uiImage {
+                heroImage(Image(uiImage: uiImage))
+            } else if let selectedImage {
+                heroImage(Image(uiImage: selectedImage))
+            } else if isLoading {
+                ProgressView("Loading Image...")
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                    .background(MoneyMapDesign.surfaceBackground)
+            } else if testing {
+                heroImage(Image(.test))
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "target")
+                        .font(.system(size: 44, weight: .semibold))
+                    Text(goal.name ?? "Savings Goal")
+                        .font(.title3.weight(.semibold))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                .background(MoneyMapDesign.moneyGradient)
+            }
+
+            VStack {
+                Spacer()
+                HStack {
+                    Label("Change Image", systemImage: "photo")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.black.opacity(0.35), in: Capsule())
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: MoneyMapDesign.sectionCornerRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: MoneyMapDesign.sectionCornerRadius)
+                .stroke(MoneyMapDesign.separator, lineWidth: 1)
+        }
+    }
+
+    private func heroImage(_ image: Image) -> some View {
+        GeometryReader { proxy in
+            image
+                .resizable()
+                .scaledToFill()
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .clipped()
+        }
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .background(MoneyMapDesign.controlBackground)
+    }
+
+    private struct GoalDetailProgressPanel: View {
+        let goal: Goal
+
+        private var progressValue: Double {
+            min(max(goal.progress(), 0), 1)
+        }
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Saved")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        MoneyMapMoneyText(amount: goal.amountSaved, font: .title2.weight(.semibold))
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Text(progressValue.formatted(.percent.precision(.fractionLength(0))))
+                        .font(.headline)
+                        .monospacedDigit()
+                        .foregroundStyle(MoneyMapDesign.calmGreen)
+                }
+
+                ProgressView(value: progressValue)
+                    .tint(MoneyMapDesign.calmGreen)
+
+                HStack(spacing: MoneyMapDesign.compactSpacing) {
+                    MoneyMapMetricTile(
+                        title: "Target",
+                        value: MoneyMapFormatters.currencyString(for: goal.targetAmount ?? 0),
+                        systemImage: "target",
+                        detail: goal.deadline.map { "By \(MoneyMapFormatters.mediumDateString(for: $0))" } ?? "No deadline set",
+                        tint: MoneyMapDesign.calmGreen
+                    )
+                    MoneyMapMetricTile(
+                        title: "Remaining",
+                        value: MoneyMapFormatters.currencyString(for: goal.remainingAmount),
+                        systemImage: "dollarsign.circle",
+                        detail: goal.amountPerPaycheck.map { "\(MoneyMapFormatters.currencyString(for: $0)) per paycheck" } ?? "Set payday for pacing",
+                        tint: .blue
+                    )
+                }
+            }
+            .padding(14)
+            .background(MoneyMapDesign.surfaceBackground, in: RoundedRectangle(cornerRadius: MoneyMapDesign.sectionCornerRadius))
+            .padding(.horizontal, MoneyMapDesign.sectionSpacing)
+            .accessibilityElement(children: .combine)
+        }
+    }
+
     // Main Functions
     
     func loadImage(_ newItem: PhotosPickerItem?) async {
@@ -160,83 +250,6 @@ struct GoalDetailView: View {
             errorMessage = "Failed to load image: \(error.localizedDescription)"
             print("Error: \(error.localizedDescription)")
         }
-    }
-    
-    
-    
-    // Custom Views
-    
-    private struct ChooseImageView: View {
-        
-        let onSelect: (URL) -> Void
-        
-        @State private var savedFiles: [URL] = []
-        
-        var body: some View {
-            NavigationStack {
-                ScrollView {
-                    LazyVGrid(columns: [GridItem(), GridItem()]) {
-                        ForEach(savedFiles, id: \.self) { fileURL in
-                            Button {
-                                onSelect(fileURL)
-                                dismiss()
-                            } label: {
-                                if let uiImage = loadImage(from: fileURL) {
-                                    Image(uiImage: uiImage)
-                                        .resizable()
-                                        .scaledToFit()
-                                        .frame(maxWidth: .infinity)
-                                        .cornerRadius(8)
-                                } else {
-                                    Image(systemName: "doc.fill")
-                                        .foregroundColor(.blue)
-                                        .font(.title2)
-                                        .frame(maxWidth: .infinity)
-                                        .background(Color(UIColor.secondarySystemGroupedBackground))
-                                        .cornerRadius(8)
-                                }
-                            }
-                        }
-                    }
-                    .padding()
-                }
-                .background(Color(uiColor: .systemGroupedBackground))
-                .navigationTitle("Saved Images")
-                .onAppear {
-                    savedFiles = getSavedFiles()
-                }
-            }
-        }
-        
-        // Tries to load an image if it's an image file
-        func loadImage(from url: URL) -> UIImage? {
-            guard let data = try? Data(contentsOf: url),
-                  let image = UIImage(data: data) else { return nil }
-            return image
-        }
-        
-        @Environment(\.dismiss) private var dismiss
-        
-    }
-    
-}
-
-func getSavedFiles() -> [URL] {
-    let fileManager = FileManager.default
-    // Point at the shared App Group container's Images directory
-    guard let groupContainer = fileManager
-        .containerURL(forSecurityApplicationGroupIdentifier: "group.com.heyjoshsmith.MoneyMap")?
-        .appendingPathComponent("Images", isDirectory: true) else {
-            print("Error: Could not locate shared Images container")
-            return []
-    }
-    do {
-        let files = try fileManager.contentsOfDirectory(at: groupContainer, includingPropertiesForKeys: nil)
-        print("Found \(files.count) files in shared Images directory: \(groupContainer.path)")
-        return files
-    } catch {
-        print("Error listing files in shared container:", error)
-        return []
     }
 }
 

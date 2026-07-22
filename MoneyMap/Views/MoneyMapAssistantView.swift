@@ -120,15 +120,19 @@ struct MoneyMapAssistantView: View {
                     Section {
                         Text(errorMessage)
                             .font(.caption)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(MoneyMapDesign.attentionRed)
                     }
+                    .listRowBackground(MoneyMapDesign.surfaceBackground)
                 }
 
                 if !hasQuery && answer == nil {
                     examplesSection
                 }
             }
-            .navigationTitle("Search MoneyMap")
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(MoneyMapDesign.groupedBackground)
+            .navigationTitle("Ask MoneyMap")
             .searchable(text: $query, prompt: "Search or ask MoneyMap")
             .searchToolbarBehavior(.minimize)
             .toolbar {
@@ -164,7 +168,7 @@ struct MoneyMapAssistantView: View {
                         .foregroundStyle(.accent)
 
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Search and Ask")
+                        Text("Ask MoneyMap")
                             .font(.title2.bold())
                         Text("Find bills, goals, transactions, or ask a question grounded in your MoneyMap data.")
                             .font(.subheadline)
@@ -180,6 +184,7 @@ struct MoneyMapAssistantView: View {
             }
             .padding(.vertical, 4)
         }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
     private var localResultsSection: some View {
@@ -224,6 +229,7 @@ struct MoneyMapAssistantView: View {
                 }
             }
         }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
     private func generatedAnswerSection(_ answer: String) -> some View {
@@ -232,6 +238,7 @@ struct MoneyMapAssistantView: View {
                 .font(.body)
                 .textSelection(.enabled)
         }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
     private var generatedVisualsSection: some View {
@@ -267,6 +274,7 @@ struct MoneyMapAssistantView: View {
                 .padding(.vertical, 4)
             }
         }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
     private var examplesSection: some View {
@@ -276,6 +284,7 @@ struct MoneyMapAssistantView: View {
             exampleButton("How much do I have saved across my goals?")
             exampleButton("What should I do with my paycheck?")
         }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
     private var matchedTransactionTotal: Double {
@@ -298,7 +307,7 @@ struct MoneyMapAssistantView: View {
         [
             bill.name,
             bill.category?.name,
-            bill.status?.name,
+            bill.displayStatusName,
             bill.notes,
             bill.autopaySource,
             bill.dueDate.map(MoneyMapFormatters.mediumDateString(for:)),
@@ -359,22 +368,13 @@ private struct SearchMetricGrid: View {
     var body: some View {
         LazyVGrid(columns: columns, spacing: 12) {
             ForEach(metrics) { metric in
-                VStack(alignment: .leading, spacing: 8) {
-                    Image(systemName: metric.systemImage)
-                        .font(.title3)
-                        .foregroundStyle(metric.color)
-                    Text(metric.value)
-                        .font(.headline)
-                    Text(metric.title)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text(metric.detail)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
-                .padding(12)
-                .background(metric.color.opacity(0.12), in: .rect(cornerRadius: 8))
+                MoneyMapMetricTile(
+                    title: metric.title,
+                    value: metric.value,
+                    systemImage: metric.systemImage,
+                    detail: metric.detail,
+                    tint: metric.color
+                )
             }
         }
         .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
@@ -402,7 +402,7 @@ private struct SearchBillRow: View {
 
     private var detail: String {
         let due = bill.dueDate.map { MoneyMapFormatters.mediumDateString(for: $0) } ?? "No due date"
-        let status = bill.status?.name ?? bill.category?.name ?? "Bill"
+        let status = bill.displayStatusName
         return "\(status) • \(due)"
     }
 }
@@ -477,7 +477,7 @@ private struct SearchRecommendationRow: View {
         HStack(spacing: 12) {
             SearchIcon(systemName: "wand.and.stars", color: .purple)
             VStack(alignment: .leading, spacing: 6) {
-                Text("Paycheck Recommendations")
+                Text("Paycheck Plan")
                     .font(.subheadline.weight(.semibold))
                 HStack(spacing: 12) {
                     labeledAmount("Cards", digest.suggestedCardPaymentTotal)

@@ -47,6 +47,108 @@ final class TransactionImportTests: XCTestCase {
         XCTAssertEqual(transactions.count, 1)
     }
 
+    func testPreviewReportsNewDuplicateAndInvalidRows() throws {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: Bill.self, Transaction.self, configurations: config)
+        let context = ModelContext(container)
+
+        let bill = Bill(
+            name: "Apple Card",
+            amount: 100,
+            dueDate: .now,
+            category: .creditCard,
+            recurrenceInterval: 1,
+            recurrenceUnit: .month,
+            creditCardDetails: CreditCardDetails(creditLimit: 1000, cardBalance: 100)
+        )
+        context.insert(bill)
+
+        let existingTransaction = Transaction(
+            transactionDate: "04-20-2026",
+            clearingDate: "04-21-2026",
+            transactionDescription: "Coffee Shop",
+            merchant: "Local Cafe",
+            category: "Food",
+            type: "Purchase",
+            amountUSD: 5.25,
+            purchasedBy: "Josh",
+            creditCard: bill
+        )
+        context.insert(existingTransaction)
+        try context.save()
+
+        let csvURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("csv")
+
+        let csv = """
+        Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD),Purchased By
+        04-20-2026,04-21-2026,Coffee Shop,Local Cafe,Food,Purchase,5.25,Josh
+        04-22-2026,04-23-2026,Groceries,Market,Groceries,Purchase,42.10,Josh
+        broken,row
+        """
+        try csv.write(to: csvURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: csvURL) }
+
+        let preview = try previewTransactionCSVFiles(from: [csvURL], for: bill)
+
+        XCTAssertEqual(preview.totalRows, 3)
+        XCTAssertEqual(preview.importableRows, 1)
+        XCTAssertEqual(preview.duplicateRows, 1)
+        XCTAssertEqual(preview.invalidRows, 1)
+        XCTAssertEqual(preview.sampleRows.first?.merchant, "Market")
+    }
+
+    func testMultiFileImportSummaryMatchesInsertedTransactions() throws {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: Bill.self, Transaction.self, configurations: config)
+        let context = ModelContext(container)
+
+        let bill = Bill(
+            name: "Apple Card",
+            amount: 100,
+            dueDate: .now,
+            category: .creditCard,
+            recurrenceInterval: 1,
+            recurrenceUnit: .month,
+            creditCardDetails: CreditCardDetails(creditLimit: 1000, cardBalance: 100)
+        )
+        context.insert(bill)
+
+        let firstURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("csv")
+        let secondURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("csv")
+
+        let firstCSV = """
+        Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD),Purchased By
+        04-20-2026,04-21-2026,Coffee Shop,Local Cafe,Food,Purchase,5.25,Josh
+        """
+        let secondCSV = """
+        Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD),Purchased By
+        04-20-2026,04-21-2026,Coffee Shop,Local Cafe,Food,Purchase,5.25,Josh
+        04-22-2026,04-23-2026,Groceries,Market,Groceries,Purchase,42.10,Josh
+        """
+        try firstCSV.write(to: firstURL, atomically: true, encoding: .utf8)
+        try secondCSV.write(to: secondURL, atomically: true, encoding: .utf8)
+        defer {
+            try? FileManager.default.removeItem(at: firstURL)
+            try? FileManager.default.removeItem(at: secondURL)
+        }
+
+        let summary = try importTransactionCSVFiles(from: [firstURL, secondURL], to: bill, context: context)
+        let transactions = try context.fetch(FetchDescriptor<Transaction>())
+
+        XCTAssertEqual(summary.fileCount, 2)
+        XCTAssertEqual(summary.totalRows, 3)
+        XCTAssertEqual(summary.importedRows, 2)
+        XCTAssertEqual(summary.duplicateRows, 1)
+        XCTAssertEqual(summary.invalidRows, 0)
+        XCTAssertEqual(transactions.count, 2)
+    }
+
     func testRecurringAutopayBillRollsForwardToFutureCycle() {
         let calendar = Calendar.current
         let pastDueDate = calendar.date(byAdding: .month, value: -1, to: .now) ?? .now

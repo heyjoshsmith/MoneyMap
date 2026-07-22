@@ -20,81 +20,50 @@ struct GoalsListView: View {
         List {
             
             if paydayManager.nextPayday == nil {
-                Section("Warning") {
-                    Text("Please set your next payday in the Payday tab before creating a goal.")
-                        .foregroundColor(.red)
+                Section("Payday Timing") {
+                    MoneyMapActionListRow(
+                        title: "Payday not set",
+                        detail: "Goals still work, but paycheck pacing and recommendations improve once payday is set.",
+                        systemImage: "calendar.badge.exclamationmark",
+                        tint: MoneyMapDesign.warningGold
+                    )
                 }
+                .listRowBackground(MoneyMapDesign.surfaceBackground)
             }
-            
-            ForEach(goals) { goal in
-                NavigationLink(destination: GoalDetailView(goal)) {
-                    HStack {
-                        
-                        if let image = goal.uiImage {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 50, height: 50, alignment: .center)
-                                .cornerRadius(10)
-                        } else {
-                            Image(systemName: "target")
-                                .resizable()
-                                .scaledToFit()
-                                .foregroundStyle(
-                                    LinearGradient(gradient: Gradient(colors: [.orange, .red]),
-                                                   startPoint: .top,
-                                                   endPoint: .bottom)
-                                )
-                                .frame(width: 50, height: 50, alignment: .center)
+
+            Section("Goals") {
+                if goals.isEmpty {
+                    MoneyMapEmptyState(
+                        title: "No Goals Yet",
+                        message: "Add a savings goal to track progress toward something specific.",
+                        systemImage: "target"
+                    )
+                } else {
+                    ForEach(goals) { goal in
+                        NavigationLink(destination: GoalDetailView(goal)) {
+                            GoalRowView(goal: goal)
                         }
-                        
-                        VStack(alignment: .leading) {
-                            if let name = goal.name {
-                                Text(name)
-                                    .font(.title2.weight(.semibold))
-                            } else {
-                                Text("Save $\(goal.targetAmount ?? 0, specifier: "%.2f")")
-                                    .font(.headline)
-                            }
-                            if let deadline = goal.deadline {
-                                Text("By \(deadline, style: .date)")
-                                    .font(.callout)
-                                    .foregroundColor(.secondary)
+                        .simultaneousGesture(TapGesture().onEnded {
+                            MoneyMapIntentDonations.donateOpenGoal(goal)
+                        })
+                        .userActivity("com.heyjoshsmith.MoneyMap.viewingGoalRow") { activity in
+                            let entity = GoalEntity(goal)
+                            activity.title = "Reviewing \(entity.name)"
+                            activity.appEntityIdentifier = EntityIdentifier(for: entity)
+                        }
+                        .swipeActions {
+                            Button("Delete", systemImage: "trash", role: .destructive) {
+                                modelContext.delete(goal)
                             }
                         }
-                        
-                        if goal.name != nil {
-                            Spacer()
-                            
-                            Gauge(value: goal.progress(), in: 0...1) {
-                                Text("Progress")
-                            } currentValueLabel: {
-                                Text("\(Int(goal.progress() * 100))%")
-                            }
-                            .tint(.green)
-                            .gaugeStyle(.accessoryCircularCapacity)
-                            
-                        }
-                        
                     }
-                    .padding(.vertical, 5)
-                }
-                .simultaneousGesture(TapGesture().onEnded {
-                    MoneyMapIntentDonations.donateOpenGoal(goal)
-                })
-                .userActivity("com.heyjoshsmith.MoneyMap.viewingGoalRow") { activity in
-                    let entity = GoalEntity(goal)
-                    activity.title = "Reviewing \(entity.name)"
-                    activity.appEntityIdentifier = EntityIdentifier(for: entity)
-                }
-                .swipeActions {
-                    Button("Delete", systemImage: "trash") {
-                        modelContext.delete(goal)
-                    }.tint(.red)
                 }
             }
-            
+            .listRowBackground(MoneyMapDesign.surfaceBackground)
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(MoneyMapDesign.groupedBackground)
     }
 }
 

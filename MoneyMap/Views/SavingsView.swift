@@ -27,21 +27,34 @@ struct SavingsView: View {
                         .keyboardType(.numberPad)
                         .focused($focused)
                 }
+                .listRowBackground(MoneyMapDesign.surfaceBackground)
                 
                 Section("Goals") {
-                    ForEach(goals) { goal in
-                        VStack(alignment: .leading) {
-                            Text(goal.name ?? "Goal").font(.headline)
-                            Text("Saved: $\(goal.amountSaved, specifier: "%.2f") / $\(goal.targetAmount ?? 0, specifier: "%.2f")")
-                                .font(.subheadline)
-                            if let allocated = allocation[goal] {
-                                Text("Next Paycheck: $\(allocated, specifier: "%.2f")")
-                                    .foregroundColor(.green)
+                    if goals.isEmpty {
+                        MoneyMapEmptyState(
+                            title: "No Goals Yet",
+                            message: "Add a savings goal before planning paycheck contributions.",
+                            systemImage: "target"
+                        )
+                    } else {
+                        ForEach(goals) { goal in
+                            VStack(alignment: .leading, spacing: 6) {
+                                GoalRowView(goal: goal)
+                                if let allocated = allocation[goal] {
+                                    Label("Next paycheck: \(MoneyMapFormatters.currencyString(for: allocated))", systemImage: "banknote")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(MoneyMapDesign.calmGreen)
+                                }
                             }
+                            .padding(.vertical, 2)
                         }
                     }
                 }
+                .listRowBackground(MoneyMapDesign.surfaceBackground)
             }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(MoneyMapDesign.groupedBackground)
             .navigationTitle("Savings")
             .onAppear {
                 loadPaycheckAmount()

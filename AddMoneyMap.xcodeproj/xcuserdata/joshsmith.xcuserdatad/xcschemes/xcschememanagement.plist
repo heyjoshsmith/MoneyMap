@@ -7,12 +7,17 @@
 		<key>MainWidgetExtension.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
-			<integer>5</integer>
+			<integer>6</integer>
 		</dict>
 		<key>MoneyMap.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
 			<integer>0</integer>
+		</dict>
+		<key>MoneyMapMac.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>3</integer>
 		</dict>
 		<key>MoneyMapShareExtension.xcscheme_^#shared#^_</key>
 		<dict>
@@ -27,7 +32,7 @@
 		<key>MoneyMapWatch.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
-			<integer>3</integer>
+			<integer>5</integer>
 		</dict>
 		<key>Wallet Transactions.xcscheme_^#shared#^_</key>
 		<dict>

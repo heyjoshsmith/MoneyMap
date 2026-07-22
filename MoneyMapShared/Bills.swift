@@ -15,60 +15,117 @@ public enum BillCategory: String, CaseIterable, Codable {
     case utilities
     case creditCard
     case rent
+    case mortgage
     case insurance
     case subscription
+    case streaming
+    case software
+    case membership
     case groceries
     case transportation
     case phone
     case internet
     case entertainment
+    case healthcare
+    case childcare
+    case education
+    case loans
+    case taxes
+    case banking
+    case homeServices
+    case security
     case other
 
     public var name: String {
         switch self {
-        case .utilities:      return "Utilities"
-        case .creditCard:     return "Credit Card"
-        case .rent:           return "Rent"
-        case .insurance:      return "Insurance"
-        case .subscription:   return "Subscription"
-        case .groceries:      return "Groceries"
+        case .utilities:     return "Utilities"
+        case .creditCard:    return "Credit Card"
+        case .rent:          return "Rent"
+        case .mortgage:      return "Mortgage"
+        case .insurance:     return "Insurance"
+        case .subscription:  return "Subscription"
+        case .streaming:     return "Streaming"
+        case .software:      return "Software"
+        case .membership:    return "Membership"
+        case .groceries:     return "Groceries"
         case .transportation: return "Transportation"
-        case .phone:          return "Phone"
-        case .internet:       return "Internet"
-        case .entertainment:  return "Entertainment"
-        case .other:          return "Other"
+        case .phone:         return "Phone"
+        case .internet:      return "Internet"
+        case .entertainment: return "Entertainment"
+        case .healthcare:    return "Healthcare"
+        case .childcare:     return "Childcare"
+        case .education:     return "Education"
+        case .loans:         return "Loans"
+        case .taxes:         return "Taxes"
+        case .banking:       return "Banking"
+        case .homeServices:  return "Home Services"
+        case .security:      return "Security"
+        case .other:         return "Other"
         }
     }
 
     public var icon: String {
         switch self {
-        case .utilities:      return "lightbulb"
-        case .creditCard:     return "creditcard"
-        case .rent:           return "house"
-        case .insurance:      return "shield"
-        case .subscription:   return "tv"
-        case .groceries:      return "cart"
+        case .utilities:     return "bolt"
+        case .creditCard:    return "creditcard"
+        case .rent:          return "house"
+        case .mortgage:      return "house.and.flag"
+        case .insurance:     return "shield.lefthalf.filled"
+        case .subscription:  return "repeat"
+        case .streaming:     return "play.rectangle"
+        case .software:      return "laptopcomputer"
+        case .membership:    return "person.crop.circle.badge.checkmark"
+        case .groceries:     return "cart"
         case .transportation: return "car"
-        case .phone:          return "phone"
-        case .internet:       return "wifi"
-        case .entertainment:  return "gamecontroller"
-        case .other:          return "ellipsis"
+        case .phone:         return "phone"
+        case .internet:      return "wifi"
+        case .entertainment: return "gamecontroller"
+        case .healthcare:    return "cross.case"
+        case .childcare:     return "figure.2"
+        case .education:     return "graduationcap"
+        case .loans:         return "banknote"
+        case .taxes:         return "doc.text.magnifyingglass"
+        case .banking:       return "building.columns"
+        case .homeServices:  return "wrench.and.screwdriver"
+        case .security:      return "lock.shield"
+        case .other:         return "ellipsis"
         }
     }
 
     public var color: Color {
         switch self {
-        case .utilities:      return .yellow
-        case .creditCard:     return .blue
-        case .rent:           return .green
-        case .insurance:      return .orange
-        case .subscription:   return .purple
-        case .groceries:      return .red
-        case .transportation: return .pink
-        case .phone:          return .mint
-        case .internet:       return .indigo
-        case .entertainment:  return .teal
-        case .other:          return .gray
+        case .utilities:     return Color(red: 0.70, green: 0.50, blue: 0.20)
+        case .creditCard:    return Color(red: 0.22, green: 0.44, blue: 0.56)
+        case .rent:          return Color(red: 0.26, green: 0.48, blue: 0.32)
+        case .mortgage:      return Color(red: 0.18, green: 0.40, blue: 0.35)
+        case .insurance:     return Color(red: 0.24, green: 0.46, blue: 0.52)
+        case .subscription:  return Color(red: 0.46, green: 0.38, blue: 0.58)
+        case .streaming:     return Color(red: 0.58, green: 0.31, blue: 0.34)
+        case .software:      return Color(red: 0.36, green: 0.42, blue: 0.58)
+        case .membership:    return Color(red: 0.50, green: 0.37, blue: 0.51)
+        case .groceries:     return Color(red: 0.32, green: 0.54, blue: 0.30)
+        case .transportation: return Color(red: 0.65, green: 0.38, blue: 0.24)
+        case .phone:         return Color(red: 0.24, green: 0.52, blue: 0.55)
+        case .internet:      return Color(red: 0.28, green: 0.48, blue: 0.62)
+        case .entertainment: return Color(red: 0.54, green: 0.36, blue: 0.56)
+        case .healthcare:    return Color(red: 0.62, green: 0.30, blue: 0.29)
+        case .childcare:     return Color(red: 0.66, green: 0.43, blue: 0.43)
+        case .education:     return Color(red: 0.42, green: 0.40, blue: 0.58)
+        case .loans:         return Color(red: 0.55, green: 0.42, blue: 0.27)
+        case .taxes:         return Color(red: 0.45, green: 0.45, blue: 0.42)
+        case .banking:       return Color(red: 0.20, green: 0.45, blue: 0.38)
+        case .homeServices:  return Color(red: 0.50, green: 0.43, blue: 0.34)
+        case .security:      return Color(red: 0.24, green: 0.32, blue: 0.34)
+        case .other:         return Color(red: 0.48, green: 0.50, blue: 0.47)
+        }
+    }
+
+    public var isSubscriptionCategory: Bool {
+        switch self {
+        case .subscription, .streaming, .software, .membership:
+            return true
+        default:
+            return false
         }
     }
 
@@ -84,6 +141,206 @@ public enum RecurrenceUnit: String, CaseIterable, Codable {
     case week
     case month
     case year
+}
+
+// MARK: - Bill Lifecycle
+
+public enum BillLifecycleState: String, CaseIterable, Codable {
+    case active
+    case paused
+    case canceled
+
+    public var title: String {
+        switch self {
+        case .active:
+            return "Active"
+        case .paused:
+            return "Paused"
+        case .canceled:
+            return "Canceled"
+        }
+    }
+
+    public var icon: String {
+        switch self {
+        case .active:
+            return "play.circle.fill"
+        case .paused:
+            return "pause.circle.fill"
+        case .canceled:
+            return "xmark.circle.fill"
+        }
+    }
+
+    public var color: Color {
+        switch self {
+        case .active:
+            return .green
+        case .paused:
+            return .orange
+        case .canceled:
+            return .red
+        }
+    }
+}
+
+// MARK: - Payment Methods
+
+public enum PaymentMethodType: String, CaseIterable, Codable, Identifiable {
+    case creditCard
+    case debitCard
+    case checking
+    case savings
+    case cash
+    case other
+
+    public var id: String { rawValue }
+
+    public var name: String {
+        switch self {
+        case .creditCard: return "Credit Card"
+        case .debitCard:  return "Debit Card"
+        case .checking:   return "Checking"
+        case .savings:    return "Savings"
+        case .cash:       return "Cash"
+        case .other:      return "Other"
+        }
+    }
+
+    public var icon: String {
+        switch self {
+        case .creditCard: return "creditcard"
+        case .debitCard:  return "rectangle.connected.to.line.below"
+        case .checking:   return "building.columns"
+        case .savings:    return "banknote"
+        case .cash:       return "dollarsign.circle"
+        case .other:      return "ellipsis.circle"
+        }
+    }
+
+    public var color: Color {
+        switch self {
+        case .creditCard: return Color(red: 0.22, green: 0.44, blue: 0.56)
+        case .debitCard:  return Color(red: 0.22, green: 0.49, blue: 0.42)
+        case .checking:   return Color(red: 0.20, green: 0.45, blue: 0.38)
+        case .savings:    return Color(red: 0.32, green: 0.54, blue: 0.30)
+        case .cash:       return Color(red: 0.55, green: 0.42, blue: 0.27)
+        case .other:      return Color(red: 0.48, green: 0.50, blue: 0.47)
+        }
+    }
+
+    public var usesRoutingNumber: Bool {
+        self == .checking || self == .savings
+    }
+}
+
+@Model
+public class PaymentMethod: Identifiable {
+    public var id: UUID = UUID()
+    public var name: String = ""
+    public var typeRawValue: String = PaymentMethodType.checking.rawValue
+    public var institutionName: String?
+    public var lastFourDigits: String?
+    public var routingNumber: String?
+    public var linkedBillID: UUID?
+    public var notes: String?
+    public var plaidAccountID: String?
+    public var plaidItemID: String?
+    public var plaidInstitutionID: String?
+    public var plaidUpdatedAt: Date?
+    public var createdAt: Date = Date()
+    public var updatedAt: Date = Date()
+
+    public init(
+        name: String,
+        type: PaymentMethodType,
+        institutionName: String? = nil,
+        lastFourDigits: String? = nil,
+        routingNumber: String? = nil,
+        linkedBillID: UUID? = nil,
+        notes: String? = nil,
+        plaidAccountID: String? = nil,
+        plaidItemID: String? = nil,
+        plaidInstitutionID: String? = nil,
+        plaidUpdatedAt: Date? = nil,
+        createdAt: Date = .now,
+        updatedAt: Date = .now
+    ) {
+        self.id = UUID()
+        self.name = name
+        self.typeRawValue = type.rawValue
+        self.institutionName = institutionName
+        self.lastFourDigits = Self.normalizedLastFourDigits(lastFourDigits)
+        self.routingNumber = Self.normalizedRoutingNumber(routingNumber)
+        self.linkedBillID = linkedBillID
+        self.notes = notes
+        self.plaidAccountID = plaidAccountID
+        self.plaidItemID = plaidItemID
+        self.plaidInstitutionID = plaidInstitutionID
+        self.plaidUpdatedAt = plaidUpdatedAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    public var type: PaymentMethodType {
+        get { PaymentMethodType(rawValue: typeRawValue) ?? .other }
+        set { typeRawValue = newValue.rawValue }
+    }
+
+    public var displayName: String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? type.name : trimmed
+    }
+
+    public var numberLabel: String? {
+        guard let lastFourDigits, !lastFourDigits.isEmpty else { return nil }
+        return "Ending \(lastFourDigits)"
+    }
+
+    public var detailText: String {
+        let rawParts: [String?] = [
+            institutionName?.trimmingCharacters(in: .whitespacesAndNewlines),
+            numberLabel
+        ]
+
+        let parts = rawParts.compactMap { value -> String? in
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }
+
+        return parts.isEmpty ? type.name : parts.joined(separator: " - ")
+    }
+
+    public var isCreditCardMirror: Bool {
+        type == .creditCard && linkedBillID != nil
+    }
+
+    public func updateCreditCardMirror(from bill: Bill) {
+        type = .creditCard
+        name = bill.name ?? "Credit Card"
+        institutionName = bill.creditCardDetails?.issuerName
+        lastFourDigits = Self.normalizedLastFourDigits(bill.creditCardDetails?.lastFourDigits)
+        linkedBillID = bill.id
+        plaidAccountID = bill.plaidAccountID
+        plaidItemID = bill.plaidItemID
+        plaidInstitutionID = bill.plaidInstitutionID
+        plaidUpdatedAt = bill.plaidUpdatedAt
+        updatedAt = .now
+    }
+
+    public static func normalizedLastFourDigits(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let digits = value.filter(\.isNumber)
+        guard !digits.isEmpty else { return nil }
+        return String(digits.suffix(4))
+    }
+
+    public static func normalizedRoutingNumber(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let digits = value.filter(\.isNumber)
+        guard !digits.isEmpty else { return nil }
+        return digits
+    }
 }
 
 // MARK: - Credit Card Details
@@ -171,6 +428,15 @@ public class Bill {
     public var notes: String?
     public var autopaySource: String?
     public var gracePeriodDays: Int?
+    public var paymentURLString: String?
+    public var paymentMethodID: UUID?
+    public var lifecycleStateRaw: String?
+    public var lifecycleUpdatedAt: Date?
+    public var plaidAccountID: String?
+    public var plaidItemID: String?
+    public var plaidInstitutionID: String?
+    public var plaidUpdatedAt: Date?
+    public var plaidUnavailable: Bool = false
     public var status: Status?
     public var imageData: Data?
     private var storedAutopayEnabled: Bool?
@@ -210,7 +476,7 @@ public class Bill {
     }
     #endif
 
-    public init(name: String?, amount: Double?, dueDate: Date?, category: BillCategory?, recurrenceInterval: Int?, recurrenceUnit: RecurrenceUnit?, creditCardDetails: CreditCardDetails? = nil, imageData: Data? = nil, autopayEnabled: Bool = false, notes: String? = nil, autopaySource: String? = nil, gracePeriodDays: Int? = nil) {
+    public init(name: String?, amount: Double?, dueDate: Date?, category: BillCategory?, recurrenceInterval: Int?, recurrenceUnit: RecurrenceUnit?, creditCardDetails: CreditCardDetails? = nil, imageData: Data? = nil, autopayEnabled: Bool = false, notes: String? = nil, autopaySource: String? = nil, gracePeriodDays: Int? = nil, paymentURLString: String? = nil, paymentMethodID: UUID? = nil, lifecycleState: BillLifecycleState = .active, lifecycleUpdatedAt: Date? = nil, plaidAccountID: String? = nil, plaidItemID: String? = nil, plaidInstitutionID: String? = nil, plaidUpdatedAt: Date? = nil, plaidUnavailable: Bool = false) {
         self.name = name
         self.amount = amount
         self.dueDate = dueDate
@@ -223,6 +489,15 @@ public class Bill {
         self.notes = notes
         self.autopaySource = autopaySource
         self.gracePeriodDays = gracePeriodDays
+        self.paymentURLString = paymentURLString
+        self.paymentMethodID = paymentMethodID
+        self.lifecycleStateRaw = lifecycleState == .active ? nil : lifecycleState.rawValue
+        self.lifecycleUpdatedAt = lifecycleUpdatedAt
+        self.plaidAccountID = plaidAccountID
+        self.plaidItemID = plaidItemID
+        self.plaidInstitutionID = plaidInstitutionID
+        self.plaidUpdatedAt = plaidUpdatedAt
+        self.plaidUnavailable = plaidUnavailable
     }
     
     public func makePayment(of amount: Double) {
@@ -269,20 +544,20 @@ public enum Status: Codable, Equatable {
     public var color: Color {
         switch self {
         case .paid:
-            return .green
+            return Color(red: 0.32, green: 0.54, blue: 0.30)
         case .overdue:
-            return .red
+            return Color(red: 0.62, green: 0.30, blue: 0.29)
         case .upcoming(let date):
             
             let daysDifference = Calendar.current.dateComponents([.day], from: .now, to: date).day ?? 0
             
             switch daysDifference {
             case 0...7:
-                return .orange
+                return Color(red: 0.70, green: 0.50, blue: 0.20)
             case 8...14:
-                return .yellow
+                return Color(red: 0.55, green: 0.42, blue: 0.27)
             default:
-                return .blue
+                return Color(red: 0.28, green: 0.48, blue: 0.62)
             }
         }
     }
@@ -290,6 +565,162 @@ public enum Status: Codable, Equatable {
 }
 
 extension Bill {
+    public var paymentURL: URL? {
+        Self.paymentURL(from: paymentURLString)
+    }
+
+    public static func normalizedPaymentURLString(from rawValue: String?) -> String? {
+        guard let rawValue else { return nil }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains(" ") else { return nil }
+
+        if let url = URL(string: trimmed), let scheme = url.scheme, !scheme.isEmpty {
+            let lowercasedScheme = scheme.lowercased()
+            if lowercasedScheme == "http" || lowercasedScheme == "https" {
+                return url.host == nil ? nil : trimmed
+            }
+            return trimmed
+        }
+
+        guard trimmed.contains(".") else { return nil }
+        return "https://\(trimmed)"
+    }
+
+    public static func paymentURL(from rawValue: String?) -> URL? {
+        guard let normalized = normalizedPaymentURLString(from: rawValue) else { return nil }
+        return URL(string: normalized)
+    }
+
+    public static func paymentHost(from rawValue: String?) -> String? {
+        paymentURL(from: rawValue)?.host?.replacingOccurrences(of: "www.", with: "")
+    }
+
+    public var paymentHost: String? {
+        Self.paymentHost(from: paymentURLString)
+    }
+
+    public func normalizePaymentURLString() {
+        paymentURLString = Self.normalizedPaymentURLString(from: paymentURLString)
+    }
+
+    public var hasValidPaymentURL: Bool {
+        paymentURL != nil
+    }
+
+    public var paymentModeTitle: String {
+        autopayEnabled ? "Autopay" : "Manual"
+    }
+
+    public var paymentModeIcon: String {
+        autopayEnabled ? "arrow.triangle.2.circlepath" : "hand.tap"
+    }
+
+    public func paymentMethod(in paymentMethods: [PaymentMethod]) -> PaymentMethod? {
+        guard let paymentMethodID else { return nil }
+        return paymentMethods.first { $0.id == paymentMethodID }
+    }
+
+    public func paymentMethodName(in paymentMethods: [PaymentMethod]) -> String? {
+        paymentMethod(in: paymentMethods)?.displayName ?? autopaySource
+    }
+
+    public func updatePaymentSettings(
+        autopayEnabled: Bool,
+        paymentMethodID: UUID?,
+        autopaySource: String?,
+        gracePeriodDays: Int
+    ) {
+        self.autopayEnabled = autopayEnabled
+        self.paymentMethodID = paymentMethodID
+
+        let normalizedSource = autopaySource?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.autopaySource = autopayEnabled && normalizedSource?.isEmpty == false ? normalizedSource : nil
+        self.gracePeriodDays = gracePeriodDays > 0 ? gracePeriodDays : nil
+    }
+
+    public var lifecycleState: BillLifecycleState {
+        get {
+            guard let lifecycleStateRaw else { return .active }
+            return BillLifecycleState(rawValue: lifecycleStateRaw) ?? .active
+        }
+        set {
+            lifecycleStateRaw = newValue == .active ? nil : newValue.rawValue
+            lifecycleUpdatedAt = .now
+        }
+    }
+
+    public var isActive: Bool {
+        lifecycleState == .active
+    }
+
+    public var isPaused: Bool {
+        lifecycleState == .paused
+    }
+
+    public var isCanceled: Bool {
+        lifecycleState == .canceled
+    }
+
+    public var isSubscriptionLike: Bool {
+        category?.isSubscriptionCategory == true || recurrenceInterval != nil
+    }
+
+    public var displayStatusName: String {
+        lifecycleState == .active ? (status?.name ?? "Unknown") : lifecycleState.title
+    }
+
+    public var displayStatusColor: Color {
+        lifecycleState == .active ? (status?.color ?? .secondary) : lifecycleState.color
+    }
+
+    public func delay(to newDueDate: Date) {
+        lifecycleState = .active
+        dueDate = newDueDate
+        datePaid = nil
+        checkStatus()
+    }
+
+    public func skipNextOccurrence(calendar: Calendar = .current) {
+        let nextDate = nextOccurrenceDate(calendar: calendar) ??
+            calendar.date(byAdding: .month, value: 1, to: dueDate ?? .now) ??
+            .now
+        delay(to: nextDate)
+    }
+
+    public func pause(on date: Date = .now) {
+        lifecycleState = .paused
+        lifecycleUpdatedAt = date
+        datePaid = nil
+        status = .paid
+    }
+
+    public func cancel(on date: Date = .now) {
+        lifecycleState = .canceled
+        lifecycleUpdatedAt = date
+        datePaid = nil
+        status = .paid
+    }
+
+    public func resume(nextDueDate: Date) {
+        lifecycleState = .active
+        dueDate = nextDueDate
+        datePaid = nil
+        checkStatus()
+    }
+
+    public func nextOccurrenceDate(calendar: Calendar = .current) -> Date? {
+        guard
+            let dueDate,
+            let recurrenceUnit,
+            let recurrenceInterval
+        else {
+            return calendar.date(byAdding: .month, value: 1, to: self.dueDate ?? .now)
+        }
+
+        return advance(date: dueDate, unit: recurrenceUnit, interval: recurrenceInterval, calendar: calendar)
+    }
+
     
     // MARK: - Sorting
     
@@ -365,6 +796,11 @@ extension Bill {
     // MARK: - Functions
     
     public func checkStatus() {
+        guard lifecycleState == .active else {
+            status = .paid
+            return
+        }
+
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         guard let dueDate = self.dueDate else {
@@ -529,7 +965,7 @@ extension Bill {
 extension Bill {
     @MainActor static var preview: ModelContainer {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        guard let container = try? ModelContainer(for: Bill.self, Transaction.self, AuditEvent.self, configurations: config) else {
+        guard let container = try? ModelContainer(for: Bill.self, Transaction.self, AuditEvent.self, PaymentMethod.self, configurations: config) else {
             preconditionFailure("Failed to create in-memory preview container for Bill.")
         }
         let context = container.mainContext
@@ -538,6 +974,65 @@ extension Bill {
             context.insert(bill)
         }
         return container
+    }
+}
+
+public enum PaymentMethodSyncService {
+    @discardableResult
+    public static func syncCreditCardPaymentMethods(
+        bills: [Bill],
+        paymentMethods: [PaymentMethod],
+        context: ModelContext
+    ) -> Bool {
+        var didChange = false
+        let creditCardBills = bills.filter { $0.category == .creditCard }
+        let methodsByBillID = Dictionary(
+            paymentMethods
+                .filter { $0.type == .creditCard }
+                .compactMap { method -> (UUID, PaymentMethod)? in
+                    guard let billID = method.linkedBillID else { return nil }
+                    return (billID, method)
+                },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        for bill in creditCardBills {
+            if let method = methodsByBillID[bill.id] {
+                let oldName = method.name
+                let oldInstitution = method.institutionName
+                let oldLastFour = method.lastFourDigits
+                method.updateCreditCardMirror(from: bill)
+                didChange = didChange ||
+                    oldName != method.name ||
+                    oldInstitution != method.institutionName ||
+                    oldLastFour != method.lastFourDigits
+            } else {
+                let method = PaymentMethod(
+                    name: bill.name ?? "Credit Card",
+                    type: .creditCard,
+                    institutionName: bill.creditCardDetails?.issuerName,
+                    lastFourDigits: bill.creditCardDetails?.lastFourDigits,
+                    linkedBillID: bill.id,
+                    plaidAccountID: bill.plaidAccountID,
+                    plaidItemID: bill.plaidItemID,
+                    plaidInstitutionID: bill.plaidInstitutionID,
+                    plaidUpdatedAt: bill.plaidUpdatedAt
+                )
+                context.insert(method)
+                didChange = true
+            }
+        }
+
+        let activeCreditCardIDs = Set(creditCardBills.map(\.id))
+        for method in paymentMethods where method.isCreditCardMirror {
+            guard let linkedBillID = method.linkedBillID, !activeCreditCardIDs.contains(linkedBillID) else {
+                continue
+            }
+            context.delete(method)
+            didChange = true
+        }
+
+        return didChange
     }
 }
 
@@ -602,40 +1097,43 @@ extension Bills {
         
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: .now)
+        let dueCandidates = self.withoutCreditCards.filter { bill in
+            bill.lifecycleState == .active
+        }
         
         var bills = Bills()
         
         switch timeframe {
         case .overdue:
-            bills = self.withoutCreditCards.filter {
+            bills = dueCandidates.filter {
                 guard let dueDate = $0.dueDate else { return false }
                 let dueDay = calendar.startOfDay(for: dueDate)
                 let diff = calendar.dateComponents([.day], from: today, to: dueDay).day ?? 0
                 return diff < 0
             }
         case .today:
-            bills = self.withoutCreditCards.filter {
+            bills = dueCandidates.filter {
                 guard let dueDate = $0.dueDate else { return false }
                 let dueDay = calendar.startOfDay(for: dueDate)
                 let diff = calendar.dateComponents([.day], from: today, to: dueDay).day ?? 0
                 return diff == 0
             }
         case .tomorrow:
-            bills = self.withoutCreditCards.filter {
+            bills = dueCandidates.filter {
                 guard let dueDate = $0.dueDate else { return false }
                 let dueDay = calendar.startOfDay(for: dueDate)
                 let diff = calendar.dateComponents([.day], from: today, to: dueDay).day ?? 0
                 return diff == 1
             }
         case .thisWeek:
-            bills = self.withoutCreditCards.filter {
+            bills = dueCandidates.filter {
                 guard let dueDate = $0.dueDate else { return false }
                 let dueDay = calendar.startOfDay(for: dueDate)
                 let diff = calendar.dateComponents([.day], from: today, to: dueDay).day ?? 0
                 return diff >= 2 && diff <= 7
             }
         case .thisMonth:
-            bills = self.withoutCreditCards.filter {
+            bills = dueCandidates.filter {
                 guard let dueDate = $0.dueDate else { return false }
                 
                 let dueDay = calendar.startOfDay(for: dueDate)
@@ -650,7 +1148,7 @@ extension Bills {
                 
             }
         case .later:
-            bills = self.withoutCreditCards.filter {
+            bills = dueCandidates.filter {
                 guard let dueDate = $0.dueDate else { return false }
                 
                 let month = calendar.component(.month, from: today)

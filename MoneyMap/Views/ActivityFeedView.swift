@@ -21,11 +21,12 @@ struct ActivityFeedView: View {
     var body: some View {
         List {
             if filteredEvents.isEmpty {
-                ContentUnavailableView(
-                    "No Activity Yet",
-                    systemImage: "clock.arrow.circlepath",
-                    description: Text("Changes to bills, cards, goals, and recommendations will appear here.")
+                MoneyMapEmptyState(
+                    title: "No Activity Yet",
+                    message: "Changes to bills, cards, goals, and recommendations will appear here.",
+                    systemImage: "clock.arrow.circlepath"
                 )
+                .listRowBackground(MoneyMapDesign.surfaceBackground)
             } else {
                 ForEach(groupedEvents, id: \.dateKey) { group in
                     Section(group.label) {
@@ -35,9 +36,13 @@ struct ActivityFeedView: View {
                             }
                         }
                     }
+                    .listRowBackground(MoneyMapDesign.surfaceBackground)
                 }
             }
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(MoneyMapDesign.groupedBackground)
         .navigationTitle(title)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {

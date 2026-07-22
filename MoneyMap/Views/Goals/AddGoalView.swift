@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import SwiftData
 import ImagePlayground
 import PhotosUI
 
@@ -31,7 +32,6 @@ struct AddGoalView: View {
     @State private var isLoading: Bool = false
     @State private var errorMessage: String? = nil
     
-    @State private var choosingSavedImage: Bool = false
     @State private var showingPriorityOptions = false
     @State private var showingImageOptions = false
     
@@ -43,6 +43,7 @@ struct AddGoalView: View {
                     Text("You can create this goal now. Add your payday later if you want paycheck pacing and better recommendations.")
                         .foregroundStyle(.secondary)
                 }
+                .listRowBackground(MoneyMapDesign.surfaceBackground)
             }
                 
             Section(header: Text("Goal Details")) {
@@ -73,6 +74,7 @@ struct AddGoalView: View {
                 }
                 
             }
+            .listRowBackground(MoneyMapDesign.surfaceBackground)
             
             Section("Target Date") {
                 DatePicker("Deadline", selection: $deadline, displayedComponents: .date)
@@ -80,16 +82,17 @@ struct AddGoalView: View {
                 
                 if paydayManager.nextPayday != nil && computedPaydayCount == nil {
                     Text("Deadline must be after your next payday.")
-                        .foregroundColor(.red)
+                        .foregroundStyle(MoneyMapDesign.attentionRed)
                 }
             }
+            .listRowBackground(MoneyMapDesign.surfaceBackground)
             
             Section("More Options") {
                 DisclosureGroup("Priority", isExpanded: $showingPriorityOptions) {
                     Picker("Priority", selection: $priority) {
                         HStack(spacing: 15) {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
+                                .foregroundStyle(MoneyMapDesign.attentionRed)
                             Text("High")
                         }
                         .tag(2.0)
@@ -118,7 +121,7 @@ struct AddGoalView: View {
                             .resizable()
                             .scaledToFill()
                             .frame(height: 200)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .clipShape(RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius))
                             .listRowInsets(EdgeInsets())
 
                         Button("Remove Image") {
@@ -130,14 +133,18 @@ struct AddGoalView: View {
                     }
                 }
             }
+            .listRowBackground(MoneyMapDesign.surfaceBackground)
             
             if let errorMessage = errorMessage {
                 Section {
-                    Text(errorMessage)
-                        .foregroundColor(.red)
+                    Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(MoneyMapDesign.attentionRed)
                 }
+                .listRowBackground(MoneyMapDesign.surfaceBackground)
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(MoneyMapDesign.groupedBackground)
         .navigationTitle("New Goal")
         .imagePlaygroundSheet(isPresented: $creatingImage, concept: name, onCompletion: { url in
             Task {
@@ -206,39 +213,26 @@ struct AddGoalView: View {
     
     var imagePicker: some View {
         Group {
-            Button {
-                creatingImage = true
-            } label: {
-                HStack {
-                    Image(systemName: "apple.image.playground")
-                        .frame(width: 27, alignment: .center)
-                        .foregroundStyle(.pink)
-                        
-                    Text("Image Playground")
-                        .foregroundStyle(Color.primary)
+            if supportsImagePlayground {
+                Button {
+                    creatingImage = true
+                } label: {
+                    MoneyMapActionListRow(
+                        title: "Image Playground",
+                        detail: "Generate an image for this goal.",
+                        systemImage: "apple.image.playground",
+                        tint: .pink
+                    )
                 }
+                .buttonStyle(.plain)
             }
             PhotosPicker(selection: $selectedItem, matching: .images) {
-                HStack {
-                    Image(systemName: "photo.on.rectangle.angled")
-                        .frame(width: 27, alignment: .center)
-                        .foregroundStyle(.blue)
-                        
-                    Text("Photos")
-                        .foregroundStyle(Color.primary)
-                }
-            }
-            Button {
-                
-            } label: {
-                HStack {
-                    Image(systemName: "photo.badge.checkmark")
-                        .frame(width: 27, alignment: .center)
-                        .foregroundStyle(.green)
-                        
-                    Text("Saved Images")
-                        .foregroundStyle(Color.primary)
-                }
+                MoneyMapActionListRow(
+                    title: "Photos",
+                    detail: "Choose an image from your photo library.",
+                    systemImage: "photo.on.rectangle.angled",
+                    tint: .blue
+                )
             }
         }
     }

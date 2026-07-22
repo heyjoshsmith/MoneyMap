@@ -6,7 +6,7 @@
 //
 
 import Foundation
-import UserNotifications
+@preconcurrency import UserNotifications
 import WidgetKit
 
 final class NotificationManager: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
@@ -24,6 +24,27 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
 
     weak var deepLinkManager: DeepLinkManager?
 
+    private struct BillReminderCandidate: Sendable {
+        let billID: UUID
+        let name: String
+        let amount: Double
+        let dueDate: Date
+        let reminderDate: Date
+        let autopayEnabled: Bool
+    }
+
+    private struct GoalReminderPlan: Sendable {
+        let requests: [GoalReminderRequest]
+        let activeIdentifiers: Set<String>
+    }
+
+    private struct GoalReminderRequest: Sendable {
+        let identifier: String
+        let date: Date
+        let title: String
+        let body: String
+    }
+
     func attach(deepLinkManager: DeepLinkManager) {
         self.deepLinkManager = deepLinkManager
         configureCenter()
@@ -33,22 +54,60 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         registerCategories()
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+    }
+
+    func requestAuthorizationIfNeeded(completion: ((Bool) -> Void)? = nil) {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            if Self.canDeliverNotifications(settings) {
+                completion?(true)
+                return
+            }
+
+            guard settings.authorizationStatus == .notDetermined else {
+                completion?(false)
+                return
+            }
+
+            center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+                completion?(granted)
+            }
+        }
     }
 
     func scheduleBillDueNotifications(for bills: [Bill]) {
-        let center = UNUserNotificationCenter.current()
+        let candidates = billReminderCandidates(for: bills)
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard Self.canDeliverNotifications(settings) else { return }
+            Task { @MainActor in
+                self.scheduleAuthorizedBillDueNotifications(for: candidates)
+            }
+        }
+    }
+
+    private func billReminderCandidates(for bills: [Bill]) -> [BillReminderCandidate] {
         let now = Date()
 
-        let candidates = bills.compactMap { bill -> (Bill, Date)? in
+        return bills.compactMap { bill -> BillReminderCandidate? in
             guard bill.datePaid == nil, let dueDate = bill.dueDate else { return nil }
             guard let reminderDate = reminderDate(for: dueDate), reminderDate > now.addingTimeInterval(60) else {
                 return nil
             }
-            return (bill, reminderDate)
+            return BillReminderCandidate(
+                billID: bill.id,
+                name: bill.name ?? "Your bill",
+                amount: bill.amount ?? 0,
+                dueDate: dueDate,
+                reminderDate: reminderDate,
+                autopayEnabled: bill.autopayEnabled
+            )
         }
+    }
 
-        let activeIdentifiers = Set(candidates.map { reminderIdentifier(for: $0.0.id) })
+    @MainActor
+    private func scheduleAuthorizedBillDueNotifications(for candidates: [BillReminderCandidate]) {
+        let center = UNUserNotificationCenter.current()
+        let activeIdentifiers = Set(candidates.map { reminderIdentifier(for: $0.billID) })
         center.getPendingNotificationRequests { requests in
             let stale = requests
                 .map(\.identifier)
@@ -58,26 +117,25 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
             }
         }
 
-        for (bill, date) in candidates {
+        for candidate in candidates {
             let content = UNMutableNotificationContent()
-            let name = bill.name ?? "Your bill"
-            let amount = MoneyMapFormatters.currencyString(for: bill.amount ?? 0)
-            let dueText = MoneyMapFormatters.mediumDateString(for: bill.dueDate ?? date)
-            content.title = bill.autopayEnabled ? "Autopay Bill Due Soon" : "Bill Due Soon"
-            content.body = bill.autopayEnabled
-                ? "\(name) for \(amount) is due \(dueText). Autopay is on, so no manual checkoff is needed."
-                : "\(name) for \(amount) is due \(dueText)."
+            let amount = MoneyMapFormatters.currencyString(for: candidate.amount)
+            let dueText = MoneyMapFormatters.mediumDateString(for: candidate.dueDate)
+            content.title = candidate.autopayEnabled ? "Autopay Bill Due Soon" : "Bill Due Soon"
+            content.body = candidate.autopayEnabled
+                ? "\(candidate.name) for \(amount) is due \(dueText). Autopay is on, so no manual checkoff is needed."
+                : "\(candidate.name) for \(amount) is due \(dueText)."
             content.sound = .default
-            content.categoryIdentifier = bill.autopayEnabled ? Self.autopayBillDueCategoryID : Self.billDueCategoryID
-            content.userInfo = [Self.billIDUserInfoKey: bill.id.uuidString]
+            content.categoryIdentifier = candidate.autopayEnabled ? Self.autopayBillDueCategoryID : Self.billDueCategoryID
+            content.userInfo = [Self.billIDUserInfoKey: candidate.billID.uuidString]
 
             let triggerDate = Calendar.current.dateComponents(
                 [.year, .month, .day, .hour, .minute],
-                from: date
+                from: candidate.reminderDate
             )
             let trigger = UNCalendarNotificationTrigger(dateMatching: triggerDate, repeats: false)
             let request = UNNotificationRequest(
-                identifier: reminderIdentifier(for: bill.id),
+                identifier: reminderIdentifier(for: candidate.billID),
                 content: content,
                 trigger: trigger
             )
@@ -91,15 +149,24 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     }
 
     func scheduleGoalProgressNotifications(for goals: [Goal], nextPayday: Date?) {
-        let center = UNUserNotificationCenter.current()
+        let plan = goalReminderPlan(for: goals, nextPayday: nextPayday)
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard Self.canDeliverNotifications(settings) else { return }
+            Task { @MainActor in
+                self.scheduleAuthorizedGoalProgressNotifications(plan)
+            }
+        }
+    }
+
+    private func goalReminderPlan(for goals: [Goal], nextPayday: Date?) -> GoalReminderPlan {
         let shouldNotify = boolSetting(for: Self.notifyGoalBehindEnabledKey, defaultValue: true)
         let insights = FinancialPlanningEngine.goalProgressInsights(goals: goals, nextPayday: nextPayday)
             .filter(\.isBehindSchedule)
+        var requests: [GoalReminderRequest] = []
         var activeIdentifiers: Set<String> = []
 
         guard shouldNotify, !insights.isEmpty else {
-            clearPendingGoalNotifications()
-            return
+            return GoalReminderPlan(requests: [], activeIdentifiers: [])
         }
 
         if let nextPayday, let reminderDate = scheduledDate(on: nextPayday) {
@@ -115,13 +182,12 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
 
             let identifier = "\(Self.goalReminderPrefix)payday"
             activeIdentifiers.insert(identifier)
-            scheduleNotification(
-                center: center,
+            requests.append(GoalReminderRequest(
                 identifier: identifier,
                 date: reminderDate,
                 title: "Goal Check-In",
                 body: body
-            )
+            ))
         }
 
         for insight in insights.prefix(3) {
@@ -135,12 +201,33 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
 
             let identifier = "\(Self.goalDeadlineReminderPrefix)\(goal.id.uuidString)"
             activeIdentifiers.insert(identifier)
-            scheduleNotification(
-                center: center,
+            requests.append(GoalReminderRequest(
                 identifier: identifier,
                 date: reminderDate,
                 title: "Goal Deadline Coming Up",
                 body: "\(insight.goalName) is behind by about \(MoneyMapFormatters.currencyString(for: insight.shortfallAmount))."
+            ))
+        }
+
+        return GoalReminderPlan(requests: requests, activeIdentifiers: activeIdentifiers)
+    }
+
+    @MainActor
+    private func scheduleAuthorizedGoalProgressNotifications(_ plan: GoalReminderPlan) {
+        let center = UNUserNotificationCenter.current()
+
+        guard !plan.requests.isEmpty else {
+            clearPendingGoalNotifications()
+            return
+        }
+
+        for request in plan.requests {
+            scheduleNotification(
+                center: center,
+                identifier: request.identifier,
+                date: request.date,
+                title: request.title,
+                body: request.body
             )
         }
 
@@ -149,11 +236,20 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
                 .map(\.identifier)
                 .filter {
                     ($0.hasPrefix(Self.goalReminderPrefix) || $0.hasPrefix(Self.goalDeadlineReminderPrefix)) &&
-                    !activeIdentifiers.contains($0)
+                    !plan.activeIdentifiers.contains($0)
                 }
             if !stale.isEmpty {
                 center.removePendingNotificationRequests(withIdentifiers: stale)
             }
+        }
+    }
+
+    static func canDeliverNotifications(_ settings: UNNotificationSettings) -> Bool {
+        switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            return true
+        default:
+            return false
         }
     }
 

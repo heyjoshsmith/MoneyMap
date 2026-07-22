@@ -30,29 +30,27 @@ struct SyncStatusView: View {
       NavigationStack {
           List {
               Section {
-                  HStack {
-                      Text("Account")
-                      Spacer()
-                      Text(status.accountStatus.displayName)
-                          .foregroundStyle(.secondary)
-                  }
+                  MoneyMapSummaryRow(
+                      title: "Account",
+                      value: status.accountStatus.displayName,
+                      detail: syncMgr.isSyncing ? "Syncing" : lastSyncText,
+                      systemImage: status.accountStatus == .available ? "icloud" : "exclamationmark.icloud",
+                      tint: status.accountStatus == .available ? MoneyMapDesign.calmGreen : MoneyMapDesign.warningGold
+                  )
                   
                   if syncMgr.isSyncing {
                       ProgressView("Syncing…")
-                  } else {
-                      HStack {
-                          Text("Last Sync")
-                          Spacer()
-                          Text(syncMgr.lastSyncDate.map { DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .short) }
-                               ?? "Never")
-                          .foregroundStyle(.secondary)
-                      }
                   }
               }
+              .listRowBackground(MoneyMapDesign.surfaceBackground)
               
               Section("Records") {
                   if syncMgr.recordCounts.isEmpty {
-                      Text("No Records Found")
+                      MoneyMapEmptyState(
+                          title: "No Records Found",
+                          message: "CloudKit records will appear here after sync.",
+                          systemImage: "tray"
+                      )
                   } else {
                       ForEach(syncMgr.recordCounts.sorted { $0.key < $1.key }, id: \.key) { type, count in
                           HStack {
@@ -63,18 +61,31 @@ struct SyncStatusView: View {
                       }
                   }
               }
+              .listRowBackground(MoneyMapDesign.surfaceBackground)
               
               Section {
-                  Button("Sync Now") {
+                  Button {
                     syncMgr.syncNow()
                     syncMgr.refreshAllCounts()
+                  } label: {
+                      MoneyMapActionListRow(
+                          title: "Sync Now",
+                          detail: "Refresh iCloud record counts.",
+                          systemImage: "arrow.triangle.2.circlepath",
+                          tint: MoneyMapDesign.calmGreen
+                      )
                   }
+                  .buttonStyle(.plain)
               }
+              .listRowBackground(MoneyMapDesign.surfaceBackground)
               
           }
           .refreshable {
               status.refresh()
           }
+          .listStyle(.insetGrouped)
+          .scrollContentBackground(.hidden)
+          .background(MoneyMapDesign.groupedBackground)
           .navigationTitle("iCloud Status")
           .onAppear {
             status.refresh()
@@ -83,6 +94,10 @@ struct SyncStatusView: View {
             syncMgr.fetchRecordCount(ofType: "PaydayConfig")
           }
       }
+  }
+
+  private var lastSyncText: String {
+      syncMgr.lastSyncDate.map { DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .short) } ?? "Never synced"
   }
 }
 

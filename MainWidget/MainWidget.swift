@@ -103,32 +103,7 @@ private enum WidgetPalette {
     )
 
     static func accent(for category: BillCategory?) -> Color {
-        switch category {
-        case .creditCard:
-            return .blue
-        case .rent:
-            return .green
-        case .utilities:
-            return .yellow
-        case .insurance:
-            return .orange
-        case .subscription:
-            return .purple
-        case .groceries:
-            return .red
-        case .transportation:
-            return .pink
-        case .phone:
-            return .mint
-        case .internet:
-            return .indigo
-        case .entertainment:
-            return .teal
-        case .other, .none:
-            return .gray
-        @unknown default:
-            return .gray
-        }
+        category?.color ?? .gray
     }
 
     static func icon(for category: BillCategory?) -> String {
@@ -724,32 +699,7 @@ struct NextBillWidgetView: View {
     }
 
     private func categoryLabel(for category: BillCategory?) -> String {
-        switch category {
-        case .creditCard:
-            return "Credit card"
-        case .rent:
-            return "Housing"
-        case .utilities:
-            return "Utilities"
-        case .insurance:
-            return "Insurance"
-        case .subscription:
-            return "Subscription"
-        case .groceries:
-            return "Groceries"
-        case .transportation:
-            return "Transportation"
-        case .phone:
-            return "Phone"
-        case .internet:
-            return "Internet"
-        case .entertainment:
-            return "Entertainment"
-        case .other, .none:
-            return "Bill"
-        @unknown default:
-            return "Bill"
-        }
+        category?.name ?? "Bill"
     }
 
     private func priorityLabel(for dueDate: Date) -> String {

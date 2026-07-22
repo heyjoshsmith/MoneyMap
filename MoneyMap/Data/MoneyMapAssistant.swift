@@ -69,6 +69,7 @@ private struct MoneyMapContextTool: Tool {
         let dueBeforePayday = bills.filter { bill in
             guard let nextPayday = snapshot.nextPayday,
                   let dueDate = bill.dueDate,
+                  bill.lifecycleState == .active,
                   bill.status != .paid else {
                 return false
             }
@@ -78,7 +79,7 @@ private struct MoneyMapContextTool: Tool {
         let billLines = bills.prefix(8).map { bill in
             let amount = MoneyMapFormatters.currencyString(for: bill.amount ?? 0)
             let due = bill.dueDate.map(MoneyMapFormatters.mediumDateString(for:)) ?? "No due date"
-            let status = bill.status?.name ?? "Unknown"
+            let status = bill.displayStatusName
             return "- Bill: \(bill.name ?? "Untitled"), amount \(amount), due \(due), status \(status)"
         }
 

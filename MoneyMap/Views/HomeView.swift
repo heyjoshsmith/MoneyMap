@@ -28,7 +28,10 @@ struct HomeView: View {
     @State private var destination: HomeNavigationTarget?
     @State private var showingAddBill = false
     @State private var showingAddGoal = false
+    @State private var showingSettings = false
+    @State private var showingBillReview = false
     @State private var billsRefreshToken = 0
+    @State private var didScheduleInitialDonations = false
 
     private var today: Date {
         Calendar.current.startOfDay(for: Date())
@@ -50,6 +53,27 @@ struct HomeView: View {
         paydayConfigs.first?.amountPerPayday ?? 0
     }
 
+    private var setupIsComplete: Bool {
+        hasPayday && hasBills
+    }
+
+    private var activeGoals: [Goal] {
+        goals.filter { $0.remainingAmount > 0 }
+    }
+
+    private var dueBeforePaydayTotal: Double {
+        billsBeforePayday.totalAmount
+    }
+
+    private var billsForReview: [Bill] {
+        overdueBills.isEmpty ? billsBeforePayday : overdueBills
+    }
+
+    private var leftAfterBills: Double? {
+        guard payAmount > 0 else { return nil }
+        return payAmount - dueBeforePaydayTotal
+    }
+
     private var billsBeforePayday: [Bill] {
         guard let nextPayday = paydayManager.nextPayday else { return [] }
         return bills.withoutCreditCards
@@ -67,25 +91,6 @@ struct HomeView: View {
                 return Calendar.current.startOfDay(for: dueDate) < today && bill.status != .paid
             }
             .sorted(by: Bill.byDate)
-    }
-
-    private var nextAction: NextAction {
-        if !hasPayday {
-            return .setPayday
-        }
-        if !hasBills {
-            return .addBill
-        }
-        if !overdueBills.isEmpty {
-            return .reviewBills
-        }
-        if payAmount <= 0 {
-            return .planPaycheck
-        }
-        if !hasGoals {
-            return .addGoal
-        }
-        return .planPaycheck
     }
 
     private var setupSteps: [SetupStep] {
@@ -114,22 +119,126 @@ struct HomeView: View {
         ]
     }
 
+    private var todayAnswer: TodayAnswer {
+        if !hasPayday {
+            return TodayAnswer(
+                eyebrow: "First step",
+                title: "Set your next payday",
+                metric: "Start here",
+                detail: "MoneyMap uses payday timing to decide which bills and goals matter first.",
+                systemImage: "calendar.badge.plus",
+                tint: .blue,
+                actionTitle: "Set Payday",
+                action: .payday
+            )
+        }
+
+        if !hasBills {
+            return TodayAnswer(
+                eyebrow: "Next step",
+                title: "Add the bills you need to cover",
+                metric: "No bills yet",
+                detail: "Once bills are in, Today can show what needs attention before payday.",
+                systemImage: "list.bullet.clipboard",
+                tint: .blue,
+                actionTitle: "Add Bill",
+                action: .addBill
+            )
+        }
+
+        if !overdueBills.isEmpty {
+            return TodayAnswer(
+                eyebrow: "Needs attention",
+                title: "\(overdueBills.count) bill\(overdueBills.count == 1 ? "" : "s") overdue",
+                metric: MoneyMapFormatters.currencyString(for: overdueBills.totalAmount),
+                detail: "Handle overdue bills before using the paycheck plan.",
+                systemImage: "exclamationmark.triangle.fill",
+                tint: .red,
+                actionTitle: "Review Bills",
+                action: .reviewBills
+            )
+        }
+
+        if let leftAfterBills {
+            if leftAfterBills < 0 {
+                return TodayAnswer(
+                    eyebrow: "Before payday",
+                    title: "Payday needs attention",
+                    metric: "\(MoneyMapFormatters.currencyString(for: abs(leftAfterBills))) short",
+                    detail: "Bills due before payday are higher than the paycheck amount currently saved in MoneyMap.",
+                    systemImage: "exclamationmark.circle.fill",
+                    tint: .orange,
+                    actionTitle: "Plan Paycheck",
+                    action: .recommendations
+                )
+            }
+
+            if !hasGoals {
+                return TodayAnswer(
+                    eyebrow: "Before payday",
+                    title: dueBeforePaydayTotal > 0 ? "Bills are mapped through payday" : "No bills due before payday",
+                    metric: "\(MoneyMapFormatters.currencyString(for: leftAfterBills)) left",
+                    detail: "Add a savings goal when you want MoneyMap to guide what happens after bills.",
+                    systemImage: "checkmark.circle.fill",
+                    tint: .green,
+                    actionTitle: "Add Goal",
+                    action: .addGoal
+                )
+            }
+
+            return TodayAnswer(
+                eyebrow: "Before payday",
+                title: dueBeforePaydayTotal > 0 ? "You're covered through payday" : "No bills due before payday",
+                metric: "\(MoneyMapFormatters.currencyString(for: leftAfterBills)) left",
+                detail: "Use Plan when you're ready to split the remaining money across cards and goals.",
+                systemImage: "checkmark.circle.fill",
+                tint: .green,
+                actionTitle: "Plan Paycheck",
+                action: .recommendations
+            )
+        }
+
+        return TodayAnswer(
+            eyebrow: "Before payday",
+            title: "Ready for a paycheck plan",
+            metric: dueBeforePaydayTotal > 0 ? MoneyMapFormatters.currencyString(for: dueBeforePaydayTotal) : "No bills due",
+            detail: "Add the money you want to plan so MoneyMap can split it across bills, cards, and goals.",
+            systemImage: "wand.and.stars",
+            tint: .purple,
+            actionTitle: "Plan Paycheck",
+            action: .recommendations
+        )
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                if !hasPayday || !hasBills {
+                answerSection
+
+                if !setupIsComplete {
                     setupSection
                 }
 
-                overviewSection
-                nextActionSection
-                quickActionsSection
+                glanceSection
 
-                if !billsBeforePayday.isEmpty {
-                    dueBeforePaydaySection
+                if setupIsComplete {
+                    beforePaydaySection
+                }
+
+                actionsSection
+            }
+            .scrollContentBackground(.hidden)
+            .background(MoneyMapDesign.groupedBackground)
+            .navigationTitle("Today")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
                 }
             }
-            .navigationTitle("Home")
             .sheet(isPresented: $showingAddBill) {
                 BillEditor()
             }
@@ -137,6 +246,12 @@ struct HomeView: View {
                 NavigationStack {
                     AddGoalView()
                 }
+            }
+            .sheet(isPresented: $showingSettings) {
+                Settings()
+            }
+            .fullScreenCover(isPresented: $showingBillReview) {
+                BillReviewFlowView(bills: billsForReview)
             }
             .navigationDestination(item: $destination) { target in
                 switch target {
@@ -157,13 +272,12 @@ struct HomeView: View {
                     amountPerPayday: paydayConfig?.amountPerPayday,
                     savingsPerPaycheck: paydayConfig?.savingsPerPaycheck
                 )
-                activity.title = "Viewing Home"
+                activity.title = "Viewing Today"
                 activity.appEntityIdentifier = EntityIdentifier(for: entity)
             }
             .onAppear {
                 routeToRequestedDestinationIfNeeded()
-                MoneyMapIntentDonations.donateNextPayday()
-                MoneyMapIntentDonations.donateCashAfterBills()
+                scheduleInitialIntentDonations()
             }
             .onChange(of: deepLinkManager.requestedPayDestination) { _, _ in
                 routeToRequestedDestinationIfNeeded()
@@ -172,6 +286,16 @@ struct HomeView: View {
                 billsRefreshToken += 1
             }
         }
+    }
+
+    private var answerSection: some View {
+        Section {
+            let _ = billsRefreshToken
+            TodayAnswerPanel(answer: todayAnswer) {
+                run(todayAnswer.action)
+            }
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
     private var setupSection: some View {
@@ -186,19 +310,31 @@ struct HomeView: View {
                 }
             }
         }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
-    private var overviewSection: some View {
-        Section("Overview") {
+    private func scheduleInitialIntentDonations() {
+        guard !didScheduleInitialDonations else { return }
+        didScheduleInitialDonations = true
+
+        Task {
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            MoneyMapIntentDonations.donateNextPayday()
+            MoneyMapIntentDonations.donateCashAfterBills()
+        }
+    }
+
+    private var glanceSection: some View {
+        Section("At a Glance") {
             if let nextPayday = paydayManager.nextPayday {
-                HomeSummaryRow(
+                MoneyMapSummaryRow(
                     title: "Next Payday",
                     value: MoneyMapFormatters.mediumDateString(for: nextPayday),
                     detail: "\(paydayManager.daysUntilNextPayday()) day\(paydayManager.daysUntilNextPayday() == 1 ? "" : "s") away",
                     systemImage: "calendar"
                 )
             } else {
-                HomeSummaryRow(
+                MoneyMapSummaryRow(
                     title: "Next Payday",
                     value: "Not set",
                     detail: "Set it to unlock clearer planning.",
@@ -206,23 +342,23 @@ struct HomeView: View {
                 )
             }
 
-            HomeSummaryRow(
+            MoneyMapSummaryRow(
                 title: "Bills Before Payday",
                 value: "\(billsBeforePayday.count)",
                 detail: MoneyMapFormatters.currencyString(for: billsBeforePayday.totalAmount),
                 systemImage: "banknote"
             )
 
-            HomeSummaryRow(
+            MoneyMapSummaryRow(
                 title: "Goals",
                 value: "\(goals.count)",
-                detail: hasGoals ? "\(goals.filter { $0.remainingAmount > 0 }.count) still in progress" : "Optional for now",
+                detail: hasGoals ? "\(activeGoals.count) still in progress" : "Optional for now",
                 systemImage: "target"
             )
 
             if payAmount > 0 {
                 let leftAfterBills = max(payAmount - billsBeforePayday.totalAmount, 0)
-                HomeSummaryRow(
+                MoneyMapSummaryRow(
                     title: "Left After Bills",
                     value: MoneyMapFormatters.currencyString(for: leftAfterBills),
                     detail: "Based on your current paycheck amount",
@@ -230,46 +366,48 @@ struct HomeView: View {
                 )
             }
         }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
-    private var nextActionSection: some View {
-        Section("What To Do Next") {
-            VStack(alignment: .leading, spacing: 8) {
-                let _ = billsRefreshToken
-                Text(nextAction.title)
-                    .font(.headline)
-                Text(nextAction.detail)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Button(nextAction.buttonTitle) {
-                    run(nextAction.action)
-                }
-                    .buttonStyle(.borderedProminent)
-            }
-            .padding(.vertical, 4)
-        }
-    }
-
-    private var quickActionsSection: some View {
-        Section("Quick Actions") {
+    private var actionsSection: some View {
+        Section("Actions") {
             Button {
                 destination = .recommendations
                 MoneyMapIntentDonations.donatePaycheckPlan(availableCash: payAmount > 0 ? payAmount : nil)
             } label: {
-                Label("Plan This Paycheck", systemImage: "wand.and.stars")
+                MoneyMapActionListRow(
+                    title: "Plan This Paycheck",
+                    detail: "Review suggested card payments and goal contributions.",
+                    systemImage: "wand.and.stars"
+                )
             }
+            .buttonStyle(.plain)
 
-            Button {
-                destination = .upcomingBills
-            } label: {
-                Label("Review Upcoming Bills", systemImage: "calendar.badge.exclamationmark")
+            if !billsBeforePayday.isEmpty {
+                Button {
+                    destination = .upcomingBills
+                } label: {
+                    MoneyMapActionListRow(
+                        title: "Review Upcoming Bills",
+                        detail: "See every bill due before the next payday.",
+                        systemImage: "calendar.badge.exclamationmark",
+                        tint: .orange
+                    )
+                }
+                .buttonStyle(.plain)
             }
 
             Button {
                 destination = .assistant
             } label: {
-                Label("Search and Ask", systemImage: "magnifyingglass")
+                MoneyMapActionListRow(
+                    title: "Ask MoneyMap",
+                    detail: "Search your data or ask a question.",
+                    systemImage: "sparkles",
+                    tint: .purple
+                )
             }
+            .buttonStyle(.plain)
 
             Button {
                 showingAddBill = true
@@ -283,34 +421,34 @@ struct HomeView: View {
                 Label("Add Goal", systemImage: "target")
             }
         }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
-    private var dueBeforePaydaySection: some View {
-        Section("Due Before Payday") {
-            ForEach(billsBeforePayday.prefix(4)) { bill in
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Text(bill.name ?? "Untitled")
-                        Spacer()
-                        Text((bill.amount ?? 0), format: .currency(code: "USD"))
-                    }
-                    .font(.subheadline.weight(.semibold))
-
-                    if let dueDate = bill.dueDate {
-                        Text("Due \(MoneyMapFormatters.mediumDateString(for: dueDate))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+    private var beforePaydaySection: some View {
+        Section("Before Payday") {
+            if billsBeforePayday.isEmpty {
+                MoneyMapEmptyState(
+                    title: "Nothing due before payday",
+                    message: "Your next pay cycle has breathing room.",
+                    systemImage: "checkmark.circle"
+                )
+            } else {
+                ForEach(billsBeforePayday.prefix(4)) { bill in
+                    NavigationLink {
+                        BillView(bill: bill)
+                    } label: {
+                        TodayBillDueRow(bill: bill)
                     }
                 }
-                .padding(.vertical, 2)
-            }
 
-            if billsBeforePayday.count > 4 {
-                Button("See All Upcoming Bills") {
-                    destination = .upcomingBills
+                if billsBeforePayday.count > 4 {
+                    Button("See All Upcoming Bills") {
+                        destination = .upcomingBills
+                    }
                 }
             }
         }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
     private func routeToRequestedDestinationIfNeeded() {
@@ -328,6 +466,8 @@ struct HomeView: View {
             destination = .payday
         case .recommendations:
             destination = .recommendations
+        case .reviewBills:
+            showingBillReview = true
         case .upcomingBills:
             destination = .upcomingBills
         case .addBill:
@@ -376,107 +516,108 @@ private struct SetupStepRow: View {
     }
 }
 
-private struct HomeSummaryRow: View {
+private struct TodayAnswer {
+    let eyebrow: String
     let title: String
-    let value: String
+    let metric: String
     let detail: String
     let systemImage: String
+    let tint: Color
+    let actionTitle: String
+    let action: HomeAction
+}
+
+private struct TodayAnswerPanel: View {
+    let answer: TodayAnswer
+    let action: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: systemImage)
-                .foregroundStyle(.accent)
-                .frame(width: 24, alignment: .center)
+        VStack(alignment: .leading, spacing: 14) {
+            Label(answer.eyebrow, systemImage: answer.systemImage)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(answer.tint)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(answer.title)
+                    .font(.title3.weight(.semibold))
+                Text(answer.metric)
+                    .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                Text(answer.detail)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Text(value)
-                    .font(.headline)
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
+
+            Button(action: action) {
+                MoneyMapNeutralButtonLabel(
+                    title: answer.actionTitle,
+                    systemImage: answer.systemImage,
+                    iconColor: answer.tint,
+                    fillsWidth: false
+                )
+            }
+            .buttonStyle(.bordered)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct TodayBillDueRow: View {
+    let bill: Bill
+
+    private var dueText: String {
+        if bill.lifecycleState != .active {
+            return bill.lifecycleState.title
+        }
+        guard let dueDate = bill.dueDate else { return "No due date" }
+        if bill.status == .paid {
+            return "Paid"
+        }
+        if Calendar.current.startOfDay(for: dueDate) < Calendar.current.startOfDay(for: Date()) {
+            return "Overdue"
+        }
+        return "Due \(MoneyMapFormatters.mediumDateString(for: dueDate))"
+    }
+
+    private var statusColor: Color {
+        bill.displayStatusColor
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: bill.category?.icon ?? "questionmark.circle")
+                .font(.headline)
+                .foregroundStyle(statusColor)
+                .frame(width: 26)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(bill.name ?? "Untitled")
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(dueText)
+                    .font(.caption)
+                    .foregroundStyle(statusColor)
+            }
+
+            Spacer(minLength: 12)
+
+            MoneyMapMoneyText(amount: bill.amount ?? 0)
+        }
+        .padding(.vertical, 3)
     }
 }
 
 private enum HomeAction {
     case payday
     case recommendations
+    case reviewBills
     case upcomingBills
     case addBill
     case addGoal
-}
-
-private enum NextAction {
-    case setPayday
-    case addBill
-    case reviewBills
-    case planPaycheck
-    case addGoal
-
-    var title: String {
-        switch self {
-        case .setPayday:
-            return "Set your next payday first"
-        case .addBill:
-            return "Add your first bill"
-        case .reviewBills:
-            return "Review bills due before payday"
-        case .planPaycheck:
-            return "Plan what to do with this paycheck"
-        case .addGoal:
-            return "Add a goal if you want savings guidance"
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .setPayday:
-            return "That gives MoneyMap the timing it needs to organize everything else."
-        case .addBill:
-            return "Start with the bills you know are coming up next."
-        case .reviewBills:
-            return "You have unpaid bills that need attention before your next paycheck."
-        case .planPaycheck:
-            return "Use the planning engine once your payday and bills are in place."
-        case .addGoal:
-            return "Goals are optional, but they make the paycheck plan more useful."
-        }
-    }
-
-    var buttonTitle: String {
-        switch self {
-        case .setPayday:
-            return "Set Payday"
-        case .addBill:
-            return "Add Bill"
-        case .reviewBills:
-            return "Review Bills"
-        case .planPaycheck:
-            return "Plan Paycheck"
-        case .addGoal:
-            return "Add Goal"
-        }
-    }
-
-    var action: HomeAction {
-        switch self {
-        case .setPayday:
-            return .payday
-        case .addBill:
-            return .addBill
-        case .reviewBills:
-            return .upcomingBills
-        case .planPaycheck:
-            return .recommendations
-        case .addGoal:
-            return .addGoal
-        }
-    }
 }
 
 #Preview {

@@ -11,6 +11,17 @@ import SwiftData
 import MoneyMapShared
 import UIKit
 
+private enum ShareDesign {
+    static var groupedBackground: Color { MoneyMapSharedDesign.groupedBackground }
+    static var surfaceBackground: Color { MoneyMapSharedDesign.surfaceBackground }
+    static var controlBackground: Color { MoneyMapSharedDesign.controlBackground }
+    static var accent: Color { MoneyMapSharedDesign.calmGreen }
+    static var attention: Color { MoneyMapSharedDesign.attentionRed }
+    static var separator: Color { MoneyMapSharedDesign.separator }
+    static let cornerRadius = MoneyMapSharedDesign.cornerRadius
+    static let controlCornerRadius = MoneyMapSharedDesign.controlCornerRadius
+}
+
 @main
 struct ShareExtensionApp: App {
     let container: ModelContainer
@@ -47,107 +58,66 @@ struct ShareView: View {
     @State private var pageTitle: String?
 
     @State private var csvURLs: [URL] = []
+    @State private var isResolvingSharedContent = true
+    @State private var didStartResolvingSharedContent = false
+    @State private var sharedContentErrorMessage: String?
     
-    @State private var allBills: [Bill] = []
-    @State private var creditCards: [Bill] = []
-    @State private var isImporting = false
-    @State private var importErrorMessage: String?
-    @State private var fetchCreditCardsStatus: String? = nil
-
     var body: some View {
-        NavigationView {
-            if !csvURLs.isEmpty {
-                // Present CSV import UI with credit card picker
-                csvImporter
+        Group {
+            if isResolvingSharedContent {
+                NavigationStack {
+                    sharedContentLoadingView
+                }
+            } else if !csvURLs.isEmpty {
+                TransactionCSVImportGuideView(
+                    csvURLs: csvURLs,
+                    onFinished: { _ in
+                        context.completeRequest(returningItems: nil, completionHandler: nil)
+                    },
+                    onCancel: {
+                        context.cancelRequest(withError: NSError(domain: "UserCancelled", code: 0))
+                    }
+                )
             } else {
-                urlImporter
+                NavigationStack {
+                    urlImporter
+                }
             }
         }
+        .tint(ShareDesign.accent)
         .onAppear {
-            loadURL()
-            loadCSVURLs()
-            fetchModels()
+            startResolvingSharedContent()
         }
     }
-    
-    var csvImporter: some View {
-        Form {
-            
-            Section("Status") {
-                HStack {
-                    Text("Goals")
-                    Spacer()
-                    Text("\(existingGoals.count)")
-                }
-                HStack {
-                    Text("Bills")
-                    Spacer()
-                    Text("\(allBills.count)")
-                }
-                HStack {
-                    Text("Credit Cards")
-                    Spacer()
-                    Text("\(creditCards.count)")
+
+    private var sharedContentLoadingView: some View {
+        List {
+            Section {
+                HStack(spacing: 12) {
+                    ProgressView()
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Reading shared item")
+                            .font(.headline)
+                        Text("MoneyMap is checking for an Apple Card CSV.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
-            if creditCards.isEmpty && !isImporting {
-                Section("CSV Import") {
-                    Text("Found CSV files to import:")
-                        .font(.headline)
-                    ForEach(csvURLs, id: \.self) { csvURL in
-                        Text(csvURL.lastPathComponent)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Text("Loading credit cards...")
-                        .foregroundColor(.secondary)
-                    if let status = fetchCreditCardsStatus {
-                        if status.starts(with: "Failed") {
-                            Text(status)
-                                .foregroundColor(.red)
-                        } else {
-                            Text(status)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-            } else if !isImporting {
-                Section("CSV Import") {
-                    Text("Select a credit card to import CSV transactions:")
-                        .font(.headline)
-                    ForEach(creditCards) { bill in
-                        Button {
-                            importCSV(to: bill)
-                        } label: {
-                            HStack {
-                                Text(bill.name ?? "Unnamed Card")
-                                Spacer()
-                            }
-                        }
-                    }
-                    Button("Cancel CSV Import") {
-                        csvURLs.removeAll()
-                        fetchCreditCardsStatus = nil
-                    }
-                    .foregroundColor(.red)
-                }
-            }
-            if isImporting {
+            .listRowBackground(ShareDesign.surfaceBackground)
+
+            if let sharedContentErrorMessage {
                 Section {
-                    HStack {
-                        ProgressView()
-                        Text("Importing transactions...")
-                    }
+                    Label(sharedContentErrorMessage, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(ShareDesign.attention)
                 }
-            }
-            if let error = importErrorMessage {
-                Section {
-                    Text("Import failed: \(error)")
-                        .foregroundColor(.red)
-                }
+                .listRowBackground(ShareDesign.surfaceBackground)
             }
         }
-        .navigationTitle("Import CSV")
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(ShareDesign.groupedBackground)
+        .navigationTitle("Import")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") {
@@ -156,9 +126,38 @@ struct ShareView: View {
             }
         }
     }
-    
+
+    private func startResolvingSharedContent() {
+        guard !didStartResolvingSharedContent else { return }
+        didStartResolvingSharedContent = true
+
+        loadURL()
+        fetchModels()
+        loadCSVURLs()
+    }
+
+    var csvImporter: some View {
+        TransactionCSVImportGuideView(
+            csvURLs: csvURLs,
+            onFinished: { _ in
+                context.completeRequest(returningItems: nil, completionHandler: nil)
+            },
+            onCancel: {
+                context.cancelRequest(withError: NSError(domain: "UserCancelled", code: 0))
+            }
+        )
+    }
+
     var urlImporter: some View {
-        Form {
+        List {
+            if let sharedContentErrorMessage {
+                Section {
+                    Label(sharedContentErrorMessage, systemImage: "info.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .listRowBackground(ShareDesign.surfaceBackground)
+            }
+
             Section {
                 HStack(alignment: .center, spacing: 12) {
                     if let previewImage = previewImage {
@@ -177,64 +176,47 @@ struct ShareView: View {
                         if let url = pageURL, let host = url.host {
                             Text(host)
                                 .font(.subheadline)
-                                .foregroundColor(.secondary)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
             }
+            .listRowBackground(ShareDesign.surfaceBackground)
             
             Section("Destination") {
-                ScrollView(.horizontal) {
-                    HStack {
-                        Button {
-                            withAnimation {
-                                selectedGoal = nil
-                            }
-                        } label: {
-                            VStack(spacing: 0) {
-                                Image(systemName: "dollarsign.arrow.trianglehead.counterclockwise.rotate.90")
-                                    .resizable()
-                                    .scaledToFit()
-                                    .padding(30)
-                                    .frame(height: 100)
-                                Text("New Goal")
-                                    .padding(5)
-                            }
-                            .foregroundStyle(selectedGoal == nil ? .white : Color(uiColor: .label))
-                            .background(selectedGoal == nil ? .blue : Color(uiColor: .secondarySystemGroupedBackground))
-                            .clipShape(.rect(cornerRadius: 10))
-                        }
-                        ForEach(existingGoals) { goal in
-                            Button {
-                                withAnimation {
-                                    selectedGoal = goal
-                                }
-                            } label: {
-                                VStack(spacing: 0) {
-                                    if let img = goal.uiImage {
-                                        Image(uiImage: img)
-                                            .resizable()
-                                            .scaledToFill()
-                                            .frame(height: 100)
-                                            .clipShape(.rect(cornerRadius: 10))
-                                            .padding([.horizontal, .top],5)
-                                    } else {
-                                        Text("Could not load image")
-                                    }
-                                    Text(goal.name ?? "Unnamed Goal")
-                                        .padding(5)
-                                }
-                                .foregroundStyle(selectedGoal == goal ? .white : Color(uiColor: .label))
-                                .background(selectedGoal == goal ? .blue : Color(uiColor: .secondarySystemGroupedBackground))
-                                .clipShape(.rect(cornerRadius: 10))
-                            }
-                        }
+                Button {
+                    withAnimation {
+                        selectedGoal = nil
                     }
+                } label: {
+                    ShareDestinationRow(
+                        title: "New Goal",
+                        detail: "Create a goal from this link.",
+                        systemImage: "target",
+                        image: nil,
+                        isSelected: selectedGoal == nil
+                    )
                 }
-                .scrollIndicators(.hidden)
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
+                .buttonStyle(.plain)
+
+                ForEach(existingGoals) { goal in
+                    Button {
+                        withAnimation {
+                            selectedGoal = goal
+                        }
+                    } label: {
+                        ShareDestinationRow(
+                            title: goal.name ?? "Unnamed Goal",
+                            detail: "Save this link to an existing goal.",
+                            systemImage: "target",
+                            image: goal.uiImage,
+                            isSelected: selectedGoal == goal
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
             }
+            .listRowBackground(ShareDesign.surfaceBackground)
             
             if selectedGoal == nil {
                 Section("New Goal Details") {
@@ -261,7 +243,7 @@ struct ShareView: View {
                                             .cornerRadius(8)
                                             .overlay(
                                                 RoundedRectangle(cornerRadius: 8)
-                                                    .strokeBorder(selectedImage == allImages[idx] ? .blue : Color(uiColor: .separator), lineWidth: 1)
+                                                    .strokeBorder(selectedImage == allImages[idx] ? ShareDesign.accent : ShareDesign.separator, lineWidth: 1)
                                             )
                                             
                                     }
@@ -290,8 +272,12 @@ struct ShareView: View {
                     }
                     DatePicker("Deadline", selection: $selectedDeadline, displayedComponents: .date)
                 }
+                .listRowBackground(ShareDesign.surfaceBackground)
             }
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(ShareDesign.groupedBackground)
         .navigationTitle("Save Link")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
@@ -307,60 +293,13 @@ struct ShareView: View {
             }
         }
     }
-    
+
     private func fetchModels() {
-        // Changed to use FetchDescriptor initialization to mirror existingGoals fetching pattern for maintainability
         do {
-            
             let goalFetch = FetchDescriptor<Goal>()
             existingGoals = try modelContext.fetch(goalFetch)
-            
-            let billFetch = FetchDescriptor<Bill>()
-            allBills = try modelContext.fetch(billFetch)
-            creditCards = allBills.filter { $0.category == .creditCard }
-            
-            if creditCards.isEmpty {
-                fetchCreditCardsStatus = "No credit cards found. Found \(allBills.count) bills."
-            } else {
-                fetchCreditCardsStatus = "Found \(allBills.count) bills, \(creditCards.count) credit cards."
-            }
         } catch {
-            fetchCreditCardsStatus = "Failed to fetch credit cards: \(error.localizedDescription)"
-            creditCards = []
-        }
-    }
-    
-    private func importCSV(to bill: Bill) {
-        isImporting = true
-        importErrorMessage = nil
-        
-        DispatchQueue.global(qos: .userInitiated).async {
-            for url in csvURLs {
-                do {
-                    _ = try importTransactions(fromCSVAt: url, to: bill, context: modelContext)
-                } catch {
-                    DispatchQueue.main.async {
-                        importErrorMessage = error.localizedDescription
-                        isImporting = false
-                    }
-                    return
-                }
-            }
-            
-            do {
-                try modelContext.save()
-            } catch {
-                DispatchQueue.main.async {
-                    importErrorMessage = "Failed to save context: \(error.localizedDescription)"
-                    isImporting = false
-                }
-                return
-            }
-            
-            DispatchQueue.main.async {
-                isImporting = false
-                context.completeRequest(returningItems: nil, completionHandler: nil)
-            }
+            sharedContentErrorMessage = "MoneyMap could not load saved goals: \(error.localizedDescription)"
         }
     }
 
@@ -368,23 +307,176 @@ struct ShareView: View {
         guard
             let item = context.inputItems.first as? NSExtensionItem,
             let providers = item.attachments
-        else { return }
+        else {
+            isResolvingSharedContent = false
+            return
+        }
 
-        let csvType = UTType.commaSeparatedText.identifier
+        let candidateProviders = providers.compactMap { provider -> (NSItemProvider, String)? in
+            guard let identifier = preferredCSVTypeIdentifier(for: provider) else { return nil }
+            return (provider, identifier)
+        }
 
-        for provider in providers {
-            if provider.hasItemConformingToTypeIdentifier(csvType) {
-                provider.loadItem(forTypeIdentifier: csvType, options: nil as [AnyHashable:Any]?) { data, error in
-                    DispatchQueue.main.async {
-                        if let url = data as? URL {
-                            if !csvURLs.contains(url) {
-                                csvURLs.append(url)
-                            }
-                        }
+        guard !candidateProviders.isEmpty else {
+            isResolvingSharedContent = false
+            return
+        }
+
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var loadedURLs: [URL] = []
+        var errors: [String] = []
+
+        for (provider, identifier) in candidateProviders {
+            group.enter()
+            loadCSV(from: provider, typeIdentifier: identifier) { result in
+                lock.lock()
+                switch result {
+                case .success(let url):
+                    if let url, !loadedURLs.contains(url) {
+                        loadedURLs.append(url)
                     }
+                case .failure(let error):
+                    errors.append(error.localizedDescription)
+                }
+                lock.unlock()
+                group.leave()
+            }
+        }
+
+        group.notify(queue: .main) {
+            csvURLs = loadedURLs
+            if csvURLs.isEmpty, !errors.isEmpty {
+                sharedContentErrorMessage = errors.joined(separator: "\n")
+            }
+            isResolvingSharedContent = false
+        }
+    }
+
+    private func preferredCSVTypeIdentifier(for provider: NSItemProvider) -> String? {
+        let preferredIdentifiers = [
+            UTType.commaSeparatedText.identifier,
+            "public.comma-separated-values-text",
+            "public.delimited-values-text",
+            UTType.plainText.identifier,
+            UTType.text.identifier,
+            "public.file-url",
+            UTType.data.identifier
+        ]
+
+        for identifier in preferredIdentifiers where provider.hasItemConformingToTypeIdentifier(identifier) {
+            return identifier
+        }
+
+        return provider.registeredTypeIdentifiers.first { identifier in
+            guard identifier != UTType.url.identifier else { return false }
+            guard let type = UTType(identifier) else { return false }
+            return type.conforms(to: .commaSeparatedText)
+                || type.conforms(to: .plainText)
+                || type.conforms(to: .text)
+                || type.conforms(to: .data)
+        }
+    }
+
+    private func loadCSV(
+        from provider: NSItemProvider,
+        typeIdentifier: String,
+        completion: @escaping (Result<URL?, Error>) -> Void
+    ) {
+        provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { fileURL, _ in
+            if let fileURL {
+                do {
+                    completion(.success(try copySharedCSVFile(at: fileURL, suggestedName: provider.suggestedName)))
+                } catch {
+                    completion(.failure(error))
+                }
+                return
+            }
+
+            provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil as [AnyHashable:Any]?) { item, error in
+                if let error {
+                    completion(.failure(error))
+                    return
+                }
+
+                do {
+                    if let url = item as? URL, url.isFileURL {
+                        completion(.success(try copySharedCSVFile(at: url, suggestedName: provider.suggestedName)))
+                    } else if let data = item as? Data {
+                        completion(.success(try copySharedCSVData(data, suggestedName: provider.suggestedName)))
+                    } else if let text = item as? String, let data = text.data(using: .utf8) {
+                        completion(.success(try copySharedCSVData(data, suggestedName: provider.suggestedName)))
+                    } else {
+                        completion(.success(nil))
+                    }
+                } catch {
+                    completion(.failure(error))
                 }
             }
         }
+    }
+
+    private func copySharedCSVFile(at sourceURL: URL, suggestedName: String?) throws -> URL? {
+        let data = try Data(contentsOf: sourceURL)
+        let name = suggestedName ?? sourceURL.lastPathComponent
+        return try copySharedCSVData(data, suggestedName: name)
+    }
+
+    private func copySharedCSVData(_ data: Data, suggestedName: String?) throws -> URL? {
+        guard isLikelyCSV(data: data, suggestedName: suggestedName) else { return nil }
+
+        let destination = try uniqueImportDestination(suggestedName: suggestedName)
+        try data.write(to: destination, options: .atomic)
+        return destination
+    }
+
+    private func isLikelyCSV(data: Data, suggestedName: String?) -> Bool {
+        if suggestedName?.lowercased().hasSuffix(".csv") == true {
+            return true
+        }
+
+        let prefix = data.prefix(4096)
+        guard let text = String(data: prefix, encoding: .utf8)?.lowercased() else { return false }
+        return text.contains("transaction date")
+            && text.contains("amount (usd)")
+            && text.contains(",")
+    }
+
+    private func uniqueImportDestination(suggestedName: String?) throws -> URL {
+        let directory = try importInboxDirectory()
+        let baseName = sanitizedCSVBaseName(suggestedName)
+        var destination = directory.appendingPathComponent(baseName).appendingPathExtension("csv")
+        var index = 2
+
+        while FileManager.default.fileExists(atPath: destination.path) {
+            destination = directory
+                .appendingPathComponent("\(baseName) \(index)")
+                .appendingPathExtension("csv")
+            index += 1
+        }
+
+        return destination
+    }
+
+    private func importInboxDirectory() throws -> URL {
+        let fileManager = FileManager.default
+        let baseURL = fileManager.containerURL(forSecurityApplicationGroupIdentifier: "group.com.heyjoshsmith.MoneyMap")
+            ?? fileManager.temporaryDirectory
+        let directory = baseURL.appendingPathComponent("Shared CSV Imports", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func sanitizedCSVBaseName(_ suggestedName: String?) -> String {
+        let rawName = suggestedName?.isEmpty == false ? suggestedName ?? "" : "Apple Card Transactions"
+        let withoutExtension = (rawName as NSString).deletingPathExtension
+        let allowed = CharacterSet.alphanumerics.union(.whitespaces)
+        let cleaned = withoutExtension
+            .unicodeScalars
+            .map { allowed.contains($0) ? Character($0) : " " }
+            .reduce(into: "") { $0.append($1) }
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? "Apple Card Transactions" : cleaned
     }
 
     public func loadURL() {
@@ -494,6 +586,78 @@ struct ShareView: View {
                 self.pageTitle = titleText
             }
         }.resume()
+    }
+}
+
+private struct ShareStatusRow: View {
+    let title: String
+    let detail: String
+    let systemImage: String
+
+    var body: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        } icon: {
+            Image(systemName: systemImage)
+                .foregroundStyle(ShareDesign.accent)
+                .frame(width: 28)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct ShareDestinationRow: View {
+    let title: String
+    let detail: String
+    let systemImage: String
+    let image: UIImage?
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Group {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(systemName: systemImage)
+                        .font(.headline)
+                        .foregroundStyle(ShareDesign.accent)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(ShareDesign.controlBackground)
+                }
+            }
+            .frame(width: 42, height: 42)
+            .clipShape(RoundedRectangle(cornerRadius: ShareDesign.cornerRadius))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(ShareDesign.accent)
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
     }
 }
 

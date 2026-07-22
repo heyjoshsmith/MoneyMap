@@ -70,6 +70,35 @@ This matches the current MoneyMap transaction import shape closely.
 - `GET /api/imports`
 - `GET /api/transactions?limit=50`
 
+## Plaid Sandbox Bridge
+
+The prototype also exposes a dependency-free Plaid bridge for MoneyMap's Bank Connections screen. Plaid access tokens stay in this local server database; the iOS app only stores account snapshots and reviewed imported data.
+
+Set these environment variables before starting the server:
+
+```bash
+export PLAID_CLIENT_ID="your-client-id"
+export PLAID_SECRET="your-sandbox-secret"
+export PLAID_ENV="sandbox"
+export PLAID_COMPLETION_REDIRECT_URI="moneymap://plaid-hosted-link-complete"
+# Optional for OAuth institutions if configured in the Plaid dashboard:
+export PLAID_REDIRECT_URI="https://your-registered-redirect.example/callback"
+```
+
+Plaid endpoints:
+
+- `POST /api/plaid/link-token`
+- `POST /api/plaid/complete-hosted-link`
+- `POST /api/plaid/exchange-public-token`
+- `POST /api/plaid/webhook`
+- `POST /api/plaid/sandbox-public-token`
+- `POST /api/plaid/sync`
+- `GET /api/plaid/snapshot?limit=200`
+- `GET /api/plaid/connections`
+- `GET /api/plaid/accounts`
+- `GET /api/plaid/transactions?limit=200`
+- `GET /api/plaid/liabilities`
+
 ## Notes
 
 - Data stays local to this Mac.

@@ -37,88 +37,138 @@ struct PaydayView: View {
     private var timeString: String {
         notificationTime.formatted(.dateTime.hour().minute())
     }
+
+    private var upcomingPaydays: [Date] {
+        paydayManager.upcomingPaydaysForNextYear()
+    }
+
+    private var billsBeforeNextPayday: [Bill] {
+        guard let nextPayday = paydayManager.nextPayday else { return [] }
+        return bills.withoutCreditCards
+            .filter { bill in
+                guard bill.status != .paid, bill.lifecycleState == .active, let dueDate = bill.dueDate else {
+                    return false
+                }
+                return dueDate <= nextPayday
+            }
+            .sorted(by: Bill.byDate)
+    }
+
+    private var behindGoalCount: Int {
+        FinancialPlanningEngine.goalProgressInsights(goals: goals, nextPayday: paydayManager.nextPayday)
+            .filter(\.isBehindSchedule)
+            .count
+    }
     
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 20) {
-                    
-                    if let _ = paydayManager.nextPayday {
-                        let paydays = paydayManager.upcomingPaydaysForNextYear()
-                        let batched = batchedPaydays(paydays)
-                        Grid(horizontalSpacing: 10, verticalSpacing: 10) {
-                            ForEach(batched) { row in
-                                GridRow {
-                                    if row.isPriority {
-                                        CalendarView(for: row.items[0], priority: true, bonus: row.bonuses[0])
-                                            .gridCellColumns(2)
-                                    } else {
-                                        CalendarView(for: row.items[0], priority: false, bonus: row.bonuses[0])
-                                        if row.items.count > 1 {
-                                            CalendarView(for: row.items[1], priority: false, bonus: row.bonuses[1])
-                                        } else {
-                                            Color.clear
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        
-                        Spacer()
-                        
-                    } else {
-                        Text("Please select your next payday")
-                            .font(.headline)
-                            .padding()
-                            .frame(maxWidth: .infinity)
-                            .background(Color(UIColor.secondarySystemGroupedBackground))
-                            .clipShape(.rect(cornerRadius: 10))
-                        
-                        // Calendar picker for selecting the next payday.
-                        DatePicker("Select Next Payday", selection: $selectedDate, displayedComponents: .date)
-                            .datePickerStyle(GraphicalDatePickerStyle())
-                            .padding()
-                        
-                        Spacer()
-                                            
-                        Button(action: {
-                            paydayManager.savePayday(selectedDate)
-                        }) {
-                            Label("Set Next Payday", systemImage: "checkmark.circle")
-                                .padding()
-                                .frame(maxWidth: .infinity)
-                                .background(
-                                    LinearGradient(gradient: Gradient(colors: [.green, .blue]),
-                                                   startPoint: .leading,
-                                                   endPoint: .trailing)
-                                )
-                                .foregroundColor(.white)
-                                .cornerRadius(10)
+            List {
+                if let nextPayday = paydayManager.nextPayday {
+                    Section {
+                        MoneyMapSummaryRow(
+                            title: "Next Payday",
+                            value: MoneyMapFormatters.mediumDateString(for: nextPayday),
+                            detail: "\(paydayManager.daysUntilNextPayday()) day\(paydayManager.daysUntilNextPayday() == 1 ? "" : "s") away",
+                            systemImage: "banknote",
+                            tint: MoneyMapDesign.calmGreen
+                        )
+
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: MoneyMapDesign.compactSpacing) {
+                            MoneyMapMetricTile(
+                                title: "Bills Before Payday",
+                                value: MoneyMapFormatters.currencyString(for: billsBeforeNextPayday.totalAmount),
+                                systemImage: "calendar.badge.exclamationmark",
+                                detail: "\(billsBeforeNextPayday.count) bill\(billsBeforeNextPayday.count == 1 ? "" : "s")",
+                                tint: billsBeforeNextPayday.isEmpty ? .secondary : MoneyMapDesign.warningGold
+                            )
+                            MoneyMapMetricTile(
+                                title: "Goals Behind",
+                                value: "\(behindGoalCount)",
+                                systemImage: "target",
+                                detail: behindGoalCount == 0 ? "On pace" : "Need attention",
+                                tint: behindGoalCount == 0 ? MoneyMapDesign.calmGreen : MoneyMapDesign.warningGold
+                            )
                         }
                     }
+                    .listRowBackground(MoneyMapDesign.surfaceBackground)
+
+                    Section("Upcoming Paydays") {
+                        ForEach(Array(upcomingPaydays.prefix(8).enumerated()), id: \.offset) { index, payday in
+                            PaydayDateRow(
+                                date: payday,
+                                isNext: index == 0,
+                                isBonus: payday.isExtraPayDay(in: upcomingPaydays)
+                            )
+                        }
+                    }
+                    .listRowBackground(MoneyMapDesign.surfaceBackground)
+                } else {
+                    Section {
+                        MoneyMapSummaryRow(
+                            title: "Payday not set",
+                            value: "Choose a date",
+                            detail: "MoneyMap uses payday timing to organize bills, goals, and paycheck plans.",
+                            systemImage: "calendar.badge.plus",
+                            tint: MoneyMapDesign.warningGold
+                        )
+
+                        DatePicker("Next Payday", selection: $selectedDate, displayedComponents: .date)
+                            .datePickerStyle(.graphical)
+
+                        Button {
+                            paydayManager.savePayday(selectedDate)
+                        } label: {
+                            MoneyMapNeutralButtonLabel(
+                                title: "Set Next Payday",
+                                systemImage: "checkmark.circle",
+                                iconColor: MoneyMapDesign.calmGreen
+                            )
+                        }
+                    }
+                    .listRowBackground(MoneyMapDesign.surfaceBackground)
                 }
-                .padding()
-            }
-            .navigationTitle("Pay")
-            .background(Color(uiColor: .systemGroupedBackground))
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
-                        Section("Notification Settings") {
-                            Toggle("Notify Day Before", isOn: $notifyDayBeforeEnabled)
-                            Toggle("Notify on Payday", isOn: $notifyDayOfEnabled)
-                            Toggle("Notify if Goals Are Behind", isOn: $notifyGoalBehindEnabled)
-                            Button("Time: \(timeString)") {
-                                showingTimePicker = true
+
+                Section("Notifications") {
+                    Button {
+                        notificationManager.requestAuthorizationIfNeeded { granted in
+                            guard granted else { return }
+                            Task { @MainActor in
+                                rescheduleNotifications()
                             }
                         }
                     } label: {
-                        Label("Notifications", systemImage: "bell")
+                        MoneyMapActionListRow(
+                            title: "Allow Notifications",
+                            detail: "Enable payday and goal pacing alerts.",
+                            systemImage: "bell.badge",
+                            tint: MoneyMapDesign.calmGreen
+                        )
                     }
+                    .buttonStyle(.plain)
+
+                    Toggle("Day before payday", isOn: $notifyDayBeforeEnabled)
+                    Toggle("On payday", isOn: $notifyDayOfEnabled)
+                    Toggle("Goals behind schedule", isOn: $notifyGoalBehindEnabled)
+
+                    Button {
+                        showingTimePicker = true
+                    } label: {
+                        MoneyMapActionListRow(
+                            title: "Notification Time",
+                            detail: timeString,
+                            systemImage: "clock",
+                            tint: .blue
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
+                .listRowBackground(MoneyMapDesign.surfaceBackground)
             }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .navigationTitle("Pay")
+            .background(MoneyMapDesign.groupedBackground)
             .onAppear {
-                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
                 rescheduleNotifications()
             }
             .onChange(of: notifyDayBeforeEnabled) {
@@ -138,7 +188,7 @@ struct PaydayView: View {
             }
             .popover(isPresented: $showingTimePicker) {
                 ZStack {
-                    Color(uiColor: .systemGroupedBackground)
+                    MoneyMapDesign.groupedBackground
                         .ignoresSafeArea()
                     VStack(spacing: 20) {
                         HStack {
@@ -159,13 +209,63 @@ struct PaydayView: View {
     }
 }
 
+private struct PaydayDateRow: View {
+    let date: Date
+    let isNext: Bool
+    let isBonus: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: isBonus ? "sparkles" : "calendar")
+                .font(.headline)
+                .foregroundStyle(isNext || isBonus ? MoneyMapDesign.calmGreen : .secondary)
+                .frame(width: 34, height: 34)
+                .background(
+                    (isNext || isBonus ? MoneyMapDesign.calmGreen.opacity(0.14) : Color.secondary.opacity(0.10)),
+                    in: RoundedRectangle(cornerRadius: MoneyMapDesign.cornerRadius)
+                )
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isNext ? "Next Payday" : date.formatted(.dateTime.weekday(.wide)))
+                    .font(.headline)
+                Text(date.formatted(date: .long, time: .omitted))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if isBonus {
+                Text("Extra")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MoneyMapDesign.calmGreen)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(MoneyMapDesign.calmGreen.opacity(0.12), in: Capsule())
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 private extension PaydayView {
     func rescheduleNotifications() {
-        scheduleNotifications(paydayManager.upcomingPaydaysForNextYear())
+        schedulePaydayNotificationsIfAuthorized(paydayManager.upcomingPaydaysForNextYear())
         notificationManager.scheduleGoalProgressNotifications(
             for: goals,
             nextPayday: paydayManager.nextPayday
         )
+    }
+
+    func schedulePaydayNotificationsIfAuthorized(_ paydays: [Date]) {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard NotificationManager.canDeliverNotifications(settings) else { return }
+            Task { @MainActor in
+                scheduleNotifications(paydays)
+            }
+        }
     }
 
     private func batchedPaydays(_ paydays: [Date]) -> [PaydayRow] {

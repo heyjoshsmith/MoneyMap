@@ -44,7 +44,7 @@ struct CreditCardRow: View {
                             .foregroundStyle(.secondary)
                         }
                     }
-                    .tint(LinearGradient(colors: [.green, .yellow, .red], startPoint: .leading, endPoint: .trailing))
+                    .tint(MoneyMapDesign.moneyGradient)
                     .overlay {
                         GeometryReader { geometry in
                             // Position the marker (a hollow circle with a white outline) at that position and vertically centered.
@@ -66,7 +66,7 @@ struct CreditCardRow: View {
                                 }
                             }
                             .symbolVariant(.fill)
-                            .foregroundStyle(.red, .white)
+                            .foregroundStyle(MoneyMapDesign.attentionRed, .white)
                         }
                     }
                     
@@ -79,9 +79,11 @@ struct CreditCardRow: View {
                 }
             }
             .padding()
-            .background(Color(uiColor: .secondarySystemGroupedBackground))
-            .clipShape(.rect(cornerRadius: 15))
-            .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 5)
+            .background(MoneyMapDesign.surfaceBackground, in: RoundedRectangle(cornerRadius: MoneyMapDesign.sectionCornerRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: MoneyMapDesign.sectionCornerRadius)
+                    .stroke(MoneyMapDesign.separator, lineWidth: 1)
+            }
             .task {
                 creditCard.checkStatus()
             }
@@ -103,8 +105,8 @@ struct CreditCardRow: View {
                 CreditCardRow(for: bill)
             }
         }
-        .listStyle(.plain)
-        .background(Color(uiColor: .systemGroupedBackground))
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(MoneyMapDesign.groupedBackground)
     }
 }
-

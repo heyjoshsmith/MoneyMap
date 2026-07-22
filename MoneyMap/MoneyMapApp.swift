@@ -37,7 +37,9 @@ struct MoneyMapApp: App {
                     }
                 }
                 .task {
+                    syncSharedAppearanceSetting()
                     notificationManager.attach(deepLinkManager: deepLinkManager)
+                    try? await Task.sleep(nanoseconds: 4_000_000_000)
                     try? Tips.configure([
                         .displayFrequency(.daily)
                     ])
@@ -45,6 +47,12 @@ struct MoneyMapApp: App {
         }
     }
     
+    private func syncSharedAppearanceSetting() {
+        let rawValue = UserDefaults.standard.string(forKey: MoneyMapDesign.appearanceStyleKey)
+            ?? MoneyMapAppearanceStyle.warm.rawValue
+        MoneyMapSharedDesign.setAppearanceStyleRawValue(rawValue)
+    }
+
 }
 
 #Preview("MoneyMap") {

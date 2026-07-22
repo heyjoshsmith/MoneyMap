@@ -11,14 +11,15 @@ struct SmartFeaturesGuideView: View {
     var body: some View {
         List {
             Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Smart Features")
-                        .font(.title2.bold())
-                    Text("MoneyMap can work from your Lock Screen, widgets, Siri, Shortcuts, Spotlight, and the share sheet. This page explains what each one does and when to use it.")
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 4)
+                MoneyMapSummaryRow(
+                    title: "Smart Features",
+                    value: "System shortcuts",
+                    detail: "Lock Screen, widgets, Siri, Spotlight, and sharing all lead back to your money map.",
+                    systemImage: "sparkles",
+                    tint: MoneyMapDesign.calmGreen
+                )
             }
+            .listRowBackground(MoneyMapDesign.surfaceBackground)
 
             Section("Siri & Shortcuts") {
                 GuideRow(
@@ -32,14 +33,16 @@ struct SmartFeaturesGuideView: View {
                     detail: "Use Siri for quick answers like what is due next, what you spent recently, or what to do with a paycheck. Use Shortcuts when you want repeatable one-tap actions."
                 )
             }
+            .listRowBackground(MoneyMapDesign.surfaceBackground)
 
-            Section("Search and Ask") {
+            Section("Ask") {
                 GuideRow(
-                    icon: "magnifyingglass",
+                    icon: "sparkles",
                     title: "Search with answers",
                     detail: "Search bills, goals, transactions, and paycheck recommendations, then ask MoneyMap for grounded Apple Intelligence answers from the same data."
                 )
             }
+            .listRowBackground(MoneyMapDesign.surfaceBackground)
 
             Section("Notifications") {
                 GuideRow(
@@ -53,6 +56,7 @@ struct SmartFeaturesGuideView: View {
                     detail: "Turn on autopay for a bill when you still want the reminder but do not want to manually mark it paid each cycle."
                 )
             }
+            .listRowBackground(MoneyMapDesign.surfaceBackground)
 
             Section("Widgets") {
                 GuideRow(
@@ -66,6 +70,7 @@ struct SmartFeaturesGuideView: View {
                     detail: "Use widgets when you want passive visibility. They’re best for checking countdowns and upcoming due dates without opening the app."
                 )
             }
+            .listRowBackground(MoneyMapDesign.surfaceBackground)
 
             Section("Spotlight") {
                 GuideRow(
@@ -74,6 +79,7 @@ struct SmartFeaturesGuideView: View {
                     detail: "MoneyMap indexes bills, goals, and recommendations so you can find them from iPhone search and jump straight into the app."
                 )
             }
+            .listRowBackground(MoneyMapDesign.surfaceBackground)
 
             Section("Share Sheet & CSV Import") {
                 GuideRow(
@@ -87,12 +93,17 @@ struct SmartFeaturesGuideView: View {
                     detail: "Import supported card transaction CSV files and attach them to a credit card so you can review activity inside the app."
                 )
             }
+            .listRowBackground(MoneyMapDesign.surfaceBackground)
 
             Section("Good Starting Point") {
-                Text("If you’re not sure where to start, use the Recommendations tab in the app first. After that, add the payday widget, then try the Upcoming Bills Siri shortcut.")
+                Text("If you’re not sure where to start, use the Plan tab in the app first. After that, add the payday widget, then try the Upcoming Bills Siri shortcut.")
                     .foregroundStyle(.secondary)
             }
+            .listRowBackground(MoneyMapDesign.surfaceBackground)
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(MoneyMapDesign.groupedBackground)
         .navigationTitle("Smart Features")
     }
 }
@@ -105,8 +116,9 @@ private struct GuideRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: icon)
-                .frame(width: 24)
-                .foregroundStyle(.accent)
+                .font(.headline)
+                .frame(width: 26)
+                .foregroundStyle(MoneyMapDesign.calmGreen)
                 .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 4) {

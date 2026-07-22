@@ -14,40 +14,54 @@ struct FileManagerView: View {
     @State private var imageURLtoDelete: URL?
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             List {
-                ForEach(savedFiles, id: \.self) { fileURL in
-                    HStack {
-                        // Try to load an image; otherwise, show a document icon
-                        if let uiImage = loadImage(from: fileURL) {
-                            Image(uiImage: uiImage)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 60, height: 60)
-                                .cornerRadius(8)
-                        } else {
-                            Image(systemName: "doc.fill")
-                                .foregroundColor(.gray)
-                                .font(.title2)
-                        }
-                        
-                        VStack(alignment: .leading) {
-                            Text(fileURL.lastPathComponent)
-                                .font(.caption)
-                                .lineLimit(1)
-                        }
-                    }
-                    .swipeActions {
-                        Button(action: {
-                            self.imageURLtoDelete = fileURL
-                            self.showingDeleteAlert = true
-                        }) {
-                            Image(systemName: "trash")
-                                .foregroundColor(.red)
+                Section {
+                    if savedFiles.isEmpty {
+                        MoneyMapEmptyState(
+                            title: "No Saved Files",
+                            message: "Saved images and files will appear here.",
+                            systemImage: "folder"
+                        )
+                    } else {
+                        ForEach(savedFiles, id: \.self) { fileURL in
+                            HStack(spacing: 12) {
+                                if let uiImage = loadImage(from: fileURL) {
+                                    Image(uiImage: uiImage)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 52, height: 52)
+                                        .clipShape(RoundedRectangle(cornerRadius: MoneyMapDesign.cornerRadius))
+                                } else {
+                                    Image(systemName: "doc.fill")
+                                        .font(.title3)
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 52, height: 52)
+                                        .background(MoneyMapDesign.controlBackground, in: RoundedRectangle(cornerRadius: MoneyMapDesign.cornerRadius))
+                                }
+
+                                Text(fileURL.lastPathComponent)
+                                    .font(.subheadline.weight(.semibold))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            .padding(.vertical, 2)
+                            .swipeActions {
+                                Button(role: .destructive) {
+                                    self.imageURLtoDelete = fileURL
+                                    self.showingDeleteAlert = true
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
                         }
                     }
                 }
+                .listRowBackground(MoneyMapDesign.surfaceBackground)
             }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(MoneyMapDesign.groupedBackground)
             .navigationTitle("Saved Files")
             .onAppear {
                 savedFiles = getSavedFiles()

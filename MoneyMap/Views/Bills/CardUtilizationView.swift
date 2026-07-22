@@ -35,9 +35,10 @@ struct CardUtilizationView: View {
                 makingPayment: $makingPayment
             )
         }
-        .listStyle(.plain)
+        .listStyle(.insetGrouped)
         .navigationTitle("Card Utilization")
-        .background(Color(uiColor: .systemGroupedBackground))
+        .scrollContentBackground(.hidden)
+        .background(MoneyMapDesign.groupedBackground)
         .alert(billToEdit?.name ?? "Current Balance", isPresented: $editingBalance) {
             TextField(balancePlaceholder, text: $alertValue)
                 .keyboardType(.decimalPad)

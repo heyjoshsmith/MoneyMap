@@ -38,20 +38,19 @@ struct Widget: View {
     }
     
     var label: some View {
-        HStack(alignment: .center, spacing: 5) {
+        HStack(alignment: .center, spacing: MoneyMapDesign.compactSpacing) {
             
             Image(systemName: title == "Priority" ? (Priority(rawValue: value ?? 0) ?? Priority.medium).icon : icon)
-                .resizable()
-                .scaledToFit()
-                .padding(5)
-                .foregroundStyle(title == "Priority" ? (Priority(rawValue: value ?? 0) ?? Priority.medium).color.gradient : color.gradient)
-                .frame(width: 40, height: 40, alignment: .center)
+                .font(.headline)
+                .foregroundStyle(title == "Priority" ? (Priority(rawValue: value ?? 0) ?? Priority.medium).color : color)
+                .frame(width: 24, alignment: .center)
+                .accessibilityHidden(true)
             
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 3) {
                 
                 Text(title)
-                    .foregroundStyle(Color.primary)
-                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
                 
                 Group {
                     if let value {
@@ -70,8 +69,12 @@ struct Widget: View {
                         }
                     }
                 }
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(title == "Priority" ? (Priority(rawValue: value ?? 0) ?? Priority.medium).color.gradient : color.gradient)
+                .font(.headline)
+                .fontDesign(.rounded)
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
                 
             }
             
@@ -81,17 +84,20 @@ struct Widget: View {
                 Image(systemName: "chevron.right")
                     .foregroundStyle(.secondary)
                     .imageScale(.small)
-                    .padding(.trailing, 5)
             }
             
         }
-        .padding(.vertical)
-        .padding(.horizontal, 10)
+        .padding(10)
+        .frame(minHeight: 66)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .background(MoneyMapDesign.surfaceBackground)
         .foregroundColor(Color.primary)
-        .cornerRadius(10)
-        .gridCellColumns(columns)
+        .clipShape(RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius)
+                .stroke(MoneyMapDesign.separator, lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
     }
     
     var priority: String {

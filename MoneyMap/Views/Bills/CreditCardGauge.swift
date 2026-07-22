@@ -33,7 +33,13 @@ struct CreditCardGauge: View {
                     .foregroundStyle(.secondary)
                 }
             }
-            .tint(LinearGradient(colors: [.green, .yellow, .red], startPoint: .leading, endPoint: .trailing))
+            .tint(
+                LinearGradient(
+                    colors: [MoneyMapDesign.calmGreen, MoneyMapDesign.warningGold, MoneyMapDesign.attentionRed],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
             
             if bills.creditCardUtilization >= 0.3 {
                 HStack {

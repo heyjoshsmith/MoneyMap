@@ -9,6 +9,11 @@
 			<key>NSExtensionActivationSupportsAttachments</key>
 			<array>
 				<string>public.comma-separated-values-text</string>
+				<string>public.delimited-values-text</string>
+				<string>public.plain-text</string>
+				<string>public.text</string>
+				<string>public.data</string>
+				<string>public.file-url</string>
 				<string>public.url</string>
 			</array>
 			<key>NSExtensionActivationSupportsText</key>

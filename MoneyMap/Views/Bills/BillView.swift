@@ -16,6 +16,9 @@ struct BillView: View {
     
     @Environment(\.supportsImagePlayground) private var supportsImagePlayground
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+    @Query(sort: \PaymentMethod.name) private var paymentMethods: [PaymentMethod]
     
     var bill: Bill
     
@@ -26,6 +29,8 @@ struct BillView: View {
     @State private var cardLimit = ""
     @State private var creatingImage: Bool = false
     @State private var showingImporter = false
+    @State private var showingImportGuide = false
+    @State private var pendingImportURLs: [URL] = []
     @State private var importErrorAlert = false
     @State private var importErrorMessage: String = ""
     @State private var selectedCategory: String? = nil
@@ -41,7 +46,17 @@ struct BillView: View {
     @State private var showMarkPaidConfirmation = false
     @State private var autopayEnabled = false
     @State private var autopaySource = ""
+    @State private var selectedPaymentMethodID: UUID?
     @State private var gracePeriodDays = 0
+    @State private var plaidUnavailable = false
+    @State private var showingPaymentLinkSetup = false
+    @State private var showingPaymentMethodEditor = false
+    @State private var showingScheduleResume = false
+    @State private var showingBillEditor = false
+    @State private var showingCardDataSources = false
+    @State private var showingDeleteBillConfirmation = false
+    @State private var showingPaymentDateEditor = false
+    @State private var showingClearPaymentConfirmation = false
     
     enum TransactionSortField: String, CaseIterable, Identifiable {
         case date = "Date"
@@ -83,17 +98,28 @@ struct BillView: View {
     }
     
     var transactionView: some View {
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 10) {
             
             NavigationLink(destination: transactionList) {
-                HStack(spacing: 4) {
-                    Text("Transactions")
+                HStack(spacing: 12) {
+                    Image(systemName: "list.bullet.rectangle")
+                        .foregroundStyle(.blue)
+                        .frame(width: 26)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Transactions")
+                            .font(.headline)
+                        Text(transactionSummaryText)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
                     Image(systemName: "chevron.right")
                         .imageScale(.small)
                         .foregroundStyle(.secondary)
-                    Spacer()
                 }
-                .font(.title2.weight(.semibold))
                 .foregroundStyle(Color.primary)
                 .contentShape(.rect)
             }
@@ -101,7 +127,6 @@ struct BillView: View {
             if (bill.transactions ?? []).isEmpty {
                 Text("No transactions available.")
                     .foregroundStyle(.secondary)
-                    .padding(.leading)
             } else {
                 ForEach(previewTransactions, id: \.self) { transaction in
                     TransactionRow(transaction: transaction, onSetFriendlyName: { selected in
@@ -120,9 +145,8 @@ struct BillView: View {
             
         }
         .padding()
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
-        .clipShape(.rect(cornerRadius: 15))
-        .padding(.top)
+        .background(MoneyMapDesign.surfaceBackground)
+        .clipShape(.rect(cornerRadius: MoneyMapDesign.cornerRadius))
     }
     
     var searchedTransactions: [Transaction] {
@@ -181,42 +205,53 @@ struct BillView: View {
     
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                
+            VStack(alignment: .leading, spacing: MoneyMapDesign.sectionSpacing) {
                 billHeaderSection
-                
-                VStack(spacing: 10) {
-                    billActionSection
-                    
-                    // Credit Card Details (if applicable)
-                    creditCardDetailsSection
-                    
-                    // Recurrence
-                    recurrenceSection
 
-                    billMetaSection
-                    
-                    transactionView
-                    
+                billActionSection
+
+                if bill.category != .creditCard {
+                    BillLifecycleCard(
+                        bill: bill,
+                        delay: delayBill,
+                        skip: skipBill,
+                        pause: pauseBill,
+                        cancel: cancelBill,
+                        resume: { showingScheduleResume = true }
+                    )
                 }
-                .padding()
+
+                creditCardDetailsSection
+                recurrenceSection
+                billMetaSection
+                transactionView
             }
+            .padding(.horizontal)
+            .padding(.bottom, 24)
         }
-        .navigationTitle("Bill Details")
+        .navigationTitle(bill.name ?? "Bill")
         .navigationBarTitleDisplayMode(.inline)
-        .background(Color(uiColor: .systemGroupedBackground))
+        .background(MoneyMapDesign.groupedBackground)
         .userActivity("com.heyjoshsmith.MoneyMap.viewingBill") { activity in
             let entity = BillEntity(bill)
             activity.title = "Viewing \(entity.name)"
             activity.appEntityIdentifier = EntityIdentifier(for: entity)
         }
         .onAppear {
+            MoneyMapIntentDonations.donateOpenBill(bill)
             bill.checkStatus()
             loadBillMeta()
             try? modelContext.save()
         }
+        .onDisappear {
+            saveBillMeta()
+        }
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                Button("Edit") {
+                    showingBillEditor = true
+                }
+
                 Menu {
                     NavigationLink {
                         ActivityFeedView(
@@ -241,6 +276,7 @@ struct BillView: View {
                             }
                         }
                     }
+
                     Section {
                         Button(MoneyMapAction.importTransactions.title, systemImage: MoneyMapAction.importTransactions.systemImage) {
                             showingImporter = true
@@ -252,18 +288,25 @@ struct BillView: View {
                                 paymentAmount = ""
                                 makingPayment = true
                             }
-                        } else if bill.status != .paid {
+                        } else if canManuallyMarkPaid {
                             Button("Mark Paid", systemImage: "checkmark.circle") {
                                 showMarkPaidConfirmation = true
                             }
                         }
                     }
+
                     if bill.category == .creditCard {
                         Section {
                             Button(MoneyMapAction.editCardLimit.title, systemImage: MoneyMapAction.editCardLimit.systemImage) {
                                 cardLimit = bill.creditCardDetails?.creditLimit.formatted(.number) ?? ""
                                 editingLimit = true
                             }
+                        }
+                    }
+
+                    Section {
+                        Button("Delete Bill", systemImage: "trash", role: .destructive) {
+                            showingDeleteBillConfirmation = true
                         }
                     }
                 } label: {
@@ -306,16 +349,17 @@ struct BillView: View {
         } message: {
             Text("How much would you like to pay?")
         }
-        .confirmationDialog(
-            "Mark \(bill.name ?? "this bill") as paid?",
-            isPresented: $showMarkPaidConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Mark Paid") {
-                markPaid()
-            }
-            Button("Cancel", role: .cancel) { }
-        }
+        .modifier(
+            BillDetailConfirmationDialogs(
+                billName: bill.name,
+                showingMarkPaid: $showMarkPaidConfirmation,
+                showingDeleteBill: $showingDeleteBillConfirmation,
+                showingClearPayment: $showingClearPaymentConfirmation,
+                markPaid: markPaid,
+                deleteBill: deleteBill,
+                clearPaymentDate: clearPaymentDate
+            )
+        )
         .sheet(item: $imagePickerSource) { source in
             switch source {
             case .camera:
@@ -341,6 +385,37 @@ struct BillView: View {
                 EmptyView()
             }
         }
+        .sheet(isPresented: $showingPaymentLinkSetup) {
+            PaymentLinkSetupView(bill: bill)
+        }
+        .sheet(isPresented: $showingPaymentMethodEditor) {
+            PaymentMethodEditor { paymentMethod in
+                selectedPaymentMethodID = paymentMethod.id
+                saveBillMeta()
+            }
+        }
+        .sheet(isPresented: $showingBillEditor) {
+            BillEditor(bill: bill)
+        }
+        .sheet(isPresented: $showingCardDataSources) {
+            CreditCardDataSourcesView(bill: bill)
+        }
+        .sheet(isPresented: $showingPaymentDateEditor) {
+            BillPaymentDateSheet(
+                bill: bill,
+                defaultDate: bill.datePaid ?? .now,
+                onSave: updatePaymentDate
+            )
+        }
+        .sheet(isPresented: $showingScheduleResume) {
+            BillDateActionSheet(
+                title: "Resume",
+                bill: bill,
+                defaultDate: defaultScheduleDate,
+                confirmTitle: "Resume",
+                onConfirm: resumeBill
+            )
+        }
         .imagePlaygroundSheet(isPresented: $creatingImage, onCompletion: { url in
             Task {
                 if let data = try? Data(contentsOf: url),
@@ -355,29 +430,23 @@ struct BillView: View {
             allowedContentTypes: [.commaSeparatedText, .text, .plainText],
             allowsMultipleSelection: true
         ) { result in
-            switch result {
-            case .success(let urls):
-                var errorMessages: [String] = []
-                for url in urls {
-                    if url.startAccessingSecurityScopedResource() {
-                        defer { url.stopAccessingSecurityScopedResource() }
-                        do {
-                            _ = try importTransactions(fromCSVAt: url, to: bill, context: modelContext)
-                        } catch {
-                            errorMessages.append("\(url.lastPathComponent): \(error.localizedDescription)")
-                        }
-                    } else {
-                        errorMessages.append("\(url.lastPathComponent): Unable to access the selected file due to system restrictions.")
-                    }
+            handleImportResult(result)
+        }
+        .sheet(isPresented: $showingImportGuide, onDismiss: {
+            pendingImportURLs.removeAll()
+        }) {
+            TransactionCSVImportGuideView(
+                csvURLs: pendingImportURLs,
+                fixedBill: bill,
+                onFinished: { _ in
+                    pendingImportURLs.removeAll()
+                    showingImportGuide = false
+                },
+                onCancel: {
+                    pendingImportURLs.removeAll()
+                    showingImportGuide = false
                 }
-                if !errorMessages.isEmpty {
-                    importErrorMessage = errorMessages.joined(separator: "\n")
-                    importErrorAlert = true
-                }
-            case .failure(let error):
-                importErrorMessage = error.localizedDescription
-                importErrorAlert = true
-            }
+            )
         }
         .sheet(isPresented: $showingFriendlyNamePrompt) {
             FriendlyNameSheet(
@@ -386,51 +455,7 @@ struct BillView: View {
                 matchPrefix: $matchPrefix,
                 prefixSearchText: $prefixSearchText
             ) { saved in
-                if saved {
-                    guard let transaction = transactionForFriendlyName,
-                          let merchant = transaction.merchant else {
-                        transactionForFriendlyName = nil
-                        pendingFriendlyName = ""
-                        matchPrefix = false
-                        prefixSearchText = ""
-                        return
-                    }
-                    
-                    if matchPrefix {
-                        let prefix = prefixSearchText.trimmingCharacters(in: .whitespaces)
-                        if prefix.isEmpty {
-                            // If prefix is empty when matchPrefix enabled, do not make changes
-                            transactionForFriendlyName = nil
-                            pendingFriendlyName = ""
-                            matchPrefix = false
-                            prefixSearchText = ""
-                            return
-                        }
-                        let matchingTransactions = (bill.transactions ?? []).filter {
-                            guard let merchantName = $0.merchant else { return false }
-                            return merchantName.lowercased().hasPrefix(prefix.lowercased())
-                        }
-                        for tx in matchingTransactions {
-                            tx.friendlyName = pendingFriendlyName
-                        }
-                    } else {
-                        let matchingTransactions = (bill.transactions ?? []).filter {
-                            $0.merchant == merchant
-                        }
-                        for tx in matchingTransactions {
-                            tx.friendlyName = pendingFriendlyName
-                        }
-                    }
-                    do {
-                        try modelContext.save()
-                    } catch {
-                        // Handle save error if needed
-                    }
-                }
-                transactionForFriendlyName = nil
-                pendingFriendlyName = ""
-                matchPrefix = false
-                prefixSearchText = ""
+                handleFriendlyNameResult(saved: saved)
             }
         }
     }
@@ -488,236 +513,705 @@ struct BillView: View {
         guard let selected = selectedCategory, !selected.isEmpty else { return sortedTransactions }
         return sortedTransactions.filter { $0.category == selected }
     }
-    
-    private var billHeaderSection: some View {
-        ZStack {
-            if let billImage = bill.image {
-                billImage
-                    .resizable()
-                    .scaledToFill()
-                    .frame(maxWidth: .infinity, maxHeight: 300)
-                    .clipped()
-                    .overlay(
-                        Rectangle()
-                            .fill(Color.black.opacity(0.4))
-                    )
-            } else {
-                Rectangle()
-                    .fill(bill.category?.color.gradient ?? Color.gray.gradient)
-            }
 
-            VStack(spacing: 10) {
-                if bill.category != .creditCard {
-                    Text(bill.amount ?? 0, format: .currency(code: "USD"))
-                        .font(.title.weight(.medium))
-                }
-                Label(bill.name ?? "Untitled", systemImage: bill.category?.icon ?? "questionmark.circle")
-                    .font(.largeTitle.weight(.semibold))
-                if let dueDate = dueDateValue {
-                    Text(dueDate, style: .date)
-                        .opacity(0.7)
-                } else {
-                    Text(Date(), style: .date)
-                        .opacity(0.7)
-                }
+    private func handleImportResult(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            if urls.isEmpty {
+                importErrorMessage = "No CSV files were selected."
+                importErrorAlert = true
+                return
             }
-            .scaleEffect(animate ? 1.0 : 0.75)
-            .opacity(animate ? 1.0 : 0.0)
-            .foregroundStyle(.white)
+            pendingImportURLs = urls
+            showingImportGuide = true
+        case .failure(let error):
+            importErrorMessage = error.localizedDescription
+            importErrorAlert = true
         }
-        .onAppear {
-            withAnimation(.easeOut(duration: 0.8)) {
-                animate = true
-            }
-        }
-        .frame(maxWidth: .infinity, idealHeight: 300)
     }
 
-    private var billActionSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Status")
-                Spacer()
-                Text(bill.status?.name ?? "Unknown")
-                    .foregroundStyle(bill.status?.color ?? .secondary)
-                    .fontWeight(.semibold)
+    private func handleFriendlyNameResult(saved: Bool) {
+        defer {
+            transactionForFriendlyName = nil
+            pendingFriendlyName = ""
+            matchPrefix = false
+            prefixSearchText = ""
+        }
+
+        guard saved,
+              let transaction = transactionForFriendlyName,
+              let merchant = transaction.merchant else {
+            return
+        }
+
+        if matchPrefix {
+            let prefix = prefixSearchText.trimmingCharacters(in: .whitespaces)
+            guard !prefix.isEmpty else { return }
+
+            let matchingTransactions = (bill.transactions ?? []).filter {
+                guard let merchantName = $0.merchant else { return false }
+                return merchantName.lowercased().hasPrefix(prefix.lowercased())
+            }
+            for tx in matchingTransactions {
+                tx.friendlyName = pendingFriendlyName
+            }
+        } else {
+            let matchingTransactions = (bill.transactions ?? []).filter {
+                $0.merchant == merchant
+            }
+            for tx in matchingTransactions {
+                tx.friendlyName = pendingFriendlyName
+            }
+        }
+
+        try? modelContext.save()
+    }
+
+    private var billTitle: String {
+        let trimmed = (bill.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Untitled Bill" : trimmed
+    }
+
+    private var categoryTitle: String {
+        bill.category?.name ?? "Other"
+    }
+
+    private var dueDateText: String {
+        bill.dueDate.map(MoneyMapFormatters.mediumDateString(for:)) ?? "No date"
+    }
+
+    private var amountMetricTitle: String {
+        bill.category == .creditCard ? "Balance" : "Amount"
+    }
+
+    private var amountMetricValue: String {
+        if bill.category == .creditCard, let details = bill.creditCardDetails {
+            return MoneyMapFormatters.currencyString(for: details.cardBalance)
+        }
+        return MoneyMapFormatters.currencyString(for: bill.amount ?? 0)
+    }
+
+    private var amountMetricIcon: String {
+        bill.category == .creditCard ? "creditcard" : "dollarsign.circle"
+    }
+
+    private var amountMetricColor: Color {
+        if bill.category == .creditCard {
+            return aboveMax ? .red : .green
+        }
+        return bill.category?.color ?? .accentColor
+    }
+
+    private var statusIcon: String {
+        guard bill.lifecycleState == .active else {
+            return bill.lifecycleState.icon
+        }
+
+        switch bill.status {
+        case .paid:
+            return "checkmark.circle.fill"
+        case .overdue:
+            return "exclamationmark.triangle.fill"
+        case .upcoming:
+            return "calendar.badge.clock"
+        case nil:
+            return "questionmark.circle"
+        }
+    }
+
+    private var primaryActionIcon: String {
+        if bill.paymentURL != nil {
+            return "arrow.up.forward.app"
+        }
+        if bill.category == .creditCard {
+            return MoneyMapAction.makePayment.systemImage
+        }
+        if bill.lifecycleState == .active && bill.status != .paid {
+            return "checkmark.circle"
+        }
+        return statusIcon
+    }
+
+    private var primaryActionText: String {
+        switch bill.lifecycleState {
+        case .paused:
+            return "Paused until you resume it with a new due date."
+        case .canceled:
+            return "Canceled and kept here for history."
+        case .active:
+            break
+        }
+
+        if bill.category == .creditCard {
+            if aboveMax {
+                return "Balance is above the 30% target. Record a payment when you make one."
+            }
+            return "Keep the balance, payment date, and payment link current."
+        }
+
+        if bill.status == .paid {
+            return "Paid for this cycle. Adjust the payment date if the record is off."
+        }
+
+        if bill.paymentURL == nil {
+            return "No payment link is saved for this bill."
+        }
+
+        if bill.status == .overdue {
+            return "Overdue. Open the pay link, then mark it paid when you're done."
+        }
+
+        return "Open the pay link when you're ready, then mark it paid."
+    }
+
+    private var recurrenceText: String {
+        guard let interval = bill.recurrenceInterval, let unit = bill.recurrenceUnit else {
+            return "One-time"
+        }
+        return "Every \(interval) \(unit.rawValue)\(interval == 1 ? "" : "s")"
+    }
+
+    private var transactionSummaryText: String {
+        let count = bill.transactions?.count ?? 0
+        return "\(count) transaction\(count == 1 ? "" : "s")"
+    }
+    
+    private var billHeaderSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 14) {
+                billIconView
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(billTitle)
+                        .font(.title2.weight(.semibold))
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.85)
+
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) {
+                            Label(categoryTitle, systemImage: bill.category?.icon ?? "questionmark.circle")
+                            Label(bill.lifecycleState.title, systemImage: bill.lifecycleState.icon)
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label(categoryTitle, systemImage: bill.category?.icon ?? "questionmark.circle")
+                            Label(bill.lifecycleState.title, systemImage: bill.lifecycleState.icon)
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 8)
             }
 
-            if bill.category == .creditCard {
-                Button(MoneyMapAction.makePayment.title, systemImage: MoneyMapAction.makePayment.systemImage) {
-                    paymentAmount = ""
-                    makingPayment = true
+            Divider()
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    BillHeaderMetric(
+                        title: amountMetricTitle,
+                        value: amountMetricValue,
+                        systemImage: amountMetricIcon,
+                        tint: amountMetricColor
+                    )
+                    BillHeaderMetric(
+                        title: "Due",
+                        value: dueDateText,
+                        systemImage: "calendar",
+                        tint: bill.displayStatusColor
+                    )
+                    BillHeaderMetric(
+                        title: "Status",
+                        value: bill.displayStatusName,
+                        systemImage: statusIcon,
+                        tint: bill.displayStatusColor
+                    )
                 }
-                .buttonStyle(.borderedProminent)
-            } else if bill.status != .paid {
-                Button("Mark Paid", systemImage: "checkmark.circle") {
-                    showMarkPaidConfirmation = true
+
+                VStack(alignment: .leading, spacing: 10) {
+                    BillHeaderMetric(
+                        title: amountMetricTitle,
+                        value: amountMetricValue,
+                        systemImage: amountMetricIcon,
+                        tint: amountMetricColor
+                    )
+                    BillHeaderMetric(
+                        title: "Due",
+                        value: dueDateText,
+                        systemImage: "calendar",
+                        tint: bill.displayStatusColor
+                    )
+                    BillHeaderMetric(
+                        title: "Status",
+                        value: bill.displayStatusName,
+                        systemImage: statusIcon,
+                        tint: bill.displayStatusColor
+                    )
                 }
-                .buttonStyle(.borderedProminent)
             }
         }
         .padding()
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
-        .clipShape(.rect(cornerRadius: 15))
+        .background(MoneyMapDesign.surfaceBackground)
+        .clipShape(.rect(cornerRadius: MoneyMapDesign.sectionCornerRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: MoneyMapDesign.sectionCornerRadius)
+                .stroke(MoneyMapDesign.separator.opacity(0.35), lineWidth: 0.5)
+        }
+        .scaleEffect(animate ? 1.0 : 0.98)
+        .opacity(animate ? 1.0 : 0.0)
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.28)) {
+                animate = true
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var billIconView: some View {
+        if let billImage = bill.image {
+            billImage
+                .resizable()
+                .scaledToFill()
+                .frame(width: 64, height: 64)
+                .clipShape(.rect(cornerRadius: MoneyMapDesign.cornerRadius))
+        } else {
+            ZStack {
+                RoundedRectangle(cornerRadius: MoneyMapDesign.cornerRadius)
+                    .fill((bill.category?.color ?? .gray).gradient)
+
+                Image(systemName: bill.category?.icon ?? "questionmark.circle")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 64, height: 64)
+        }
+    }
+
+    private var billActionSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                Label("Next Step", systemImage: primaryActionIcon)
+                    .font(.headline)
+
+                Spacer(minLength: 8)
+
+                BillStatusPill(
+                    title: bill.displayStatusName,
+                    systemImage: statusIcon,
+                    tint: bill.displayStatusColor
+                )
+            }
+
+            Text(primaryActionText)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            primaryActionGrid
+
+            if let datePaid = bill.datePaid {
+                Divider()
+
+                BillDetailRow(
+                    title: "Payment Date",
+                    value: MoneyMapFormatters.mediumDateString(for: datePaid),
+                    systemImage: "calendar.badge.checkmark",
+                    tint: .green
+                )
+
+                paymentDateActionGrid
+            }
+        }
+        .padding()
+        .background(MoneyMapDesign.surfaceBackground)
+        .clipShape(.rect(cornerRadius: MoneyMapDesign.sectionCornerRadius))
+    }
+
+    private var actionGridColumns: [GridItem] {
+        [
+            GridItem(.adaptive(minimum: 148), spacing: 8, alignment: .top)
+        ]
+    }
+
+    private var primaryActionGrid: some View {
+        LazyVGrid(columns: actionGridColumns, alignment: .leading, spacing: 8) {
+            ForEach(primaryActions) { action in
+                BillDetailActionButton(action: action)
+            }
+        }
+    }
+
+    private var paymentDateActionGrid: some View {
+        LazyVGrid(columns: actionGridColumns, alignment: .leading, spacing: 8) {
+            ForEach(paymentDateActions) { action in
+                BillDetailActionButton(action: action)
+            }
+        }
+    }
+
+    private var primaryActions: [BillDetailAction] {
+        var actions: [BillDetailAction] = []
+
+        if let paymentURL = bill.paymentURL {
+            actions.append(
+                BillDetailAction(
+                    title: "Open Pay Link",
+                    detail: bill.paymentHost ?? "Website or app",
+                    systemImage: "arrow.up.forward.app",
+                    tint: .blue,
+                    style: .prominent
+                ) {
+                    openURL(paymentURL)
+                }
+            )
+        } else {
+            actions.append(
+                BillDetailAction(
+                    title: "Set Up Link",
+                    detail: "Website or app link",
+                    systemImage: "link.badge.plus",
+                    tint: .blue
+                ) {
+                    showingPaymentLinkSetup = true
+                }
+            )
+        }
+
+        if bill.category == .creditCard {
+            actions.append(
+                BillDetailAction(
+                    title: MoneyMapAction.makePayment.title,
+                    detail: paymentActionDetail,
+                    systemImage: MoneyMapAction.makePayment.systemImage,
+                    tint: .green,
+                    style: bill.paymentURL == nil ? .prominent : .secondary
+                ) {
+                    paymentAmount = ""
+                    makingPayment = true
+                }
+            )
+        } else if canManuallyMarkPaid {
+            actions.append(
+                BillDetailAction(
+                    title: "Mark Paid",
+                    detail: MoneyMapFormatters.currencyString(for: bill.amount ?? 0),
+                    systemImage: "checkmark.circle",
+                    tint: .green,
+                    style: bill.paymentURL == nil ? .prominent : .secondary
+                ) {
+                    showMarkPaidConfirmation = true
+                }
+            )
+        }
+
+        return actions
+    }
+
+    private var paymentDateActions: [BillDetailAction] {
+        [
+            BillDetailAction(
+                title: "Edit Date",
+                detail: "Correct the paid date",
+                systemImage: "calendar",
+                tint: .blue
+            ) {
+                showingPaymentDateEditor = true
+            },
+            BillDetailAction(
+                title: "Clear Date",
+                detail: "Mark unpaid again",
+                systemImage: "minus.circle",
+                tint: .red,
+                role: .destructive
+            ) {
+                showingClearPaymentConfirmation = true
+            }
+        ]
+    }
+
+    private var paymentActionDetail: String {
+        if let payment = bill.creditCardDetails?.recommendedPayment, payment > 0 {
+            return "Recommended \(MoneyMapFormatters.currencyString(for: payment))"
+        }
+        if let minimum = bill.creditCardDetails?.effectiveMinimumPayment, minimum > 0 {
+            return "Minimum \(MoneyMapFormatters.currencyString(for: minimum))"
+        }
+        return "Record an amount"
     }
     
     private var creditCardDetailsSection: some View {
         Group {
             if bill.category == .creditCard, let details = bill.creditCardDetails {
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text("Card Balance")
-                            .font(.title3.weight(.medium))
-                        Text("\(details.cardBalance.abbreviatedCurrency) of \(details.creditLimit.abbreviatedCurrency)")
-                            .foregroundStyle(.secondary)
+                let gaugeMaximum = max(details.creditLimit, details.cardBalance, 1)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .center, spacing: 12) {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Card")
+                                    .font(.headline)
+                                Text("\(details.cardBalance.abbreviatedCurrency) of \(details.creditLimit.abbreviatedCurrency)")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "creditcard")
+                                .foregroundStyle(aboveMax ? .red : .green)
+                        }
+
+                        Spacer(minLength: 8)
+
+                        Gauge(value: min(details.cardBalance, gaugeMaximum), in: 0...gaugeMaximum) {
+                            Text(details.utilization, format: .percent.precision(.fractionLength(0)))
+                                .font(.callout.weight(.medium))
+                        }
+                        .gaugeStyle(.accessoryCircularCapacity)
+                        .tint(aboveMax ? .red : .green)
                     }
-                    Spacer()
-                    Gauge(value: details.cardBalance, in: 0...details.creditLimit) {
-                        Text(details.utilization, format: .percent.precision(.fractionLength(0)))
-                            .font(.callout.weight(.medium))
+
+                    Divider()
+
+                    BillDetailRow(
+                        title: "Balance",
+                        value: MoneyMapFormatters.currencyString(for: details.cardBalance),
+                        systemImage: "dollarsign.circle",
+                        tint: aboveMax ? .red : .green
+                    )
+                    BillDetailRow(
+                        title: "Credit Limit",
+                        value: MoneyMapFormatters.currencyString(for: details.creditLimit),
+                        systemImage: "gauge.with.dots.needle.67percent",
+                        tint: .blue
+                    )
+                    BillDetailRow(
+                        title: "Max Usage",
+                        value: MoneyMapFormatters.currencyString(for: details.creditLimit * 0.3),
+                        systemImage: "target",
+                        tint: .orange
+                    )
+
+                    if let recommendedPayment, recommendedPayment > 0 {
+                        BillDetailRow(
+                            title: "Recommended Payment",
+                            value: MoneyMapFormatters.currencyString(for: recommendedPayment),
+                            systemImage: "arrow.down.circle",
+                            tint: .green
+                        )
                     }
-                    .gaugeStyle(.accessoryCircularCapacity)
-                    .tint(aboveMax ? .red : .green)
+
+                    if let apr = details.annualPercentageRate {
+                        BillDetailRow(
+                            title: "APR",
+                            value: apr.formatted(.percent.precision(.fractionLength(2))),
+                            systemImage: "percent",
+                            tint: .purple
+                        )
+                    }
+
+                    if details.effectiveMinimumPayment > 0 {
+                        BillDetailRow(
+                            title: "Minimum Payment",
+                            value: MoneyMapFormatters.currencyString(for: details.effectiveMinimumPayment),
+                            systemImage: "creditcard.and.123",
+                            tint: .blue
+                        )
+                    }
+
+                    if let statementBalance = details.statementBalance {
+                        BillDetailRow(
+                            title: "Statement Balance",
+                            value: MoneyMapFormatters.currencyString(for: statementBalance),
+                            systemImage: "doc.text",
+                            tint: .indigo
+                        )
+                    }
+
+                    if let issuerName = details.issuerName, !issuerName.isEmpty {
+                        BillDetailRow(
+                            title: "Issuer",
+                            value: issuerName,
+                            systemImage: "building.columns",
+                            tint: .secondary
+                        )
+                    }
+
+                    if let lastFour = details.lastFourDigits, !lastFour.isEmpty {
+                        BillDetailRow(
+                            title: "Card",
+                            value: "•••• \(lastFour)",
+                            systemImage: "number",
+                            tint: .secondary
+                        )
+                    }
+
+                    if bill.plaidAccountID != nil {
+                        Button {
+                            showingCardDataSources = true
+                        } label: {
+                            BillDetailRow(
+                                title: "Data Sources",
+                                value: bankSyncDetailText,
+                                systemImage: "link.circle.fill",
+                                tint: MoneyMapDesign.calmGreen
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if let closingDate = details.statementClosingDate {
+                        BillDetailRow(
+                            title: "Statement Closes",
+                            value: MoneyMapFormatters.mediumDateString(for: closingDate),
+                            systemImage: "calendar",
+                            tint: .orange
+                        )
+                    }
+
+                    if let promoDate = details.promoAPRExpiration {
+                        BillDetailRow(
+                            title: "Promo APR Ends",
+                            value: MoneyMapFormatters.mediumDateString(for: promoDate),
+                            systemImage: "calendar.badge.exclamationmark",
+                            tint: .red
+                        )
+                    }
                 }
                 .padding()
-                .background(Color(uiColor: .secondarySystemGroupedBackground))
-                .clipShape(.rect(cornerRadius: 15))
-                .shadow(color: .black.opacity(0.1), radius: 5, x: 0, y: 5)
-                .padding(.bottom)
-                
-                HStack {
-                    Text("Max Usage")
-                    Spacer()
-                    Text(details.creditLimit * 0.3, format: .currency(code: "USD"))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal)
-                
-                if let recommendedPayment {
-                    HStack {
-                        Text("Recommended Payment")
-                        Spacer()
-                        Text(recommendedPayment, format: .currency(code: "USD"))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal)
-                }
-
-                if let apr = details.annualPercentageRate {
-                    HStack {
-                        Text("APR")
-                        Spacer()
-                        Text(apr, format: .percent.precision(.fractionLength(2)))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal)
-                }
-
-                if details.effectiveMinimumPayment > 0 {
-                    HStack {
-                        Text("Minimum Payment")
-                        Spacer()
-                        Text(details.effectiveMinimumPayment, format: .currency(code: "USD"))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal)
-                }
-
-                if let statementBalance = details.statementBalance {
-                    HStack {
-                        Text("Statement Balance")
-                        Spacer()
-                        Text(statementBalance, format: .currency(code: "USD"))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal)
-                }
-
-                if let issuerName = details.issuerName, !issuerName.isEmpty {
-                    HStack {
-                        Text("Issuer")
-                        Spacer()
-                        Text(issuerName)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal)
-                }
-
-                if let lastFour = details.lastFourDigits, !lastFour.isEmpty {
-                    HStack {
-                        Text("Card")
-                        Spacer()
-                        Text("•••• \(lastFour)")
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal)
-                }
-
-                if let closingDate = details.statementClosingDate {
-                    HStack {
-                        Text("Statement Closes")
-                        Spacer()
-                        Text(closingDate, style: .date)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal)
-                }
-
-                if let promoDate = details.promoAPRExpiration {
-                    HStack {
-                        Text("Promo APR Ends")
-                        Spacer()
-                        Text(promoDate, style: .date)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal)
-                }
+                .background(MoneyMapDesign.surfaceBackground)
+                .clipShape(.rect(cornerRadius: MoneyMapDesign.sectionCornerRadius))
             }
         }
+    }
+
+    private var bankSyncDetailText: String {
+        if let updatedAt = bill.plaidUpdatedAt {
+            return "Linked \(updatedAt.formatted(date: .abbreviated, time: .shortened))"
+        }
+        return "Linked"
     }
     
     private var recurrenceSection: some View {
-        HStack {
-            Text("Recurrence")
-            Spacer()
-            Text("Every \(bill.recurrenceInterval ?? 1) \(bill.recurrenceUnit?.rawValue ?? "")\((bill.recurrenceInterval ?? 1) > 1 ? "s" : "")")
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Schedule", systemImage: "calendar")
+                .font(.headline)
+
+            Divider()
+
+            BillDetailRow(
+                title: "Due Date",
+                value: dueDateText,
+                systemImage: "calendar",
+                tint: bill.displayStatusColor
+            )
+            BillDetailRow(
+                title: "Recurrence",
+                value: recurrenceText,
+                systemImage: "repeat",
+                tint: .blue
+            )
         }
-        .padding(.horizontal)
+        .padding()
+        .background(MoneyMapDesign.surfaceBackground)
+        .clipShape(.rect(cornerRadius: MoneyMapDesign.sectionCornerRadius))
     }
 
     private var billMetaSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Toggle("Autopay", isOn: $autopayEnabled)
-                .padding(.horizontal)
-                .onChange(of: autopayEnabled) { _, isEnabled in
-                    if !isEnabled {
-                        autopaySource = ""
+        VStack(alignment: .leading, spacing: MoneyMapDesign.sectionSpacing) {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Payment Settings", systemImage: "gearshape")
+                    .font(.headline)
+
+                Divider()
+
+                Toggle("Autopay", isOn: $autopayEnabled)
+                    .onChange(of: autopayEnabled) { _, isEnabled in
+                        if !isEnabled {
+                            autopaySource = ""
+                        }
+                        saveBillMeta()
                     }
+
+                Picker("Pay From", selection: $selectedPaymentMethodID) {
+                    Text("No Payment Method").tag(Optional<UUID>.none)
+                    ForEach(sortedPaymentMethods) { method in
+                        Label(method.displayName, systemImage: method.type.icon)
+                            .tag(Optional(method.id))
+                    }
+                }
+                .onChange(of: selectedPaymentMethodID) { _, _ in
                     saveBillMeta()
                 }
 
-            if autopayEnabled {
-                HStack {
-                    Text("Autopay Source")
-                    Spacer()
-                    TextField("Checking Account", text: $autopaySource)
-                        .multilineTextAlignment(.trailing)
-                        .foregroundStyle(.secondary)
-                        .onSubmit(saveBillMeta)
+                if let selectedPaymentMethod {
+                    BillDetailRow(
+                        title: "Pay From",
+                        value: selectedPaymentMethod.detailText,
+                        systemImage: selectedPaymentMethod.type.icon,
+                        tint: selectedPaymentMethod.type.color
+                    )
                 }
-                .padding(.horizontal)
-            }
 
-            Stepper(
-                "Grace Period: \(gracePeriodDays) day\(gracePeriodDays == 1 ? "" : "s")",
-                value: $gracePeriodDays,
-                in: 0...31
-            )
-            .padding(.horizontal)
-            .onChange(of: gracePeriodDays) { _, _ in
-                saveBillMeta()
+                Button {
+                    showingPaymentMethodEditor = true
+                } label: {
+                    MoneyMapNeutralButtonLabel(
+                        title: "Add Payment Method",
+                        systemImage: "plus.circle",
+                        iconColor: MoneyMapDesign.calmGreen,
+                        fillsWidth: false
+                    )
+                }
+                .buttonStyle(.bordered)
+
+                if autopayEnabled && selectedPaymentMethod == nil {
+                    HStack {
+                        Text("Autopay Source")
+                        Spacer(minLength: 12)
+                        TextField("Checking Account", text: $autopaySource)
+                            .multilineTextAlignment(.trailing)
+                            .foregroundStyle(.secondary)
+                            .onSubmit(saveBillMeta)
+                            .onChange(of: autopaySource) { _, _ in
+                                saveBillMeta()
+                            }
+                    }
+                }
+
+                Stepper(
+                    "Grace Period: \(gracePeriodDays) day\(gracePeriodDays == 1 ? "" : "s")",
+                    value: $gracePeriodDays,
+                    in: 0...31
+                )
+                .onChange(of: gracePeriodDays) { _, _ in
+                    saveBillMeta()
+                }
+
+                if shouldShowPlaidUnavailableToggle {
+                    Divider()
+
+                    Toggle("Not Available in Plaid", isOn: $plaidUnavailable)
+                        .onChange(of: plaidUnavailable) { _, _ in
+                            saveBillMeta()
+                        }
+
+                    Text("MoneyMap will keep this card manual and skip upgrade prompts for it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .padding()
+            .background(MoneyMapDesign.surfaceBackground)
+            .clipShape(.rect(cornerRadius: MoneyMapDesign.sectionCornerRadius))
+
+            PaymentLinkSummaryCard(
+                bill: bill,
+                openPaymentLink: { url in
+                    openURL(url)
+                },
+                configurePaymentLink: {
+                    showingPaymentLinkSetup = true
+                }
+            )
 
             if let notes = bill.notes, !notes.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
@@ -727,8 +1221,8 @@ struct BillView: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding()
-                .background(Color(uiColor: .secondarySystemGroupedBackground))
-                .clipShape(.rect(cornerRadius: 15))
+                .background(MoneyMapDesign.surfaceBackground)
+                .clipShape(.rect(cornerRadius: MoneyMapDesign.sectionCornerRadius))
             }
         }
         .onDisappear {
@@ -745,6 +1239,13 @@ struct BillView: View {
 
     private var paymentAlertTitle: String {
         bill.name ?? "Payment Amount"
+    }
+
+    private var defaultScheduleDate: Date {
+        let calendar = Calendar.current
+        return bill.nextOccurrenceDate(calendar: calendar) ??
+            calendar.date(byAdding: .day, value: 7, to: bill.dueDate ?? .now) ??
+            .now
     }
 
     private func recordPayment() {
@@ -799,17 +1300,96 @@ struct BillView: View {
         AppRefreshEvents.notifyBillsDidChange()
     }
 
+    private func updatePaymentDate(_ date: Date) {
+        bill.datePaid = date
+        bill.status = .paid
+        saveBillState()
+    }
+
+    private func clearPaymentDate() {
+        bill.datePaid = nil
+        bill.checkStatus()
+        saveBillState()
+    }
+
+    private func deleteBill() {
+        modelContext.delete(bill)
+        do {
+            try modelContext.save()
+            AppRefreshEvents.notifyBillsDidChange()
+            dismiss()
+        } catch {
+            importErrorMessage = "Could not delete this bill: \(error.localizedDescription)"
+            importErrorAlert = true
+        }
+    }
+
+    private func delayBill(to date: Date) {
+        bill.delay(to: date)
+        saveScheduleChange()
+    }
+
+    private func skipBill() {
+        bill.skipNextOccurrence()
+        saveScheduleChange()
+    }
+
+    private func pauseBill() {
+        bill.pause()
+        saveScheduleChange()
+    }
+
+    private func cancelBill() {
+        bill.cancel()
+        saveScheduleChange()
+    }
+
+    private func resumeBill(on date: Date) {
+        bill.resume(nextDueDate: date)
+        saveScheduleChange()
+    }
+
+    private func saveScheduleChange() {
+        do {
+            try modelContext.save()
+            AppRefreshEvents.notifyBillsDidChange()
+        } catch {
+            importErrorMessage = "Could not update this bill: \(error.localizedDescription)"
+            importErrorAlert = true
+        }
+    }
+
+    private func saveBillState() {
+        do {
+            try modelContext.save()
+            AppRefreshEvents.notifyBillsDidChange()
+        } catch {
+            importErrorMessage = "Could not update this bill: \(error.localizedDescription)"
+            importErrorAlert = true
+        }
+    }
+
+    private var canManuallyMarkPaid: Bool {
+        bill.lifecycleState == .active && bill.status != .paid && !bill.autopayEnabled
+    }
+
     private func loadBillMeta() {
         autopayEnabled = bill.autopayEnabled
         autopaySource = bill.autopaySource ?? ""
+        selectedPaymentMethodID = bill.paymentMethodID
         gracePeriodDays = bill.gracePeriodDays ?? 0
+        plaidUnavailable = bill.plaidUnavailable
     }
 
     private func saveBillMeta() {
-        bill.autopayEnabled = autopayEnabled
         let normalizedAutopaySource = autopaySource.trimmingCharacters(in: .whitespacesAndNewlines)
-        bill.autopaySource = autopayEnabled && !normalizedAutopaySource.isEmpty ? normalizedAutopaySource : nil
-        bill.gracePeriodDays = gracePeriodDays > 0 ? gracePeriodDays : nil
+        bill.updatePaymentSettings(
+            autopayEnabled: autopayEnabled,
+            paymentMethodID: selectedPaymentMethodID,
+            autopaySource: normalizedAutopaySourceForSave(fallback: normalizedAutopaySource),
+            gracePeriodDays: gracePeriodDays
+        )
+        bill.plaidUnavailable = shouldShowPlaidUnavailableToggle && plaidUnavailable
         bill.checkStatus()
         do {
             try modelContext.save()
@@ -819,7 +1399,33 @@ struct BillView: View {
             importErrorAlert = true
         }
     }
-    
+
+    private var sortedPaymentMethods: [PaymentMethod] {
+        paymentMethods.sorted {
+            if $0.type == $1.type {
+                return $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            }
+            return $0.type.name < $1.type.name
+        }
+    }
+
+    private var selectedPaymentMethod: PaymentMethod? {
+        guard let selectedPaymentMethodID else { return nil }
+        return paymentMethods.first { $0.id == selectedPaymentMethodID }
+    }
+
+    private func normalizedAutopaySourceForSave(fallback: String) -> String? {
+        guard autopayEnabled else { return nil }
+        if let selectedPaymentMethod {
+            return selectedPaymentMethod.displayName
+        }
+        return fallback.isEmpty ? nil : fallback
+    }
+
+    private var shouldShowPlaidUnavailableToggle: Bool {
+        bill.category == .creditCard && (bill.plaidAccountID ?? "").isEmpty
+    }
+
     var recommendedPayment: Double? {
         
         guard let details = bill.creditCardDetails else {
@@ -865,6 +1471,193 @@ struct BillView: View {
                 Text("N/A")
             }
         }
+    }
+}
+
+private struct BillDetailAction: Identifiable {
+    enum Style: Equatable {
+        case prominent
+        case secondary
+    }
+
+    let title: String
+    let detail: String
+    let systemImage: String
+    let tint: Color
+    var style: Style = .secondary
+    var role: ButtonRole?
+    let handler: () -> Void
+
+    var id: String {
+        "\(title)-\(systemImage)"
+    }
+}
+
+private struct BillDetailActionButton: View {
+    let action: BillDetailAction
+
+    var body: some View {
+        Button(role: action.role) {
+            action.handler()
+        } label: {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: action.systemImage)
+                    .font(.headline)
+                    .foregroundStyle(action.tint)
+                    .frame(width: 24)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(action.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+
+                    Text(action.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.82)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(MoneyMapDesign.controlBackground)
+            .clipShape(.rect(cornerRadius: MoneyMapDesign.controlCornerRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius)
+                    .stroke(MoneyMapDesign.separator.opacity(0.24), lineWidth: 0.5)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct BillHeaderMetric: View {
+    let title: String
+    let value: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: systemImage)
+                .foregroundStyle(tint)
+                .frame(width: 20)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct BillStatusPill: View {
+    let title: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .foregroundStyle(tint)
+            .background(tint.opacity(0.12), in: Capsule())
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+    }
+}
+
+private struct BillDetailRow: View {
+    let title: String
+    let value: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Image(systemName: systemImage)
+                .foregroundStyle(tint)
+                .frame(width: 24)
+                .accessibilityHidden(true)
+
+            Text(title)
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 12)
+
+            Text(value)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+                .minimumScaleFactor(0.82)
+        }
+        .font(.subheadline)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct BillDetailConfirmationDialogs: ViewModifier {
+    let billName: String?
+    @Binding var showingMarkPaid: Bool
+    @Binding var showingDeleteBill: Bool
+    @Binding var showingClearPayment: Bool
+    let markPaid: () -> Void
+    let deleteBill: () -> Void
+    let clearPaymentDate: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog(
+                "Mark \(billName ?? "this bill") as paid?",
+                isPresented: $showingMarkPaid,
+                titleVisibility: .visible
+            ) {
+                Button("Mark Paid") {
+                    markPaid()
+                }
+                Button("Cancel", role: .cancel) { }
+            }
+            .confirmationDialog(
+                "Delete \(billName ?? "this bill")?",
+                isPresented: $showingDeleteBill,
+                titleVisibility: .visible
+            ) {
+                Button("Delete Bill", role: .destructive) {
+                    deleteBill()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("This removes the bill and its detail history from the app.")
+            }
+            .confirmationDialog(
+                "Clear payment date?",
+                isPresented: $showingClearPayment,
+                titleVisibility: .visible
+            ) {
+                Button("Clear Payment Date", role: .destructive) {
+                    clearPaymentDate()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("This marks the bill unpaid again if the due date still needs attention.")
+            }
     }
 }
 
@@ -1019,6 +1812,225 @@ struct DocumentPicker: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+}
+
+private struct CreditCardDataSourcesView: View {
+    let bill: Bill
+    private let plaidContainer: ModelContainer
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var plaidAccount: PlaidAccountValue?
+    @State private var loadErrorMessage: String?
+
+    init(bill: Bill) {
+        self.bill = bill
+        do {
+            plaidContainer = try PlaidSyncContainerFactory.make()
+        } catch {
+            plaidContainer = PlaidSyncContainerFactory.makeInMemory(fallbackReason: "Could not open Plaid card data: \(error.localizedDescription)")
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                sourceSummarySection
+                plaidSection
+                manualSection
+                calculatedSection
+            }
+            .navigationTitle("Data Sources")
+            .navigationBarTitleDisplayMode(.inline)
+            .scrollContentBackground(.hidden)
+            .background(MoneyMapDesign.groupedBackground)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+            .task {
+                loadPlaidAccount()
+            }
+        }
+    }
+
+    private var sourceSummarySection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 10) {
+                Label(bill.name ?? "Credit Card", systemImage: "creditcard")
+                    .font(.headline)
+                Text(summaryText)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
+        } footer: {
+            Text("This screen explains where card fields come from without adding labels to every number on the card view.")
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var plaidSection: some View {
+        Section("From Plaid") {
+            if bill.plaidAccountID == nil {
+                DataSourceRow(title: "Bank Sync", value: "Not linked", systemImage: "link.slash", tint: .secondary)
+            } else {
+                DataSourceRow(title: "Institution", value: plaidAccount?.institutionName ?? bill.creditCardDetails?.issuerName ?? "Synced bank", systemImage: "building.columns", tint: MoneyMapDesign.calmGreen)
+                DataSourceRow(title: "Account", value: plaidAccount?.displayName ?? "Linked card", systemImage: "creditcard", tint: MoneyMapDesign.calmGreen)
+                DataSourceRow(title: "Current Balance", value: currentBalanceText, systemImage: "dollarsign.circle", tint: MoneyMapDesign.calmGreen)
+                DataSourceRow(title: "Available Credit", value: availableCreditText, systemImage: "gauge.with.dots.needle.33percent", tint: MoneyMapDesign.calmGreen)
+                DataSourceRow(title: "Last Four", value: lastFourText, systemImage: "number", tint: MoneyMapDesign.calmGreen)
+                DataSourceRow(title: "Last Synced", value: plaidUpdatedText, systemImage: "clock.arrow.circlepath", tint: MoneyMapDesign.calmGreen)
+
+                if let loadErrorMessage {
+                    DataSourceRow(title: "Plaid Snapshot", value: loadErrorMessage, systemImage: "exclamationmark.triangle", tint: MoneyMapDesign.attentionRed)
+                } else if plaidAccount == nil {
+                    DataSourceRow(title: "Plaid Snapshot", value: "Linked account details will appear after the next bank refresh.", systemImage: "icloud.and.arrow.down", tint: .secondary)
+                }
+            }
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var manualSection: some View {
+        Section("Manual in MoneyMap") {
+            if bill.plaidAccountID == nil {
+                DataSourceRow(
+                    title: "Plaid Upgrade",
+                    value: bill.plaidUnavailable ? "Kept manual" : "Available to link",
+                    systemImage: bill.plaidUnavailable ? "hand.raised" : "link",
+                    tint: bill.plaidUnavailable ? .secondary : MoneyMapDesign.calmGreen
+                )
+            }
+            DataSourceRow(title: "Due Date", value: bill.dueDate.map(MoneyMapFormatters.mediumDateString(for:)) ?? "Not set", systemImage: "calendar", tint: .blue)
+            DataSourceRow(title: "Schedule", value: scheduleText, systemImage: "repeat", tint: .blue)
+            DataSourceRow(title: "APR", value: percentageText(bill.creditCardDetails?.annualPercentageRate), systemImage: "percent", tint: .purple)
+            DataSourceRow(title: "Minimum Payment", value: moneyText(bill.creditCardDetails?.minimumPayment), systemImage: "creditcard.and.123", tint: .blue)
+            DataSourceRow(title: "Statement Balance", value: moneyText(bill.creditCardDetails?.statementBalance), systemImage: "doc.text", tint: .indigo)
+            DataSourceRow(title: "Payment Settings", value: bill.autopayEnabled ? "Autopay on" : "Autopay off", systemImage: "gearshape", tint: .secondary)
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var calculatedSection: some View {
+        Section {
+            DataSourceRow(title: "Credit Limit", value: creditLimitSourceText, systemImage: "gauge.with.dots.needle.67percent", tint: MoneyMapDesign.warningGold)
+            DataSourceRow(title: "Utilization", value: utilizationText, systemImage: "chart.pie", tint: MoneyMapDesign.warningGold)
+            DataSourceRow(title: "Recommended Payment", value: moneyText(bill.creditCardDetails?.recommendedPayment), systemImage: "arrow.down.circle", tint: MoneyMapDesign.warningGold)
+        } header: {
+            Text("Calculated by MoneyMap")
+        } footer: {
+            Text("Calculated fields may combine Plaid balances with manual MoneyMap settings.")
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var summaryText: String {
+        if bill.plaidAccountID == nil {
+            return "This card is managed manually in MoneyMap."
+        }
+        return "This card combines Plaid bank data with your MoneyMap schedule and settings."
+    }
+
+    private var currentBalanceText: String {
+        moneyText(plaidAccount?.currentBalance ?? bill.creditCardDetails?.cardBalance)
+    }
+
+    private var availableCreditText: String {
+        moneyText(plaidAccount?.availableBalance)
+    }
+
+    private var lastFourText: String {
+        if let mask = plaidAccount?.mask, !mask.isEmpty {
+            return "•••• \(mask)"
+        }
+        if let lastFour = bill.creditCardDetails?.lastFourDigits, !lastFour.isEmpty {
+            return "•••• \(lastFour)"
+        }
+        return "Not available"
+    }
+
+    private var plaidUpdatedText: String {
+        bill.plaidUpdatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Not synced yet"
+    }
+
+    private var scheduleText: String {
+        guard let interval = bill.recurrenceInterval, let unit = bill.recurrenceUnit else {
+            return "Not set"
+        }
+        return "Every \(interval) \(unit.rawValue)\(interval == 1 ? "" : "s")"
+    }
+
+    private var creditLimitSourceText: String {
+        guard let details = bill.creditCardDetails else { return "Not set" }
+        let value = MoneyMapFormatters.currencyString(for: details.creditLimit)
+        if plaidAccount?.availableBalance != nil {
+            return "\(value) from Plaid balance plus available credit"
+        }
+        return "\(value) manual value"
+    }
+
+    private var utilizationText: String {
+        guard let details = bill.creditCardDetails else { return "Not available" }
+        return details.utilization.formatted(.percent.precision(.fractionLength(0)))
+    }
+
+    private func moneyText(_ value: Double?) -> String {
+        guard let value else { return "Not set" }
+        return MoneyMapFormatters.currencyString(for: value)
+    }
+
+    private func percentageText(_ value: Double?) -> String {
+        guard let value else { return "Not set" }
+        return value.formatted(.percent.precision(.fractionLength(2)))
+    }
+
+    @MainActor
+    private func loadPlaidAccount() {
+        guard let plaidAccountID = bill.plaidAccountID else { return }
+
+        do {
+            let context = ModelContext(plaidContainer)
+            let descriptor = FetchDescriptor<PlaidAccountSnapshot>(
+                predicate: #Predicate { account in
+                    account.accountID == plaidAccountID
+                }
+            )
+            if let account = try context.fetch(descriptor).first {
+                plaidAccount = PlaidAccountValue(account)
+            }
+        } catch {
+            loadErrorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct DataSourceRow: View {
+    let title: String
+    let value: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text(value)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } icon: {
+            Image(systemName: systemImage)
+                .foregroundStyle(tint)
+                .frame(width: 26)
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+    }
 }
 
 #Preview {

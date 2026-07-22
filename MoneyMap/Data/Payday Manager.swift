@@ -146,7 +146,7 @@ class PaydayManager: ObservableObject {
 struct PreviewDataProvider {
     @MainActor static func createContainer() -> (ModelContainer, PaydayManager) {
         guard let container = try? ModelContainer(
-            for: Goal.self, PaydayConfig.self, Bill.self, Transaction.self, AuditEvent.self,
+            for: Goal.self, PaydayConfig.self, Bill.self, Transaction.self, AuditEvent.self, PaymentMethod.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true) // In-memory store for previews
         ) else {
             preconditionFailure("Failed to create in-memory preview container.")

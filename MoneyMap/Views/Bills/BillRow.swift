@@ -6,11 +6,13 @@
 //
 
 import SwiftUI
+import SwiftData
 import AppIntents
 
 struct BillRow: View {
     
     var bills: Bills
+    @Query(sort: \PaymentMethod.name) private var paymentMethods: [PaymentMethod]
     
     var body: some View {
         VStack {
@@ -22,17 +24,17 @@ struct BillRow: View {
                 NavigationLink {
                     BillsView()
                 } label: {
-                    HStack {
-                        Spacer()
-                        Text("View All")
-                    }
+                    Label("View All", systemImage: "chevron.right")
+                        .labelStyle(.iconOnly)
                 }
-                .foregroundStyle(.blue)
+                .foregroundStyle(MoneyMapDesign.calmGreen)
             }.padding(.horizontal)
             
             ScrollView(.horizontal) {
                 HStack {
-                    ForEach(bills.withoutCreditCards, content: BillButton.init)
+                    ForEach(bills.withoutCreditCards) { bill in
+                        BillButton(bill: bill, paymentMethods: paymentMethods)
+                    }
                 }
                 .padding(.horizontal)
             }
@@ -49,6 +51,7 @@ struct BillRow: View {
 struct BillButton: View {
     
     var bill: Bill
+    var paymentMethods: [PaymentMethod] = []
 
     private var dueLabel: String {
         guard let dueDate = bill.dueDate else { return "No due date" }
@@ -67,33 +70,27 @@ struct BillButton: View {
         }
         return "\(daysUntilDue) days"
     }
+
+    private var paymentLabel: String {
+        if let methodName = bill.paymentMethodName(in: paymentMethods) {
+            return "\(bill.paymentModeTitle) - \(methodName)"
+        }
+        return bill.autopayEnabled ? "Autopay" : "Manual"
+    }
     
     var body: some View {
         NavigationLink {
             BillView(bill: bill)
         } label: {
-            HStack {
-                Image(systemName: bill.category?.icon ?? "questionmark.circle")
-                    .imageScale(.large)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(bill.name ?? "Untitled")
-                        .font(.title3.weight(.semibold))
-                    Text(dueLabel)
-                        .font(.footnote)
-                        .opacity(0.7)
+            BillStateRow(bill: bill, paymentMethods: paymentMethods)
+                .padding(12)
+                .frame(width: 320, alignment: .leading)
+                .background(MoneyMapDesign.surfaceBackground, in: RoundedRectangle(cornerRadius: MoneyMapDesign.sectionCornerRadius))
+                .overlay {
+                    RoundedRectangle(cornerRadius: MoneyMapDesign.sectionCornerRadius)
+                        .stroke(MoneyMapDesign.separator, lineWidth: 1)
                 }
-                Text((bill.amount ?? 0), format: .currency(code: "USD").precision(.fractionLength(0)))
-                    .font(.system(.title, design: .rounded, weight: .bold))
-                    .padding(.leading)
-            }
-            .padding()
-            .foregroundStyle(.white)
-            .background(bill.category?.color.gradient ?? Color.gray.gradient)
-            .clipShape(.rect(cornerRadius: 10))
         }
-        .simultaneousGesture(TapGesture().onEnded {
-            MoneyMapIntentDonations.donateOpenBill(bill)
-        })
         .userActivity("com.heyjoshsmith.MoneyMap.viewingBillCard") { activity in
             let entity = BillEntity(bill)
             activity.title = "Browsing \(entity.name)"
@@ -103,7 +100,7 @@ struct BillButton: View {
             bill.checkStatus()
         }
     }
-    
+
 }
 
 #Preview {
@@ -111,7 +108,9 @@ struct BillButton: View {
         List {
             BillRow(bills: Bill.sampleBills().withoutCreditCards)
         }
-        .listStyle(.plain)
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(MoneyMapDesign.groupedBackground)
     }
     .modelContainer(Bill.preview)
 }

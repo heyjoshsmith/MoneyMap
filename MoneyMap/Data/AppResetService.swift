@@ -31,8 +31,23 @@ enum AppResetService {
         for bill in try modelContext.fetch(FetchDescriptor<Bill>()) {
             modelContext.delete(bill)
         }
+        for paymentMethod in try modelContext.fetch(FetchDescriptor<PaymentMethod>()) {
+            modelContext.delete(paymentMethod)
+        }
         for paydayConfig in try modelContext.fetch(FetchDescriptor<PaydayConfig>()) {
             modelContext.delete(paydayConfig)
+        }
+        for plaidConnection in try modelContext.fetch(FetchDescriptor<PlaidConnection>()) {
+            modelContext.delete(plaidConnection)
+        }
+        for plaidAccount in try modelContext.fetch(FetchDescriptor<PlaidAccountSnapshot>()) {
+            modelContext.delete(plaidAccount)
+        }
+        for plaidReviewItem in try modelContext.fetch(FetchDescriptor<PlaidTransactionReviewItem>()) {
+            modelContext.delete(plaidReviewItem)
+        }
+        for plaidSuggestion in try modelContext.fetch(FetchDescriptor<PlaidSuggestion>()) {
+            modelContext.delete(plaidSuggestion)
         }
 
         // Saving model deletions lets SwiftData propagate the same removals to CloudKit.

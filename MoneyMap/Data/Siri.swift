@@ -14,13 +14,25 @@ enum BillCategoryIntentOption: String, AppEnum {
     case utilities
     case creditCard
     case rent
+    case mortgage
     case insurance
     case subscription
+    case streaming
+    case software
+    case membership
     case groceries
     case transportation
     case phone
     case internet
     case entertainment
+    case healthcare
+    case childcare
+    case education
+    case loans
+    case taxes
+    case banking
+    case homeServices
+    case security
     case other
 
     static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Bill Category")
@@ -28,13 +40,25 @@ enum BillCategoryIntentOption: String, AppEnum {
         .utilities: "Utilities",
         .creditCard: "Credit Card",
         .rent: "Rent",
+        .mortgage: "Mortgage",
         .insurance: "Insurance",
         .subscription: "Subscription",
+        .streaming: "Streaming",
+        .software: "Software",
+        .membership: "Membership",
         .groceries: "Groceries",
         .transportation: "Transportation",
         .phone: "Phone",
         .internet: "Internet",
         .entertainment: "Entertainment",
+        .healthcare: "Healthcare",
+        .childcare: "Childcare",
+        .education: "Education",
+        .loans: "Loans",
+        .taxes: "Taxes",
+        .banking: "Banking",
+        .homeServices: "Home Services",
+        .security: "Security",
         .other: "Other"
     ]
 
@@ -43,13 +67,25 @@ enum BillCategoryIntentOption: String, AppEnum {
         case .utilities: return .utilities
         case .creditCard: return .creditCard
         case .rent: return .rent
+        case .mortgage: return .mortgage
         case .insurance: return .insurance
         case .subscription: return .subscription
+        case .streaming: return .streaming
+        case .software: return .software
+        case .membership: return .membership
         case .groceries: return .groceries
         case .transportation: return .transportation
         case .phone: return .phone
         case .internet: return .internet
         case .entertainment: return .entertainment
+        case .healthcare: return .healthcare
+        case .childcare: return .childcare
+        case .education: return .education
+        case .loans: return .loans
+        case .taxes: return .taxes
+        case .banking: return .banking
+        case .homeServices: return .homeServices
+        case .security: return .security
         case .other: return .other
         }
     }

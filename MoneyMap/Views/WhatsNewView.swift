@@ -22,12 +22,13 @@ struct WhatsNewView: View {
                                     .padding(.vertical, 2)
                             }
                         }
+                        .listRowBackground(MoneyMapDesign.surfaceBackground)
                     }
                     Section {
                         ForEach(release.highlights, id: \.self) { item in
                             HStack(alignment: .top, spacing: 10) {
                                 Image(systemName: "sparkles")
-                                    .foregroundStyle(.blue)
+                                    .foregroundStyle(MoneyMapDesign.calmGreen)
                                     .padding(.top, 2)
                                 Text(item)
                             }
@@ -41,8 +42,12 @@ struct WhatsNewView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    .listRowBackground(MoneyMapDesign.surfaceBackground)
                 }
             }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(MoneyMapDesign.groupedBackground)
             .navigationTitle("What's New")
             .toolbar {
                 if let onDone {

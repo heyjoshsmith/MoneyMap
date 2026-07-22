@@ -143,6 +143,7 @@
 		B10100002F5E100000000001 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = "/Applications/Xcode-beta.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/Library/Frameworks/XCTest.framework"; sourceTree = "<absolute>"; };
 		B10100032F5E100000000001 /* MoneyMapTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MoneyMapTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000082F65000000000001 /* MoneyMapWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MoneyMapWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0D100012F70000000000001 /* MoneyMapMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MoneyMapMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -174,6 +175,13 @@
 			);
 			target = B200000E2F65000000000001 /* MoneyMapWatch */;
 		};
+		C0D1000B2F70000000000001 /* Exceptions for "MoneyMapShared" folder in "MoneyMapMac" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				PayCycleLiveActivity.swift,
+			);
+			target = C0D100092F70000000000001 /* MoneyMapMac */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -187,6 +195,9 @@
 		};
 		A726FAED2DC2C602006D6A82 /* MoneyMapShared */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				C0D1000B2F70000000000001 /* Exceptions for "MoneyMapShared" folder in "MoneyMapMac" target */,
+			);
 			path = MoneyMapShared;
 			sourceTree = "<group>";
 		};
@@ -217,6 +228,11 @@
 				B20000092F65000000000001 /* Exceptions for "MoneyMapWatch" folder in "MoneyMapWatch" target */,
 			);
 			path = MoneyMapWatch;
+			sourceTree = "<group>";
+		};
+		C0D100032F70000000000001 /* MoneyMapMac */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = MoneyMapMac;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -271,6 +287,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C0D100042F70000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -282,6 +305,7 @@
 				B10100042F5E100000000001 /* MoneyMapTests */,
 				A79F7D7E2F58B83500736215 /* MainWidget */,
 				B200000A2F65000000000001 /* MoneyMapWatch */,
+				C0D100032F70000000000001 /* MoneyMapMac */,
 				A747BC602DC284F600DAF6B6 /* Frameworks */,
 				34AF79532D5C448E001CEE30 /* Products */,
 				A7FF14062E0CB75100EF0464 /* MoneyMap.icon */,
@@ -297,6 +321,7 @@
 				B10100032F5E100000000001 /* MoneyMapTests.xctest */,
 				A79F7D792F58B83500736215 /* MainWidgetExtension.appex */,
 				B20000082F65000000000001 /* MoneyMapWatch.app */,
+				C0D100012F70000000000001 /* MoneyMapMac.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -473,6 +498,29 @@
 			productReference = B20000082F65000000000001 /* MoneyMapWatch.app */;
 			productType = "com.apple.product-type.application";
 		};
+		C0D100092F70000000000001 /* MoneyMapMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C0D1000A2F70000000000001 /* Build configuration list for PBXNativeTarget "MoneyMapMac" */;
+			buildPhases = (
+				C0D100052F70000000000001 /* Sources */,
+				C0D100042F70000000000001 /* Frameworks */,
+				C0D100062F70000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A726FAED2DC2C602006D6A82 /* MoneyMapShared */,
+				C0D100032F70000000000001 /* MoneyMapMac */,
+			);
+			name = MoneyMapMac;
+			packageProductDependencies = (
+			);
+			productName = MoneyMapMac;
+			productReference = C0D100012F70000000000001 /* MoneyMapMac.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -502,6 +550,9 @@
 					B200000E2F65000000000001 = {
 						CreatedOnToolsVersion = 26.3;
 					};
+					C0D100092F70000000000001 = {
+						CreatedOnToolsVersion = 26.3;
+					};
 				};
 			};
 			buildConfigurationList = 34AF794D2D5C448E001CEE30 /* Build configuration list for PBXProject "AddMoneyMap" */;
@@ -526,6 +577,7 @@
 				A726FAEB2DC2C602006D6A82 /* MoneyMapShared */,
 				A79F7D782F58B83500736215 /* MainWidgetExtension */,
 				B200000E2F65000000000001 /* MoneyMapWatch */,
+				C0D100092F70000000000001 /* MoneyMapMac */,
 			);
 		};
 /* End PBXProject section */
@@ -574,6 +626,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C0D100062F70000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -613,6 +672,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		B200000D2F65000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0D100052F70000000000001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -685,8 +751,9 @@
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
-				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
-				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = NO;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = NO;
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -728,8 +795,9 @@
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
-				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
-				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = NO;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = NO;
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -1196,6 +1264,67 @@
 			};
 			name = Release;
 		};
+		C0D100072F70000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = MoneyMapMac/MoneyMapMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = K6FKZVH5G5;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = MoneyMap;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
+				INFOPLIST_KEY_NSFinancialDataUsageDescription = "Use your transaction history to give financial recommendations.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.heyjoshsmith.MoneyMap.Mac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		C0D100082F70000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = MoneyMapMac/MoneyMapMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = K6FKZVH5G5;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = MoneyMap;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
+				INFOPLIST_KEY_NSFinancialDataUsageDescription = "Use your transaction history to give financial recommendations.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.heyjoshsmith.MoneyMap.Mac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1258,6 +1387,15 @@
 			buildConfigurations = (
 				B20000112F65000000000001 /* Debug */,
 				B20000122F65000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C0D1000A2F70000000000001 /* Build configuration list for PBXNativeTarget "MoneyMapMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0D100072F70000000000001 /* Debug */,
+				C0D100082F70000000000001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

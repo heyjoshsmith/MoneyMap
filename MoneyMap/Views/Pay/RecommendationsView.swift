@@ -74,239 +74,29 @@ struct RecommendationsView: View {
         RecommendationPlanExplainer.availabilityMessage(for: modelAvailability)
     }
 
+    private var cardPaymentTotal: Double {
+        plan.creditCardPayments.reduce(0) { $0 + $1.recommendedPayment }
+    }
+
+    private var goalContributionTotal: Double {
+        plan.goalContributions.reduce(0) { $0 + $1.recommendedContribution }
+    }
+
     var body: some View {
-        Form {
-            Section {
-                TipView(RecommendationStrategiesTip())
-            }
-
-            Section("Money To Plan") {
-                TextField("Amount Available For Goals And Cards", value: $availableCash, format: .currency(code: "USD"))
-                    .keyboardType(.decimalPad)
-                    .focused($amountFieldFocused)
-                Text("Enter only the money you want to use for savings goals and credit-card payments right now. This does not have to be your full paycheck.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if let nextPayday = paydayManager.nextPayday {
-                    LabeledContent("Next Payday") {
-                        Text(nextPayday.formatted(date: .abbreviated, time: .omitted))
-                    }
-                    LabeledContent("Days Away") {
-                        Text("\(paydayManager.daysUntilNextPayday())")
-                    }
-                }
-            }
-
-            Section("Strategies") {
-                Picker("Card Payoff", selection: $payoffStrategy) {
-                    ForEach(CreditCardPayoffStrategy.allCases) { strategy in
-                        Text(strategy.title).tag(strategy)
-                    }
-                }
-                Text(payoffStrategy.description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Picker("Paycheck Plan", selection: $allocationStrategy) {
-                    ForEach(PaycheckAllocationStrategy.allCases) { strategy in
-                        Text(strategy.title).tag(strategy)
-                    }
-                }
-                Text(allocationStrategy.description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Summary") {
-                LabeledContent("Total Available") {
-                    Text(plan.totalAvailable, format: .currency(code: "USD"))
-                }
-                LabeledContent("Planned for Cards") {
-                    Text(plan.creditCardPayments.reduce(0) { $0 + $1.recommendedPayment }, format: .currency(code: "USD"))
-                }
-                LabeledContent("Planned for Goals") {
-                    Text(plan.goalContributions.reduce(0) { $0 + $1.recommendedContribution }, format: .currency(code: "USD"))
-                }
-                LabeledContent("Left Unallocated") {
-                    Text(plan.unallocatedCash, format: .currency(code: "USD"))
-                }
-                Text(plan.summary)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("What Matters Before Payday") {
-                LabeledContent("Upcoming Bills") {
-                    Text("\(digest.upcomingBillCount)")
-                }
-                LabeledContent("Behind Goals") {
-                    Text("\(digest.behindGoalCount)")
-                }
-                if let cardName = digest.topCardName {
-                    LabeledContent("Top Card Action") {
-                        Text(cardName)
-                    }
-                }
-                if let goalName = digest.topGoalName {
-                    LabeledContent("Top Goal Action") {
-                        Text(goalName)
-                    }
-                }
-            }
-
-            Section("Apple Intelligence") {
-                if let availabilityMessage {
-                    Label(availabilityMessage, systemImage: "sparkles")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Use the on-device model to explain why this plan favors certain cards, goals, and timing.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
-                if let generatedExplanation, !generatedExplanation.isEmpty {
-                    Text(generatedExplanation)
-                        .font(.subheadline)
-                }
-
-                if let explanationError {
-                    Text(explanationError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-
-                Button {
-                    Task {
-                        await generateExplanation()
-                    }
-                } label: {
-                    if isGeneratingExplanation {
-                        Label("Explaining Plan...", systemImage: "sparkles")
-                    } else if generatedExplanation == nil {
-                        Label("Explain This Plan", systemImage: "sparkles")
-                    } else {
-                        Label("Refresh Explanation", systemImage: "arrow.clockwise")
-                    }
-                }
-                .disabled(isGeneratingExplanation || availabilityMessage != nil)
-            }
-
-            Section("Scenario Compare") {
-                ForEach(scenarios) { scenario in
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text(scenario.title)
-                                .font(.headline)
-                            Spacer()
-                            Text(scenario.availableCash, format: .currency(code: "USD"))
-                                .font(.headline)
-                        }
-                        Text(scenario.plan.summary)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        HStack {
-                            Label(
-                                MoneyMapFormatters.currencyString(
-                                    for: scenario.plan.creditCardPayments.reduce(0) { $0 + $1.recommendedPayment }
-                                ),
-                                systemImage: "creditcard"
-                            )
-                            Label(
-                                MoneyMapFormatters.currencyString(
-                                    for: scenario.plan.goalContributions.reduce(0) { $0 + $1.recommendedContribution }
-                                ),
-                                systemImage: "target"
-                            )
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-
-            Section("Card Payment Calculator") {
-                if plan.creditCardPayments.isEmpty {
-                    Text("No credit-card payment recommendations yet.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(plan.creditCardPayments, id: \.billID) { recommendation in
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text(recommendation.billName)
-                                    .font(.headline)
-                                Spacer()
-                                Text(recommendation.recommendedPayment, format: .currency(code: "USD"))
-                                    .font(.headline)
-                            }
-                            Text(recommendation.rationale)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            HStack {
-                                if let dueDate = recommendation.dueDate {
-                                    Label(MoneyMapFormatters.mediumDateString(for: dueDate), systemImage: "calendar")
-                                }
-                                Label(recommendation.utilization.formatted(.percent.precision(.fractionLength(0))), systemImage: "chart.pie")
-                                if let apr = recommendation.annualPercentageRate {
-                                    Label(apr.formatted(.percent.precision(.fractionLength(1))), systemImage: "percent")
-                                }
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    Button(didApplyCardPlan ? "Applied Card Plan" : "Apply Recommended Card Payments") {
-                        applyCardPlan()
-                    }
-                    .disabled(didApplyCardPlan)
-                }
-            }
-
-            Section("Goal Contributions") {
-                if plan.goalContributions.isEmpty {
-                    Text("No goal contribution recommendations yet.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(plan.goalContributions, id: \.goalID) { insight in
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text(insight.goalName)
-                                    .font(.headline)
-                                Spacer()
-                                Text(insight.recommendedContribution, format: .currency(code: "USD"))
-                                    .font(.headline)
-                            }
-                            Text("Target each paycheck: \(insight.targetPerPaycheck, format: .currency(code: "USD"))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            if insight.isBehindSchedule {
-                                Text(insight.shortfallAmount > 0
-                                     ? "Behind schedule by about \(insight.shortfallAmount, format: .currency(code: "USD"))."
-                                     : "Behind schedule.")
-                                .font(.subheadline)
-                                .foregroundStyle(.orange)
-                            } else {
-                                Text("On track with this contribution.")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    Button(didApplyGoalPlan ? "Applied Goal Plan" : "Apply Goal Contributions") {
-                        applyGoalPlan()
-                    }
-                    .disabled(didApplyGoalPlan)
-                }
-            }
-
-            Section {
-                TipView(RecommendationApplyTip())
-            }
+        List {
+            overviewSection
+            moneySection
+            strategySection
+            nextActionsSection
+            beforePaydaySection
+            scenarioSection
+            cardPaymentSection
+            goalContributionSection
         }
-        .navigationTitle("Recommendations")
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(MoneyMapDesign.groupedBackground)
+        .navigationTitle("Plan")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -363,6 +153,236 @@ struct RecommendationsView: View {
             didApplyCardPlan = false
             clearExplanation()
         }
+    }
+
+    private var overviewSection: some View {
+        Section {
+            PaycheckPlanOverviewPanel(
+                totalAvailable: plan.totalAvailable,
+                cardPaymentTotal: cardPaymentTotal,
+                goalContributionTotal: goalContributionTotal,
+                unallocatedCash: plan.unallocatedCash,
+                summary: plan.summary,
+                nextPayday: paydayManager.nextPayday,
+                daysUntilNextPayday: paydayManager.nextPayday == nil ? nil : paydayManager.daysUntilNextPayday()
+            )
+        } header: {
+            Text("Paycheck Plan")
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var moneySection: some View {
+        Section("Money To Plan") {
+            TextField("Amount Available For Goals And Cards", value: $availableCash, format: .currency(code: "USD"))
+                .keyboardType(.decimalPad)
+                .focused($amountFieldFocused)
+
+            Text("Only include money you want to put toward cards and goals right now.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let nextPayday = paydayManager.nextPayday {
+                MoneyMapSummaryRow(
+                    title: "Next Payday",
+                    value: MoneyMapFormatters.mediumDateString(for: nextPayday),
+                    detail: "\(paydayManager.daysUntilNextPayday()) day\(paydayManager.daysUntilNextPayday() == 1 ? "" : "s") away",
+                    systemImage: "calendar"
+                )
+            }
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var strategySection: some View {
+        Section("Strategy") {
+            Picker("Card Payoff", selection: $payoffStrategy) {
+                ForEach(CreditCardPayoffStrategy.allCases) { strategy in
+                    Text(strategy.title).tag(strategy)
+                }
+            }
+            Text(payoffStrategy.description)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Picker("Paycheck Plan", selection: $allocationStrategy) {
+                ForEach(PaycheckAllocationStrategy.allCases) { strategy in
+                    Text(strategy.title).tag(strategy)
+                }
+            }
+            Text(allocationStrategy.description)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TipView(RecommendationStrategiesTip())
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var nextActionsSection: some View {
+        Section("Next Actions") {
+            if !plan.creditCardPayments.isEmpty {
+                Button {
+                    applyCardPlan()
+                } label: {
+                    MoneyMapActionListRow(
+                        title: didApplyCardPlan ? "Applied Card Plan" : "Apply Card Payments",
+                        detail: "\(MoneyMapFormatters.currencyString(for: cardPaymentTotal)) across \(plan.creditCardPayments.count) card\(plan.creditCardPayments.count == 1 ? "" : "s")",
+                        systemImage: didApplyCardPlan ? "checkmark.circle.fill" : "creditcard",
+                        tint: didApplyCardPlan ? .green : .blue
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(didApplyCardPlan)
+            }
+
+            if !plan.goalContributions.isEmpty {
+                Button {
+                    applyGoalPlan()
+                } label: {
+                    MoneyMapActionListRow(
+                        title: didApplyGoalPlan ? "Applied Goal Plan" : "Apply Goal Contributions",
+                        detail: "\(MoneyMapFormatters.currencyString(for: goalContributionTotal)) across \(plan.goalContributions.count) goal\(plan.goalContributions.count == 1 ? "" : "s")",
+                        systemImage: didApplyGoalPlan ? "checkmark.circle.fill" : "target",
+                        tint: didApplyGoalPlan ? .green : MoneyMapDesign.calmGreen
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(didApplyGoalPlan)
+            }
+
+            Button {
+                Task {
+                    await generateExplanation()
+                }
+            } label: {
+                MoneyMapActionListRow(
+                    title: explanationActionTitle,
+                    detail: explanationActionDetail,
+                    systemImage: "sparkles",
+                    tint: .purple
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(isGeneratingExplanation || availabilityMessage != nil)
+
+            if let generatedExplanation, !generatedExplanation.isEmpty {
+                Text(generatedExplanation)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+            }
+
+            if let explanationError {
+                Text(explanationError)
+                    .font(.caption)
+                    .foregroundStyle(MoneyMapDesign.attentionRed)
+            }
+
+            TipView(RecommendationApplyTip())
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var beforePaydaySection: some View {
+        Section("Before Payday") {
+            MoneyMapSummaryRow(
+                title: "Upcoming Bills",
+                value: "\(digest.upcomingBillCount)",
+                detail: paydayManager.nextPayday == nil ? "Set payday for better timing" : "Due before your next payday",
+                systemImage: "calendar.badge.exclamationmark",
+                tint: digest.upcomingBillCount > 0 ? MoneyMapDesign.warningGold : .secondary
+            )
+
+            MoneyMapSummaryRow(
+                title: "Behind Goals",
+                value: "\(digest.behindGoalCount)",
+                detail: digest.behindGoalCount == 0 ? "No goal shortfalls detected" : "Need extra attention this cycle",
+                systemImage: "target",
+                tint: digest.behindGoalCount > 0 ? .orange : MoneyMapDesign.calmGreen
+            )
+
+            if let cardName = digest.topCardName {
+                MoneyMapActionListRow(
+                    title: "Top Card Action",
+                    detail: cardName,
+                    systemImage: "creditcard",
+                    tint: .blue
+                )
+            }
+
+            if let goalName = digest.topGoalName {
+                MoneyMapActionListRow(
+                    title: "Top Goal Action",
+                    detail: goalName,
+                    systemImage: "target",
+                    tint: MoneyMapDesign.calmGreen
+                )
+            }
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var scenarioSection: some View {
+        Section("Scenario Compare") {
+            ForEach(scenarios) { scenario in
+                RecommendationScenarioRow(scenario: scenario)
+            }
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var cardPaymentSection: some View {
+        Section("Card Payments") {
+            if plan.creditCardPayments.isEmpty {
+                MoneyMapEmptyState(
+                    title: "No Card Plan Yet",
+                    message: "Add credit cards or increase the money available to plan.",
+                    systemImage: "creditcard"
+                )
+            } else {
+                ForEach(plan.creditCardPayments, id: \.billID) { recommendation in
+                    CardPaymentRecommendationRow(recommendation: recommendation)
+                }
+            }
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var goalContributionSection: some View {
+        Section("Goal Contributions") {
+            if plan.goalContributions.isEmpty {
+                MoneyMapEmptyState(
+                    title: "No Goal Plan Yet",
+                    message: "Add goals or increase the money available to plan.",
+                    systemImage: "target"
+                )
+            } else {
+                ForEach(plan.goalContributions, id: \.goalID) { insight in
+                    GoalContributionRecommendationRow(insight: insight)
+                }
+            }
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var explanationActionTitle: String {
+        if isGeneratingExplanation {
+            return "Explaining Plan"
+        }
+
+        if generatedExplanation == nil {
+            return "Explain This Plan"
+        }
+
+        return "Refresh Explanation"
+    }
+
+    private var explanationActionDetail: String {
+        if let availabilityMessage {
+            return availabilityMessage
+        }
+
+        return "Use Apple Intelligence to explain the recommendation."
     }
 
     private func applyGoalPlan() {
@@ -441,6 +461,205 @@ struct RecommendationsView: View {
     }
 }
 
+private struct PaycheckPlanOverviewPanel: View {
+    let totalAvailable: Double
+    let cardPaymentTotal: Double
+    let goalContributionTotal: Double
+    let unallocatedCash: Double
+    let summary: String
+    let nextPayday: Date?
+    let daysUntilNextPayday: Int?
+
+    private var paydayDetail: String {
+        guard let nextPayday, let daysUntilNextPayday else {
+            return "Set payday for better timing"
+        }
+
+        let dayLabel = daysUntilNextPayday == 1 ? "day" : "days"
+        return "\(MoneyMapFormatters.mediumDateString(for: nextPayday)) - \(daysUntilNextPayday) \(dayLabel) away"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Ready to move")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    MoneyMapMoneyText(
+                        amount: totalAvailable,
+                        font: .title2.weight(.semibold),
+                        foregroundStyle: .primary
+                    )
+                    Text(paydayDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: "wand.and.stars")
+                    .font(.title3)
+                    .foregroundStyle(.purple)
+                    .frame(width: 30, alignment: .center)
+            }
+
+            Text(summary)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            LazyVGrid(columns: metricColumns, spacing: 10) {
+                MoneyMapMetricTile(
+                    title: "Cards",
+                    value: MoneyMapFormatters.currencyString(for: cardPaymentTotal),
+                    systemImage: "creditcard",
+                    tint: .blue
+                )
+                MoneyMapMetricTile(
+                    title: "Goals",
+                    value: MoneyMapFormatters.currencyString(for: goalContributionTotal),
+                    systemImage: "target",
+                    tint: MoneyMapDesign.calmGreen
+                )
+                MoneyMapMetricTile(
+                    title: "Unallocated",
+                    value: MoneyMapFormatters.currencyString(for: unallocatedCash),
+                    systemImage: "dollarsign.circle",
+                    tint: unallocatedCash > 0 ? MoneyMapDesign.warningGold : .secondary
+                )
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var metricColumns: [GridItem] {
+        [
+            GridItem(.adaptive(minimum: 104), spacing: 10)
+        ]
+    }
+}
+
+private struct RecommendationScenarioRow: View {
+    let scenario: RecommendationScenario
+
+    private var cardTotal: Double {
+        scenario.plan.creditCardPayments.reduce(0) { $0 + $1.recommendedPayment }
+    }
+
+    private var goalTotal: Double {
+        scenario.plan.goalContributions.reduce(0) { $0 + $1.recommendedContribution }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(scenario.title)
+                    .font(.headline)
+                Spacer(minLength: 8)
+                MoneyMapMoneyText(amount: scenario.availableCash, font: .headline)
+            }
+
+            Text(scenario.plan.summary)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 14) {
+                Label(MoneyMapFormatters.currencyString(for: cardTotal), systemImage: "creditcard")
+                Label(MoneyMapFormatters.currencyString(for: goalTotal), systemImage: "target")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct CardPaymentRecommendationRow: View {
+    let recommendation: CreditCardPaymentRecommendation
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "creditcard")
+                .font(.headline)
+                .foregroundStyle(.blue)
+                .frame(width: 26, alignment: .center)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(recommendation.billName)
+                        .font(.headline)
+                    Spacer(minLength: 8)
+                    MoneyMapMoneyText(amount: recommendation.recommendedPayment, font: .headline)
+                }
+
+                Text(recommendation.rationale)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 12) {
+                    if let dueDate = recommendation.dueDate {
+                        Label(MoneyMapFormatters.mediumDateString(for: dueDate), systemImage: "calendar")
+                    }
+                    Label(recommendation.utilization.formatted(.percent.precision(.fractionLength(0))), systemImage: "chart.pie")
+                    if let apr = recommendation.annualPercentageRate {
+                        Label(apr.formatted(.percent.precision(.fractionLength(1))), systemImage: "percent")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct GoalContributionRecommendationRow: View {
+    let insight: GoalSavingInsight
+
+    private var scheduleDetail: String {
+        if insight.isBehindSchedule {
+            if insight.shortfallAmount > 0 {
+                return "Behind by about \(MoneyMapFormatters.currencyString(for: insight.shortfallAmount))"
+            }
+
+            return "Behind schedule"
+        }
+
+        return "On track with this contribution"
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "target")
+                .font(.headline)
+                .foregroundStyle(insight.isBehindSchedule ? .orange : MoneyMapDesign.calmGreen)
+                .frame(width: 26, alignment: .center)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(insight.goalName)
+                        .font(.headline)
+                    Spacer(minLength: 8)
+                    MoneyMapMoneyText(amount: insight.recommendedContribution, font: .headline)
+                }
+
+                Text("Target each paycheck: \(MoneyMapFormatters.currencyString(for: insight.targetPerPaycheck))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text(scheduleDetail)
+                    .font(.subheadline)
+                    .foregroundStyle(insight.isBehindSchedule ? .orange : .secondary)
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 private struct RecommendationsWelcomeSheet: View {
     let hasPayday: Bool
     let hasCreditCards: Bool
@@ -452,7 +671,7 @@ private struct RecommendationsWelcomeSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Recommendations")
+                        Text("Paycheck Plan")
                             .font(.largeTitle.bold())
                         Text("This screen helps you decide what to do with one paycheck at a time.")
                             .font(.title3)
@@ -515,10 +734,16 @@ private struct RecommendationsWelcomeSheet: View {
             .navigationTitle("How It Works")
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .bottom) {
-                Button("Start Using Recommendations") {
+                Button {
                     onDone()
+                } label: {
+                    MoneyMapNeutralButtonLabel(
+                        title: "Start Planning",
+                        systemImage: "play.circle",
+                        iconColor: MoneyMapDesign.calmGreen
+                    )
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity)
@@ -526,6 +751,7 @@ private struct RecommendationsWelcomeSheet: View {
             }
         }
     }
+
 }
 
 private struct WelcomeStep: View {
@@ -537,9 +763,9 @@ private struct WelcomeStep: View {
         HStack(alignment: .top, spacing: 12) {
             Text("\(number)")
                 .font(.headline)
-                .foregroundStyle(.white)
+                .foregroundStyle(MoneyMapDesign.calmGreen)
                 .frame(width: 28, height: 28)
-                .background(Color.accentColor)
+                .background(MoneyMapDesign.calmGreen.opacity(0.14))
                 .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 4) {

@@ -19,18 +19,20 @@ struct URLCarousel: View {
     @State private var pastedLinks: [URL] = []
 
     var body: some View {
-        VStack(alignment: .leading) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Links")
-                    .fontWeight(.semibold)
+                Label("Links", systemImage: "link")
+                    .font(.headline)
                 Spacer()
-                Button("Paste", systemImage: "document.on.clipboard", action: pasteLinks)
-                    .imageScale(.small)
-                    .foregroundStyle(Color.accentColor)
-                    .font(.callout)
+                Button(action: pasteLinks) {
+                    Label("Paste", systemImage: "document.on.clipboard")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
-            .font(.title3)
-            if let urls = goal.urls {
+
+            if let urls = goal.urls, !urls.isEmpty {
                 ScrollView(.horizontal) {
                     HStack (spacing: 10) {
                         ForEach(urls, id: \.self) { url in
@@ -40,26 +42,31 @@ struct URLCarousel: View {
                                 Text(url.host?.replacingOccurrences(of: "www.", with: "") ?? "N/A")
                                     .font(.callout)
                                     .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
+                                    .padding(.vertical, 6)
                                     .foregroundStyle(Color.primary)
-                                    .background(Color(uiColor: .tertiarySystemGroupedBackground))
-                                    .clipShape(.rect(cornerRadius: 25))
+                                    .background(MoneyMapDesign.controlBackground)
+                                    .clipShape(Capsule())
                             }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
+                .scrollIndicators(.hidden)
             } else {
-                Text("Got a specific item in mind? Add the link here! You can add as many links as you like.")
+                Text("Paste product, travel, or savings links here.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
         }
-        .padding()
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .background(MoneyMapDesign.surfaceBackground)
         .foregroundColor(Color.primary)
-        .cornerRadius(10)
-        .gridCellColumns(2)
+        .clipShape(RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius)
+                .stroke(MoneyMapDesign.separator, lineWidth: 1)
+        }
     }
     
     private func pasteLinks() {
@@ -88,5 +95,5 @@ struct URLCarousel: View {
     URLCarousel(for: Goal("Standing Desk", targetAmount: 500, deadline: .now, weight: 1.0, paydaysUntil: 6))
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(uiColor: .systemGroupedBackground))
+        .background(MoneyMapDesign.groupedBackground)
 }

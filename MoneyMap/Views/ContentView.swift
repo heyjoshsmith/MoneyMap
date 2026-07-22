@@ -20,53 +20,57 @@ struct ContentView: View {
     @EnvironmentObject private var notificationManager: NotificationManager
     @Query(sort: \Goal.deadline, order: .forward) private var goals: [Goal]
     @Query private var bills: [Bill]
+    @Query(sort: \PaymentMethod.name) private var paymentMethods: [PaymentMethod]
     @Query private var paydayConfigs: [PaydayConfig]
-    @State private var selection: Tab = .home
+    @State private var selection: Tab = .today
     
     @AppStorage("lastSeenWhatsNewVersion") private var lastSeenWhatsNewVersion = ""
     @State private var pendingCSVURLs: [URL] = []
     @State private var showingBillsImportSheet = false
     @State private var showingWhatsNew = false
+    @State private var didScheduleInitialStartupWork = false
+    @State private var didCompleteInitialStartupWork = false
     
     var body: some View {
         TabView(selection: $selection) {
-            SwiftUI.Tab("Home", systemImage: "house", value: Tab.home) {
+            SwiftUI.Tab("Today", systemImage: "sun.max", value: Tab.today) {
                 HomeView()
             }
-            SwiftUI.Tab("Bills", systemImage: "banknote", value: Tab.bills) {
-                BillsHome()
+            SwiftUI.Tab("Wallet", systemImage: "wallet.pass", value: Tab.wallet) {
+                WalletView()
+            }
+            SwiftUI.Tab("Plan", systemImage: "wand.and.stars", value: Tab.plan) {
+                NavigationStack {
+                    RecommendationsView()
+                }
             }
             SwiftUI.Tab("Goals", systemImage: "target", value: Tab.goals) {
                 GoalsView()
             }
-            SwiftUI.Tab("Settings", systemImage: "gear", value: Tab.settings) {
-                Settings()
-            }
-            SwiftUI.Tab("Search", systemImage: "magnifyingglass", value: Tab.search, role: .search) {
+            SwiftUI.Tab("Ask", systemImage: "sparkles", value: Tab.ask, role: .search) {
                 MoneyMapAssistantView()
             }
         }
+        .background(MoneyMapDesign.groupedBackground)
         .onReceive(deepLinkManager.$pendingRoute) { route in
             guard let route else { return }
             handle(route: route)
             deepLinkManager.clearPendingRoute()
         }
-        .sheet(isPresented: $showingBillsImportSheet) {
-            CreditCardPickerSheet(csvURLs: pendingCSVURLs) { selectedBill in
-                // Import logic goes here
-                for url in pendingCSVURLs {
-                    if url.startAccessingSecurityScopedResource() {
-                        defer { url.stopAccessingSecurityScopedResource() }
-                        do {
-                            let context = selectedBill.modelContext ?? modelContext
-                            _ = try importTransactions(fromCSVAt: url, to: selectedBill, context: context)
-                        } catch {
-                            print("Error importing CSV: \(error)")
-                        }
-                    }
+        .sheet(isPresented: $showingBillsImportSheet, onDismiss: {
+            pendingCSVURLs.removeAll()
+        }) {
+            TransactionCSVImportGuideView(
+                csvURLs: pendingCSVURLs,
+                onFinished: { _ in
+                    pendingCSVURLs.removeAll()
+                    showingBillsImportSheet = false
+                },
+                onCancel: {
+                    pendingCSVURLs.removeAll()
+                    showingBillsImportSheet = false
                 }
-                pendingCSVURLs.removeAll()
-            }
+            )
         }
         .sheet(isPresented: $showingWhatsNew) {
             if let latest = WhatsNewRepository.latest {
@@ -77,22 +81,16 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            maybePresentWhatsNew()
+            MoneyMapDiagnostics.record("content.appear")
             consumePendingRouteIfNeeded()
-            refreshBillStatuses()
-            syncBillNotifications()
-            syncGoalNotifications()
-            syncSearchIndex()
-            reloadWidgetTimelines()
+            scheduleInitialStartupWork()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 consumePendingRouteIfNeeded()
-                refreshBillStatuses()
-                syncBillNotifications()
-                syncGoalNotifications()
-                syncSearchIndex()
-                reloadWidgetTimelines()
+                if didCompleteInitialStartupWork {
+                    scheduleForegroundSync()
+                }
             }
         }
         .onChange(of: goalNotificationSignature) { _, _ in
@@ -103,6 +101,9 @@ struct ContentView: View {
             syncSearchIndex()
             reloadWidgetTimelines()
         }
+        .onChange(of: paymentMethodSyncSignature) { _, _ in
+            syncPaymentMethods()
+        }
     }
 
     private func handle(route: MoneyMapRoute) {
@@ -111,25 +112,61 @@ struct ContentView: View {
             pendingCSVURLs = [url]
             showingBillsImportSheet = true
         case .openBill(let billID):
-            selection = .bills
+            selection = .wallet
             deepLinkManager.requestedBillID = billID
         case .openGoal(let goalID):
             selection = .goals
             deepLinkManager.requestedGoalID = goalID
         case .showUpcomingBills:
-            selection = .bills
+            selection = .wallet
             deepLinkManager.requestedBillsDestination = .upcomingBills
         case .showCardUtilization:
-            selection = .bills
+            selection = .wallet
             deepLinkManager.requestedBillsDestination = .cardUtilization
         case .showRecommendations:
-            selection = .home
+            selection = .plan
         }
     }
 
     private func maybePresentWhatsNew() {
         if lastSeenWhatsNewVersion != WhatsNewRepository.currentPresentationID {
             showingWhatsNew = true
+        }
+    }
+
+    private func scheduleInitialStartupWork() {
+        guard !didScheduleInitialStartupWork else { return }
+        didScheduleInitialStartupWork = true
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            maybePresentWhatsNew()
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            runStartupSyncs()
+            didCompleteInitialStartupWork = true
+        }
+    }
+
+    private func scheduleForegroundSync() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            runStartupSyncs()
+        }
+    }
+
+    private func runStartupSyncs() {
+        syncPaymentMethods()
+        refreshBillStatuses()
+        syncBillNotifications()
+        syncGoalNotifications()
+        reloadWidgetTimelines()
+        scheduleSearchIndexSync()
+    }
+
+    private func scheduleSearchIndexSync() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            syncSearchIndex()
         }
     }
 
@@ -181,6 +218,34 @@ struct ContentView: View {
         return "\(goalSignature)#\(billSignature)#\(transactionSignature)#\(paydayAmount)#\(paydayManager.nextPayday?.timeIntervalSince1970 ?? 0)"
     }
 
+    private var paymentMethodSyncSignature: String {
+        let creditCardBillSignature = bills
+            .filter { $0.category == .creditCard }
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { bill in
+                "\(bill.id.uuidString)|\(bill.name ?? "")|\(bill.creditCardDetails?.issuerName ?? "")|\(bill.creditCardDetails?.lastFourDigits ?? "")"
+            }
+            .joined(separator: ";")
+        let creditCardMethodSignature = paymentMethods
+            .filter { $0.type == .creditCard }
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { "\($0.id.uuidString)|\($0.linkedBillID?.uuidString ?? "")|\($0.displayName)" }
+            .joined(separator: ";")
+        return "\(creditCardBillSignature)#\(creditCardMethodSignature)"
+    }
+
+    private func syncPaymentMethods() {
+        guard PaymentMethodSyncService.syncCreditCardPaymentMethods(
+            bills: bills,
+            paymentMethods: paymentMethods,
+            context: modelContext
+        ) else {
+            return
+        }
+
+        try? modelContext.save()
+    }
+
     private func syncSearchIndex() {
         SpotlightIndexer.reindexBills(bills)
         SpotlightIndexer.reindexGoals(goals)
@@ -226,42 +291,8 @@ struct ContentView: View {
     }
     
     enum Tab: String, CaseIterable, Identifiable {
-        case home, bills, search, goals, settings
+        case today, wallet, plan, goals, ask
         var id: Self { return self }
-    }
-}
-
-struct CreditCardPickerSheet: View {
-    @Environment(\.modelContext) private var modelContext
-    let csvURLs: [URL]
-    let onImport: (Bill) -> Void
-    @Query private var bills: [Bill]
-    @Environment(\.dismiss) private var dismiss
-
-    var creditCards: [Bill] {
-        bills.filter { $0.category == .creditCard }
-    }
-    var body: some View {
-        NavigationView {
-            List(creditCards, id: \.id) { card in
-                Button {
-                    onImport(card)
-                    dismiss()
-                } label: {
-                    HStack {
-                        Image(systemName: card.category?.icon ?? "creditcard")
-                            .foregroundStyle(.blue)
-                        Text(card.name ?? "Untitled")
-                        Spacer()
-                        if let amount = card.amount {
-                            Text(amount, format: .currency(code: "USD"))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Select Credit Card")
-        }
     }
 }
 
