@@ -30,7 +30,7 @@ struct SmartFeaturesGuideView: View {
                 GuideRow(
                     icon: "sparkles",
                     title: "Best uses",
-                    detail: "Use Siri for quick answers like what is due next, what you spent recently, or what to do with a paycheck. Use Shortcuts when you want repeatable one-tap actions."
+                    detail: "Use Siri for quick answers like what is due next, what you spent recently, or how to allocate available money. Use Shortcuts when you want repeatable one-tap actions."
                 )
             }
             .listRowBackground(MoneyMapDesign.surfaceBackground)
@@ -39,7 +39,7 @@ struct SmartFeaturesGuideView: View {
                 GuideRow(
                     icon: "sparkles",
                     title: "Search with answers",
-                    detail: "Search bills, goals, transactions, and paycheck recommendations, then ask MoneyMap for grounded Apple Intelligence answers from the same data."
+                    detail: "Search bills, goals, transactions, and allocation recommendations, then ask MoneyMap for grounded Apple Intelligence answers from the same data."
                 )
             }
             .listRowBackground(MoneyMapDesign.surfaceBackground)

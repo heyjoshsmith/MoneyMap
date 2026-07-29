@@ -34,7 +34,7 @@ struct MoneyMapAssistantView: View {
     }
 
     private var amountPerPayday: Double {
-        paydayConfigs.first?.amountPerPayday ?? 0
+        MoneyMapPlanningStore.resolvedPaycheckAmount(manualAmount: paydayConfigs.first?.amountPerPayday ?? 0)
     }
 
     private var nextPayday: Date? {
@@ -245,7 +245,7 @@ struct MoneyMapAssistantView: View {
         Section("Visual Summary") {
             SearchMetricGrid(
                 metrics: [
-                    SearchMetric(title: "Due Before Payday", value: "\(dueBeforePayday.count)", detail: MoneyMapFormatters.currencyString(for: dueBeforePayday.totalAmount), systemImage: "calendar.badge.exclamationmark", color: .orange),
+                    SearchMetric(title: "Upcoming Bills", value: "\(dueBeforePayday.count)", detail: MoneyMapFormatters.currencyString(for: dueBeforePayday.totalAmount), systemImage: "calendar.badge.exclamationmark", color: .orange),
                     SearchMetric(title: "Goal Progress", value: averageGoalProgressText, detail: MoneyMapFormatters.currencyString(for: goals.reduce(0) { $0 + $1.amountSaved }), systemImage: "target", color: .green),
                     SearchMetric(title: "Matched Spend", value: MoneyMapFormatters.currencyString(for: matchedTransactionTotal), detail: "\(matchingTransactions.count) transactions", systemImage: "creditcard", color: .blue),
                     SearchMetric(title: "Unallocated", value: MoneyMapFormatters.currencyString(for: recommendationUnallocatedCash), detail: "After recommended moves", systemImage: "tray", color: .purple)
@@ -254,7 +254,7 @@ struct MoneyMapAssistantView: View {
 
             if !dueBeforePayday.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Bills Before Payday")
+                    Text("Upcoming Bills")
                         .font(.headline)
                     ForEach(dueBeforePayday.prefix(3)) { bill in
                         SearchBillDueBar(bill: bill, total: max(dueBeforePayday.totalAmount, 1))
@@ -279,10 +279,10 @@ struct MoneyMapAssistantView: View {
 
     private var examplesSection: some View {
         Section("Examples") {
-            exampleButton("What bills are due before payday?")
+            exampleButton("What bills are coming up?")
             exampleButton("Search Starbucks transactions")
             exampleButton("How much do I have saved across my goals?")
-            exampleButton("What should I do with my paycheck?")
+            exampleButton("What should I do with my available money?")
         }
         .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
@@ -477,7 +477,7 @@ private struct SearchRecommendationRow: View {
         HStack(spacing: 12) {
             SearchIcon(systemName: "wand.and.stars", color: .purple)
             VStack(alignment: .leading, spacing: 6) {
-                Text("Paycheck Plan")
+                Text("Allocation Plan")
                     .font(.subheadline.weight(.semibold))
                 HStack(spacing: 12) {
                     labeledAmount("Cards", digest.suggestedCardPaymentTotal)

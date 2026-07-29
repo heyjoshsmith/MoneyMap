@@ -282,6 +282,16 @@ struct BillsHome: View {
                 inactiveCount: pausedBills.count + canceledBills.count,
                 unpaidAmount: unpaidActiveBills.reduce(0) { $0 + ($1.amount ?? 0) }
             )
+
+            NavigationLink {
+                RecurringBillReviewView(initialSuggestions: recurringBillSuggestions)
+            } label: {
+                BillsCalendarLinkRow(
+                    savedBillCount: bills.withoutCreditCards.count,
+                    detectedCount: recurringBillSuggestions.count,
+                    nextDueDate: nextActiveDueDate
+                )
+            }
         }
         .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
@@ -298,7 +308,7 @@ struct BillsHome: View {
                     )
                 }
             } header: {
-                Text("Detected Recurring Charges")
+                Text("Detected Charges")
             } footer: {
                 Text("MoneyMap found repeating transactions from imported bank activity. Review each one before adding it as a bill.")
             }
@@ -311,7 +321,7 @@ struct BillsHome: View {
             ContentUnavailableView(
                 "No Bills Yet",
                 systemImage: "list.bullet.clipboard",
-                description: Text("Add bills and subscriptions to track what needs attention.")
+                description: Text("Add bills to track what needs attention.")
             )
         }
         .listRowBackground(MoneyMapDesign.surfaceBackground)
@@ -354,6 +364,12 @@ struct BillsHome: View {
             .joined(separator: ";")
     }
 
+    private var nextActiveDueDate: Date? {
+        unpaidActiveBills
+            .compactMap(\.dueDate)
+            .min()
+    }
+
     private func lifecycleBills(_ state: BillLifecycleState) -> [Bill] {
         bills.withoutCreditCards
             .filter { $0.lifecycleState == state }
@@ -368,23 +384,7 @@ struct BillsHome: View {
     }
 
     private func refreshBillStatuses() {
-        var didChange = false
-
-        for bill in bills {
-            let previousDueDate = bill.dueDate
-            let previousDatePaid = bill.datePaid
-            let previousStatus = bill.status
-
-            bill.checkStatus()
-
-            if previousDueDate != bill.dueDate ||
-                previousDatePaid != bill.datePaid ||
-                previousStatus != bill.status {
-                didChange = true
-            }
-        }
-
-        if didChange {
+        if BillPaymentMatcher.refreshStatuses(for: bills, transactions: transactions) {
             try? modelContext.save()
         }
     }
@@ -656,6 +656,58 @@ private struct BillsOverviewMetric: View {
         .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
         .background(MoneyMapDesign.controlBackground)
         .clipShape(.rect(cornerRadius: MoneyMapDesign.controlCornerRadius))
+    }
+}
+
+private struct BillsCalendarLinkRow: View {
+    let savedBillCount: Int
+    let detectedCount: Int
+    let nextDueDate: Date?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "calendar.badge.clock")
+                .font(.headline)
+                .foregroundStyle(MoneyMapDesign.warningGold)
+                .frame(width: 36, height: 36)
+                .background(MoneyMapDesign.controlBackground)
+                .clipShape(.rect(cornerRadius: 8))
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Bill Calendar")
+                    .font(.headline)
+                Text(detailText)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 12)
+
+            if detectedCount > 0 {
+                Text("\(detectedCount)")
+                    .font(.caption.weight(.bold))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(MoneyMapDesign.calmGreen, in: Capsule())
+                    .accessibilityLabel("\(detectedCount) detected charges")
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var detailText: String {
+        var parts = ["\(savedBillCount) saved"]
+        if detectedCount > 0 {
+            parts.append("\(detectedCount) detected")
+        }
+        if let nextDueDate {
+            parts.append("next \(MoneyMapFormatters.mediumDateString(for: nextDueDate))")
+        }
+        return parts.joined(separator: " - ")
     }
 }
 

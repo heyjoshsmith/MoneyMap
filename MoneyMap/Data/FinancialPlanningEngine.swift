@@ -54,6 +54,28 @@ struct RecommendationDigest: Equatable {
     let topGoalName: String?
 }
 
+struct SavingsBalanceGoalAllocation: Equatable {
+    let goalID: UUID
+    let goalName: String
+    let targetAmount: Double
+    let currentSavedAmount: Double
+    let allocatedAmount: Double
+    let deltaAmount: Double
+    let isBehindSchedule: Bool
+    let targetPerPaycheck: Double
+
+    var remainingAfterAllocation: Double {
+        max(0, targetAmount - allocatedAmount)
+    }
+}
+
+struct SavingsBalancePlan: Equatable {
+    let totalBalance: Double
+    let allocations: [SavingsBalanceGoalAllocation]
+    let allocatedTotal: Double
+    let unallocatedBalance: Double
+}
+
 enum FinancialPlanningEngine {
     static func recommendPaycheckPlan(
         availableCash: Double,
@@ -322,6 +344,101 @@ enum FinancialPlanningEngine {
         .sorted(by: goalInsightSort)
     }
 
+    static func allocateSavingsBalance(
+        balance: Double,
+        goals: [Goal],
+        nextPayday: Date?
+    ) -> SavingsBalancePlan {
+        let totalBalance = roundedToCents(max(balance, 0))
+        let candidates = goals.compactMap { goal -> Goal? in
+            guard (goal.targetAmount ?? 0) > 0 else { return nil }
+            return goal
+        }
+
+        guard !candidates.isEmpty else {
+            return SavingsBalancePlan(
+                totalBalance: totalBalance,
+                allocations: [],
+                allocatedTotal: 0,
+                unallocatedBalance: totalBalance
+            )
+        }
+
+        let insightsByID = Dictionary(
+            uniqueKeysWithValues: goalProgressInsights(goals: goals, nextPayday: nextPayday).map { ($0.goalID, $0) }
+        )
+        var remainingBalance = totalBalance
+        var allocationsByGoalID: [UUID: Double] = [:]
+
+        while remainingBalance > 0 {
+            let openGoals = candidates.compactMap { goal -> (goal: Goal, capacity: Double, weight: Double)? in
+                let currentAllocation = allocationsByGoalID[goal.id] ?? 0
+                let capacity = roundedToCents(max(0, (goal.targetAmount ?? 0) - currentAllocation))
+                guard capacity > 0 else { return nil }
+                return (
+                    goal,
+                    capacity,
+                    savingsBalanceWeight(for: goal, insight: insightsByID[goal.id])
+                )
+            }
+
+            guard !openGoals.isEmpty else { break }
+
+            let passBalance = remainingBalance
+            let totalWeight = openGoals.reduce(0) { $0 + $1.weight }
+            guard totalWeight > 0 else { break }
+
+            var allocatedThisPass = 0.0
+
+            for item in openGoals where remainingBalance > 0 {
+                let weightedShare = roundedToCents(passBalance * (item.weight / totalWeight))
+                let proposed = max(weightedShare, min(remainingBalance, 0.01))
+                let amount = roundedToCents(min(remainingBalance, item.capacity, proposed))
+                guard amount > 0 else { continue }
+                allocationsByGoalID[item.goal.id, default: 0] = roundedToCents((allocationsByGoalID[item.goal.id] ?? 0) + amount)
+                remainingBalance = roundedToCents(max(0, remainingBalance - amount))
+                allocatedThisPass = roundedToCents(allocatedThisPass + amount)
+            }
+
+            if allocatedThisPass == 0 {
+                break
+            }
+        }
+
+        let allocations = candidates.compactMap { goal -> SavingsBalanceGoalAllocation? in
+            guard let targetAmount = goal.targetAmount, targetAmount > 0 else { return nil }
+            let allocatedAmount = roundedToCents(min(targetAmount, allocationsByGoalID[goal.id] ?? 0))
+            let insight = insightsByID[goal.id]
+            return SavingsBalanceGoalAllocation(
+                goalID: goal.id,
+                goalName: goal.name ?? "Goal",
+                targetAmount: roundedToCents(targetAmount),
+                currentSavedAmount: roundedToCents(goal.amountSaved),
+                allocatedAmount: allocatedAmount,
+                deltaAmount: roundedToCents(allocatedAmount - goal.amountSaved),
+                isBehindSchedule: insight?.isBehindSchedule ?? false,
+                targetPerPaycheck: insight?.targetPerPaycheck ?? roundedToCents(goal.amountPerPaycheck ?? 0)
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.isBehindSchedule != rhs.isBehindSchedule {
+                return lhs.isBehindSchedule && !rhs.isBehindSchedule
+            }
+            if lhs.allocatedAmount != rhs.allocatedAmount {
+                return lhs.allocatedAmount > rhs.allocatedAmount
+            }
+            return lhs.goalName.localizedStandardCompare(rhs.goalName) == .orderedAscending
+        }
+
+        let allocatedTotal = roundedToCents(allocations.reduce(0) { $0 + $1.allocatedAmount })
+        return SavingsBalancePlan(
+            totalBalance: totalBalance,
+            allocations: allocations,
+            allocatedTotal: allocatedTotal,
+            unallocatedBalance: roundedToCents(max(0, totalBalance - allocatedTotal))
+        )
+    }
+
     static func scenarioPlans(
         baseAvailableCash: Double,
         goals: [Goal],
@@ -424,6 +541,12 @@ enum FinancialPlanningEngine {
             return lhs.shortfallAmount > rhs.shortfallAmount
         }
         return lhs.recommendedContribution > rhs.recommendedContribution
+    }
+
+    private static func savingsBalanceWeight(for goal: Goal, insight: GoalSavingInsight?) -> Double {
+        let urgency = goal.daysUntilDeadline > 0 ? 1.0 / Double(goal.daysUntilDeadline) : 1.0
+        let behindWeight = insight?.isBehindSchedule == true ? 1.5 : 0
+        return max(0.1, goal.weight) + urgency + behindWeight
     }
 
     private static func cardPriorityScore(for bill: Bill, nextPayday: Date?, strategy: CreditCardPayoffStrategy) -> Double {

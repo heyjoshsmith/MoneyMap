@@ -93,7 +93,13 @@ public struct TransactionCSVImportGuideView: View {
                     .listRowBackground(TransactionImportDesign.surfaceBackground)
                 }
             }
+#if os(iOS)
             .listStyle(.insetGrouped)
+#elseif os(macOS)
+            .listStyle(.inset)
+#else
+            .listStyle(.automatic)
+#endif
             .scrollContentBackground(.hidden)
             .background(TransactionImportDesign.groupedBackground)
             .tint(TransactionImportDesign.accent)

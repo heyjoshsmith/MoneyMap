@@ -501,10 +501,11 @@ struct TransactionEntityQuery: EntityStringQuery {
 
 struct PaydayStatusEntityQuery: UniqueAppEntityQuery {
     func uniqueEntity() async throws -> PaydayStatusEntity {
+        let snapshot = try MoneyMapPlanningStore.snapshot()
         let paydayConfig = try MoneyMapPlanningStore.fetchPrimaryPaydayConfig()
         return PaydayStatusEntity(
-            nextPayday: paydayConfig?.nextPayday,
-            amountPerPayday: paydayConfig?.amountPerPayday,
+            nextPayday: snapshot.nextPayday,
+            amountPerPayday: snapshot.amountPerPayday,
             savingsPerPaycheck: paydayConfig?.savingsPerPaycheck
         )
     }
@@ -685,7 +686,7 @@ struct AddBillIntent: AppIntent {
 
 struct OpenRecommendationsIntent: AppIntent {
     static var title: LocalizedStringResource = "Open Recommendations"
-    static var description = IntentDescription("Open paycheck recommendations in MoneyMap.")
+    static var description = IntentDescription("Open allocation recommendations in MoneyMap.")
     static var openAppWhenRun = true
 
     func perform() async throws -> some IntentResult {
@@ -695,14 +696,14 @@ struct OpenRecommendationsIntent: AppIntent {
 }
 
 struct GetPaycheckRecommendationIntent: AppIntent {
-    static var title: LocalizedStringResource = "Get Paycheck Plan"
-    static var description = IntentDescription("Get recommended paycheck allocations for cards and goals.")
+    static var title: LocalizedStringResource = "Get Allocation Plan"
+    static var description = IntentDescription("Get recommended allocations for available money across cards and goals.")
 
     @Parameter(title: "Available Cash")
     var availableCash: Double?
 
     static var parameterSummary: some ParameterSummary {
-        Summary("Get paycheck plan")
+        Summary("Get allocation plan")
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
@@ -735,14 +736,14 @@ struct GetPaycheckRecommendationIntent: AppIntent {
 }
 
 struct ComparePaycheckScenariosIntent: AppIntent {
-    static var title: LocalizedStringResource = "Compare Paycheck Scenarios"
-    static var description = IntentDescription("Compare lean, planned, and stretch paycheck strategies.")
+    static var title: LocalizedStringResource = "Compare Allocation Scenarios"
+    static var description = IntentDescription("Compare lean, planned, and stretch allocation strategies.")
 
     @Parameter(title: "Base Cash")
     var baseCash: Double?
 
     static var parameterSummary: some ParameterSummary {
-        Summary("Compare paycheck scenarios")
+        Summary("Compare allocation scenarios")
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {

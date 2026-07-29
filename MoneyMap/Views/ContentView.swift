@@ -20,6 +20,7 @@ struct ContentView: View {
     @EnvironmentObject private var notificationManager: NotificationManager
     @Query(sort: \Goal.deadline, order: .forward) private var goals: [Goal]
     @Query private var bills: [Bill]
+    @Query private var transactions: [Transaction]
     @Query(sort: \PaymentMethod.name) private var paymentMethods: [PaymentMethod]
     @Query private var paydayConfigs: [PaydayConfig]
     @State private var selection: Tab = .today
@@ -207,15 +208,18 @@ struct ContentView: View {
                 "\($0.id.uuidString)|\($0.amount ?? 0)|\($0.dueDate?.timeIntervalSince1970 ?? 0)|\($0.datePaid?.timeIntervalSince1970 ?? 0)|\($0.autopayEnabled)|\($0.gracePeriodDays ?? 0)"
             }
             .joined(separator: ";")
-        let transactionSignature = bills
-            .flatMap { $0.transactions ?? [] }
+        let transactionSignature = transactions
             .sorted { MoneyMapTransactionStore.mostRecentFirst(lhs: $0, rhs: $1) }
             .map { transaction in
                 "\(transactionEntityID(for: transaction))|\(transaction.amountUSD ?? 0)|\((transaction.transactionDate ?? transaction.clearingDate)?.timeIntervalSince1970 ?? 0)"
             }
             .joined(separator: ";")
-        let paydayAmount = paydayConfigs.first?.amountPerPayday ?? 0
+        let paydayAmount = resolvedPaycheckAmount
         return "\(goalSignature)#\(billSignature)#\(transactionSignature)#\(paydayAmount)#\(paydayManager.nextPayday?.timeIntervalSince1970 ?? 0)"
+    }
+
+    private var resolvedPaycheckAmount: Double {
+        MoneyMapPlanningStore.resolvedPaycheckAmount(manualAmount: paydayConfigs.first?.amountPerPayday ?? 0)
     }
 
     private var paymentMethodSyncSignature: String {
@@ -249,9 +253,9 @@ struct ContentView: View {
     private func syncSearchIndex() {
         SpotlightIndexer.reindexBills(bills)
         SpotlightIndexer.reindexGoals(goals)
-        SpotlightIndexer.reindexTransactions(bills.flatMap { $0.transactions ?? [] })
+        SpotlightIndexer.reindexTransactions(transactions)
         let digest = FinancialPlanningEngine.digest(
-            availableCash: paydayConfigs.first?.amountPerPayday ?? 0,
+            availableCash: resolvedPaycheckAmount,
             goals: goals,
             bills: bills,
             nextPayday: paydayManager.nextPayday,
@@ -264,19 +268,7 @@ struct ContentView: View {
     private func refreshBillStatuses() {
         var didChange = false
 
-        for bill in bills {
-            let previousDueDate = bill.dueDate
-            let previousDatePaid = bill.datePaid
-            let previousStatus = bill.status
-
-            bill.checkStatus()
-
-            if previousDueDate != bill.dueDate ||
-                previousDatePaid != bill.datePaid ||
-                previousStatus != bill.status {
-                didChange = true
-            }
-        }
+        didChange = BillPaymentMatcher.refreshStatuses(for: bills, transactions: transactions)
 
         if didChange {
             try? modelContext.save()

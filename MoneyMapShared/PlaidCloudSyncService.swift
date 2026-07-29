@@ -13,6 +13,7 @@ import SwiftData
 public enum PlaidCloudSyncService {
     private static let database = CKContainer(identifier: "iCloud.com.heyjoshsmith.MoneyMap").privateCloudDatabase
     private static let snapshotRecordID = CKRecord.ID(recordName: "primary")
+    private static let macRefreshCommandRecordID = CKRecord.ID(recordName: "mac-refresh")
 
     public static func push(context: ModelContext) async throws {
         let snapshot = PlaidCloudSnapshot(
@@ -30,13 +31,17 @@ public enum PlaidCloudSyncService {
         record["payload"] = try encoder.encode(snapshot)
         record["updatedAt"] = snapshot.updatedAt
 
-        let operation = CKModifyRecordsOperation(recordsToSave: [record])
-        operation.savePolicy = .allKeys
-        try await run(operation)
+        try await save(record)
     }
 
     public static func pull(context: ModelContext) async throws {
-        let record = try await database.record(for: snapshotRecordID)
+        let record: CKRecord
+        do {
+            record = try await database.record(for: snapshotRecordID)
+        } catch {
+            throw mapCloudKitError(error, missingSnapshotError: .missingSnapshot)
+        }
+
         guard let payload = record["payload"] as? Data else {
             throw PlaidCloudSyncError.missingSnapshotPayload
         }
@@ -51,26 +56,187 @@ public enum PlaidCloudSyncService {
         try upsertSuggestions(snapshot.suggestions, context: context)
         try context.save()
     }
+
+    public static func requestMacRefresh(source: String) async throws -> PlaidMacRefreshCommand {
+        let command = PlaidMacRefreshCommand(
+            requestID: UUID().uuidString,
+            source: source,
+            state: .pending,
+            requestedAt: .now,
+            startedAt: nil,
+            completedAt: nil,
+            message: nil,
+            handledBy: nil
+        )
+        let record = CKRecord(recordType: "PlaidSyncSnapshot", recordID: macRefreshCommandRecordID)
+        try apply(command, to: record)
+        try await save(record)
+        return command
+    }
+
+    public static func latestMacRefreshCommand() async throws -> PlaidMacRefreshCommand? {
+        do {
+            let record = try await database.record(for: macRefreshCommandRecordID)
+            return try macRefreshCommand(from: record)
+        } catch let error as CKError where error.code == .unknownItem {
+            return nil
+        } catch {
+            throw mapCloudKitError(error)
+        }
+    }
+
+    public static func updateMacRefreshCommand(
+        requestID: String,
+        state: PlaidMacRefreshCommandState,
+        message: String?,
+        handledBy: String?
+    ) async throws {
+        let record: CKRecord
+        do {
+            record = try await database.record(for: macRefreshCommandRecordID)
+        } catch let error as CKError where error.code == .unknownItem {
+            return
+        } catch {
+            throw mapCloudKitError(error)
+        }
+
+        guard var command = try macRefreshCommand(from: record), command.requestID == requestID else {
+            return
+        }
+
+        command.state = state
+        command.message = message
+        if state == .running {
+            command.startedAt = Date()
+        }
+        if state == .completed || state == .failed {
+            command.completedAt = Date()
+        }
+        command.handledBy = handledBy
+        try apply(command, to: record)
+        try await save(record)
+    }
 }
 
 public enum PlaidCloudSyncError: LocalizedError {
+    case missingSnapshot
     case missingSnapshotPayload
+    case cloudUnavailable(String)
 
     public var errorDescription: String? {
         switch self {
+        case .missingSnapshot:
+            return "No Mac bank-sync snapshot has reached iCloud yet. Open MoneyMap for Mac and let it sync once."
         case .missingSnapshotPayload:
             return "The Plaid iCloud snapshot exists but does not contain sync data."
+        case .cloudUnavailable(let message):
+            return message
         }
     }
 }
 
+public enum PlaidMacRefreshCommandState: String, Codable {
+    case pending
+    case running
+    case completed
+    case failed
+}
+
+public struct PlaidMacRefreshCommand: Codable, Equatable {
+    public var requestID: String
+    public var source: String
+    public var state: PlaidMacRefreshCommandState
+    public var requestedAt: Date
+    public var startedAt: Date?
+    public var completedAt: Date?
+    public var message: String?
+    public var handledBy: String?
+
+    public init(
+        requestID: String,
+        source: String,
+        state: PlaidMacRefreshCommandState,
+        requestedAt: Date,
+        startedAt: Date?,
+        completedAt: Date?,
+        message: String?,
+        handledBy: String?
+    ) {
+        self.requestID = requestID
+        self.source = source
+        self.state = state
+        self.requestedAt = requestedAt
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+        self.message = message
+        self.handledBy = handledBy
+    }
+}
+
 private extension PlaidCloudSyncService {
+    static func save(_ record: CKRecord) async throws {
+        let operation = CKModifyRecordsOperation(recordsToSave: [record])
+        operation.savePolicy = .allKeys
+        do {
+            try await withCheckedThrowingContinuation { continuation in
+                operation.modifyRecordsResultBlock = { result in
+                    continuation.resume(with: result.map { _ in () })
+                }
+                database.add(operation)
+            }
+        } catch {
+            throw mapCloudKitError(error)
+        }
+    }
+
+    static func apply(_ command: PlaidMacRefreshCommand, to record: CKRecord) throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        record["payload"] = try encoder.encode(command)
+        record["updatedAt"] = Date()
+    }
+
+    static func macRefreshCommand(from record: CKRecord) throws -> PlaidMacRefreshCommand? {
+        guard let payload = record["payload"] as? Data else {
+            return nil
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(PlaidMacRefreshCommand.self, from: payload)
+    }
+
+    static func mapCloudKitError(
+        _ error: Error,
+        missingSnapshotError: PlaidCloudSyncError? = nil
+    ) -> Error {
+        guard let ckError = error as? CKError else {
+            return error
+        }
+
+        if ckError.code == .unknownItem, let missingSnapshotError {
+            return missingSnapshotError
+        }
+
+        switch ckError.code {
+        case .notAuthenticated:
+            return PlaidCloudSyncError.cloudUnavailable("Sign in to iCloud on this device before using Bank Sync.")
+        case .networkUnavailable, .networkFailure, .serviceUnavailable, .requestRateLimited, .zoneBusy:
+            return PlaidCloudSyncError.cloudUnavailable("iCloud is not reachable right now. Keep MoneyMap open and try again after the connection settles.")
+        default:
+            return PlaidCloudSyncError.cloudUnavailable("Bank Sync could not reach iCloud: \(ckError.localizedDescription)")
+        }
+    }
+
     static func run(_ operation: CKModifyRecordsOperation) async throws {
-        try await withCheckedThrowingContinuation { continuation in
+        do {
+            try await withCheckedThrowingContinuation { continuation in
             operation.modifyRecordsResultBlock = { result in
                 continuation.resume(with: result.map { _ in () })
             }
             database.add(operation)
+            }
+        } catch {
+            throw mapCloudKitError(error)
         }
     }
 

@@ -97,3 +97,59 @@ public class PlaidAccountSnapshot: Identifiable {
         return "Ending \(mask)"
     }
 }
+
+public enum BankSyncFreshnessLevel: String {
+    case noSync
+    case current
+    case stale
+    case veryStale
+
+    public var isStale: Bool {
+        switch self {
+        case .stale, .veryStale:
+            return true
+        case .noSync, .current:
+            return false
+        }
+    }
+}
+
+public struct BankSyncFreshness: Equatable {
+    public let lastSyncAt: Date?
+    public let now: Date
+
+    public init(lastSyncAt: Date?, now: Date = .now) {
+        self.lastSyncAt = lastSyncAt
+        self.now = now
+    }
+
+    public var daysOld: Int? {
+        guard let lastSyncAt else { return nil }
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: lastSyncAt)
+        let end = calendar.startOfDay(for: now)
+        return max(calendar.dateComponents([.day], from: start, to: end).day ?? 0, 0)
+    }
+
+    public var level: BankSyncFreshnessLevel {
+        guard let daysOld else { return .noSync }
+        if daysOld >= 7 {
+            return .veryStale
+        }
+        if daysOld >= 2 {
+            return .stale
+        }
+        return .current
+    }
+
+    public var ageLabel: String? {
+        guard let daysOld else { return nil }
+        if daysOld == 0 {
+            return "today"
+        }
+        if daysOld == 1 {
+            return "1 day old"
+        }
+        return "\(daysOld) days old"
+    }
+}

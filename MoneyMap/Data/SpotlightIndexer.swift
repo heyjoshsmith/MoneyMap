@@ -149,14 +149,13 @@ enum SpotlightIndexer {
 
     private static func makeRecommendationsItem(for digest: RecommendationDigest) -> CSSearchableItem {
         let attributeSet = CSSearchableItemAttributeSet(contentType: .item)
-        let paydayText = digest.nextPayday.map { MoneyMapFormatters.mediumDateString(for: $0) } ?? "No payday set"
         let cardText = MoneyMapFormatters.currencyString(for: digest.suggestedCardPaymentTotal)
         let goalText = MoneyMapFormatters.currencyString(for: digest.suggestedGoalContributionTotal)
 
-        attributeSet.title = "Paycheck Recommendations"
-        attributeSet.displayName = "Paycheck Recommendations"
-        attributeSet.contentDescription = "Next payday \(paydayText). Suggest \(cardText) to cards and \(goalText) to goals."
-        attributeSet.keywords = ["Recommendations", "Paycheck", "MoneyMap", "Cards", "Goals"]
+        attributeSet.title = "Allocation Plan"
+        attributeSet.displayName = "Allocation Plan"
+        attributeSet.contentDescription = "Suggest \(cardText) to cards and \(goalText) to goals from available money."
+        attributeSet.keywords = ["Recommendations", "Allocation", "Available Money", "MoneyMap", "Cards", "Goals"]
         attributeSet.contentType = UTType.item.identifier
         attributeSet.identifier = recommendationsIdentifier
 

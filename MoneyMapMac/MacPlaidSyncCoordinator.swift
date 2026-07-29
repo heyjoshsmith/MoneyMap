@@ -20,6 +20,7 @@ final class MacPlaidSyncCoordinator: ObservableObject {
     private let defaults = UserDefaults.standard
     private let pendingLinkSessionKey = "plaid.pendingHostedLinkSession"
     private let clientUserIDKey = "plaid.clientUserID"
+    private let handledMacRefreshRequestIDKey = "plaid.handledMacRefreshRequestID"
 
     init() {
         if let savedSession = Self.loadPendingLinkSession(defaults: defaults, key: pendingLinkSessionKey),
@@ -159,34 +160,31 @@ final class MacPlaidSyncCoordinator: ObservableObject {
 
     func syncAll(context: ModelContext) async {
         await run {
-            let credentials = try self.requireCredentials()
-            let client = MacPlaidAPIClient(credentials: credentials)
-            let connections = try context.fetch(FetchDescriptor<PlaidConnection>())
+            self.statusMessage = try await self.performSyncAll(context: context)
+        }
+    }
 
-            guard !connections.isEmpty else {
-                throw PlaidMacSyncError.noConnections
+    func runAutomaticRefreshLoop(
+        context: ModelContext,
+        automaticRefreshEnabled: Bool,
+        refreshIntervalMinutes: Int
+    ) async {
+        let interval = TimeInterval(max(refreshIntervalMinutes, 15) * 60)
+        let pollInterval: UInt64 = 60
+        var nextAutomaticRefresh = Date().addingTimeInterval(interval)
+
+        while !Task.isCancelled {
+            let didHandleCommand = await handlePendingMacRefreshCommand(context: context)
+            if didHandleCommand {
+                nextAutomaticRefresh = Date().addingTimeInterval(interval)
             }
 
-            var transactionSummaries: [PlaidTransactionSyncSummary] = []
-            for connection in connections {
-                guard let accessToken = try self.credentialStore.accessToken(for: connection.itemID) else {
-                    connection.status = "needs_credentials"
-                    connection.errorMessage = "Access token is missing from this Mac's Keychain."
-                    continue
-                }
-                do {
-                    let summary = try await self.sync(itemID: connection.itemID, accessToken: accessToken, client: client, context: context)
-                    transactionSummaries.append(summary)
-                } catch {
-                    connection.status = "needs_attention"
-                    connection.errorMessage = error.localizedDescription
-                    connection.updatedAt = .now
-                }
+            if automaticRefreshEnabled, Date() >= nextAutomaticRefresh {
+                await syncAutomatically(context: context)
+                nextAutomaticRefresh = Date().addingTimeInterval(interval)
             }
 
-            try context.save()
-            try await PlaidCloudSyncService.push(context: context)
-            self.statusMessage = Self.syncAllMessage(transactionSummaries)
+            try? await Task.sleep(nanoseconds: pollInterval * 1_000_000_000)
         }
     }
 
@@ -237,6 +235,103 @@ final class MacPlaidSyncCoordinator: ObservableObject {
         let transactionSummary = try await syncTransactions(itemID: itemID, accessToken: accessToken, client: client, context: context)
         try context.save()
         return transactionSummary
+    }
+
+    private func performSyncAll(context: ModelContext) async throws -> String {
+        let credentials = try requireCredentials()
+        let client = MacPlaidAPIClient(credentials: credentials)
+        let connections = try context.fetch(FetchDescriptor<PlaidConnection>())
+
+        guard !connections.isEmpty else {
+            throw PlaidMacSyncError.noConnections
+        }
+
+        var transactionSummaries: [PlaidTransactionSyncSummary] = []
+        for connection in connections {
+            guard let accessToken = try credentialStore.accessToken(for: connection.itemID) else {
+                connection.status = "needs_credentials"
+                connection.errorMessage = "Access token is missing from this Mac's Keychain."
+                continue
+            }
+            do {
+                let summary = try await sync(itemID: connection.itemID, accessToken: accessToken, client: client, context: context)
+                transactionSummaries.append(summary)
+            } catch {
+                connection.status = "needs_attention"
+                connection.errorMessage = error.localizedDescription
+                connection.updatedAt = .now
+            }
+        }
+
+        try context.save()
+        try await PlaidCloudSyncService.push(context: context)
+        return Self.syncAllMessage(transactionSummaries)
+    }
+
+    private func syncAutomatically(context: ModelContext) async {
+        guard !isWorking else { return }
+        isWorking = true
+        statusMessage = nil
+        errorMessage = nil
+        defer { isWorking = false }
+
+        do {
+            let message = try await performSyncAll(context: context)
+            statusMessage = "Automatic refresh finished. \(message)"
+        } catch PlaidMacSyncError.missingCredentials, PlaidMacSyncError.noConnections {
+            return
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    private func handlePendingMacRefreshCommand(context: ModelContext) async -> Bool {
+        guard !isWorking else { return false }
+
+        do {
+            guard let command = try await PlaidCloudSyncService.latestMacRefreshCommand(),
+                  command.state == .pending,
+                  defaults.string(forKey: handledMacRefreshRequestIDKey) != command.requestID else {
+                return false
+            }
+
+            isWorking = true
+            statusMessage = "iPhone requested a bank refresh."
+            errorMessage = nil
+            defer { isWorking = false }
+
+            do {
+                try await PlaidCloudSyncService.updateMacRefreshCommand(
+                    requestID: command.requestID,
+                    state: .running,
+                    message: "MoneyMap for Mac is refreshing bank data.",
+                    handledBy: Host.current().localizedName
+                )
+                let message = try await performSyncAll(context: context)
+                try await PlaidCloudSyncService.updateMacRefreshCommand(
+                    requestID: command.requestID,
+                    state: .completed,
+                    message: message,
+                    handledBy: Host.current().localizedName
+                )
+                defaults.set(command.requestID, forKey: handledMacRefreshRequestIDKey)
+                statusMessage = "Synced from iPhone request. \(message)"
+                return true
+            } catch {
+                try? await PlaidCloudSyncService.updateMacRefreshCommand(
+                    requestID: command.requestID,
+                    state: .failed,
+                    message: error.localizedDescription,
+                    handledBy: Host.current().localizedName
+                )
+                defaults.set(command.requestID, forKey: handledMacRefreshRequestIDKey)
+                errorMessage = error.localizedDescription
+                return true
+            }
+        } catch {
+            return false
+        }
     }
 
     private func upsertConnection(item: PlaidItemDTO, institution: PlaidInstitutionDTO?, context: ModelContext) throws {

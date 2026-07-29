@@ -110,10 +110,10 @@ struct MoneyMapShortcuts: AppShortcutsProvider {
             AppShortcut(
                 intent: GetPaycheckRecommendationIntent(),
                 phrases: [
-                    "What should I do with my paycheck in \(.applicationName)",
-                    "Plan my paycheck in \(.applicationName)"
+                    "What should I do with my available money in \(.applicationName)",
+                    "Plan my available money in \(.applicationName)"
                 ],
-                shortTitle: "Paycheck Plan",
+                shortTitle: "Allocation Plan",
                 systemImageName: "banknote"
             ),
             AppShortcut(

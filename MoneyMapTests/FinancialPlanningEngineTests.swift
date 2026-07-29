@@ -9,6 +9,78 @@ import XCTest
 @testable import MoneyMap
 
 final class FinancialPlanningEngineTests: XCTestCase {
+    func testPaycheckCashResolverUsesManualAmountInManualMode() {
+        let account = PlaidAccountSnapshot(
+            accountID: "account-1",
+            itemID: "item-1",
+            institutionName: "Test Bank",
+            accountName: "Savings",
+            type: "depository",
+            currentBalance: 900,
+            availableBalance: 850
+        )
+
+        let amount = PaycheckCashResolver.availableCash(
+            source: .manual,
+            manualAmount: 250,
+            selectedAccountID: account.accountID,
+            accounts: [PaycheckCashAccount(account)]
+        )
+
+        XCTAssertEqual(amount, 250)
+    }
+
+    func testPaycheckCashResolverUsesSelectedAccountAvailableBalance() {
+        let checking = PlaidAccountSnapshot(
+            accountID: "checking",
+            itemID: "item-1",
+            institutionName: "Test Bank",
+            accountName: "Checking",
+            type: "depository",
+            currentBalance: 1200,
+            availableBalance: 975
+        )
+        let savings = PlaidAccountSnapshot(
+            accountID: "savings",
+            itemID: "item-1",
+            institutionName: "Test Bank",
+            accountName: "Savings",
+            type: "depository",
+            currentBalance: 3200,
+            availableBalance: 3000
+        )
+
+        let amount = PaycheckCashResolver.availableCash(
+            source: .linkedAccount,
+            manualAmount: 250,
+            selectedAccountID: savings.accountID,
+            accounts: [PaycheckCashAccount(checking), PaycheckCashAccount(savings)]
+        )
+
+        XCTAssertEqual(amount, 3000)
+    }
+
+    func testPaycheckCashResolverFallsBackToCurrentBalanceWhenAvailableBalanceIsMissing() {
+        let account = PlaidAccountSnapshot(
+            accountID: "account-1",
+            itemID: "item-1",
+            institutionName: "Test Bank",
+            accountName: "Checking",
+            type: "depository",
+            currentBalance: 1200,
+            availableBalance: nil
+        )
+
+        let amount = PaycheckCashResolver.availableCash(
+            source: .linkedAccount,
+            manualAmount: 250,
+            selectedAccountID: account.accountID,
+            accounts: [PaycheckCashAccount(account)]
+        )
+
+        XCTAssertEqual(amount, 1200)
+    }
+
     func testCreditCardRecommendationPrioritizesDueSoonHighAPRCard() {
         let urgentCard = Bill(
             name: "Urgent Card",
@@ -70,6 +142,117 @@ final class FinancialPlanningEngineTests: XCTestCase {
         XCTAssertEqual(plan.goalContributions.first?.goalName, "Emergency Fund")
         XCTAssertTrue(plan.goalContributions.first?.isBehindSchedule ?? false)
         XCTAssertGreaterThan(plan.goalContributions.reduce(0) { $0 + $1.recommendedContribution }, 0)
+    }
+
+    func testSavingsBalancePlanAllocatesManualAccountBalanceAcrossGoals() {
+        let urgentGoal = Goal(
+            "Emergency Fund",
+            targetAmount: 1000,
+            deadline: Calendar.current.date(byAdding: .day, value: 30, to: .now),
+            weight: 2,
+            paydaysUntil: 2
+        )
+        let flexibleGoal = Goal(
+            "Vacation",
+            targetAmount: 800,
+            deadline: Calendar.current.date(byAdding: .day, value: 120, to: .now),
+            weight: 1,
+            paydaysUntil: 8
+        )
+
+        let plan = FinancialPlanningEngine.allocateSavingsBalance(
+            balance: 600,
+            goals: [urgentGoal, flexibleGoal],
+            nextPayday: Calendar.current.date(byAdding: .day, value: 14, to: .now)
+        )
+
+        XCTAssertEqual(plan.totalBalance, 600)
+        XCTAssertEqual(plan.allocatedTotal, 600, accuracy: 0.01)
+        XCTAssertEqual(plan.unallocatedBalance, 0, accuracy: 0.01)
+        XCTAssertEqual(plan.allocations.count, 2)
+        XCTAssertEqual(plan.allocations.reduce(0) { $0 + $1.allocatedAmount }, 600, accuracy: 0.01)
+    }
+
+    func testSavingsBalancePlanTreatsBalanceAsTotalNotNewDeposit() {
+        let goal = Goal(
+            "Emergency Fund",
+            targetAmount: 1000,
+            deadline: Calendar.current.date(byAdding: .day, value: 30, to: .now),
+            weight: 1,
+            paydaysUntil: 2
+        )
+        goal.amountSaved = 400
+
+        let plan = FinancialPlanningEngine.allocateSavingsBalance(
+            balance: 250,
+            goals: [goal],
+            nextPayday: nil
+        )
+
+        XCTAssertEqual(plan.allocations.first?.allocatedAmount, 250)
+        XCTAssertEqual(plan.allocations.first?.deltaAmount, -150)
+        XCTAssertEqual(plan.allocatedTotal, 250)
+    }
+
+    func testSavingsBalancePlanCapsFundedGoalsAndReportsUnallocatedBalance() {
+        let firstGoal = Goal("Camera", targetAmount: 100, deadline: nil, weight: 1, paydaysUntil: nil)
+        let secondGoal = Goal("Trip", targetAmount: 200, deadline: nil, weight: 1, paydaysUntil: nil)
+
+        let plan = FinancialPlanningEngine.allocateSavingsBalance(
+            balance: 500,
+            goals: [firstGoal, secondGoal],
+            nextPayday: nil
+        )
+
+        XCTAssertEqual(plan.allocatedTotal, 300)
+        XCTAssertEqual(plan.unallocatedBalance, 200)
+        XCTAssertTrue(plan.allocations.allSatisfy { $0.allocatedAmount <= $0.targetAmount })
+    }
+
+    func testExtraMoneyPlanMatcherMatchesActiveLinkedAccountDeduction() {
+        let createdAt = Date()
+        let plan = ExtraMoneyPlan(
+            source: .linkedAccount,
+            sourceAccountID: "checking-1",
+            sourceAccountName: "Checking",
+            startingBalance: 1500,
+            alreadyAllocated: 0,
+            available: 1500,
+            plannedCardAmount: 125,
+            plannedGoalAmount: 0,
+            unallocatedAmount: 1375,
+            strategyRaw: PaycheckAllocationStrategy.balanced.rawValue,
+            payoffStrategyRaw: CreditCardPayoffStrategy.balanced.rawValue
+        )
+        plan.createdAt = createdAt
+        let item = ExtraMoneyPlanItem(
+            planID: plan.id,
+            kind: .creditCardPayment,
+            targetName: "Rewards Card",
+            amount: 125
+        )
+        let transaction = Transaction(
+            transactionDate: createdAt,
+            clearingDate: nil,
+            transactionDescription: "CARD PAYMENT",
+            merchant: "Rewards Card",
+            category: "Payment",
+            type: "Debit",
+            amountUSD: -125,
+            purchasedBy: nil,
+            plaidTransactionID: "tx-1",
+            plaidAccountID: "checking-1"
+        )
+
+        let matches = ExtraMoneyPlanMatcher.likelyMatches(
+            plans: [plan],
+            items: [item],
+            transactions: [transaction]
+        )
+
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertEqual(matches.first?.transactionID, "tx-1")
+        XCTAssertEqual(matches.first?.itemID, item.id)
     }
 
     func testGoalProgressInsightsStillFlagBehindGoalWithoutAvailableCash() {

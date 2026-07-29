@@ -32,11 +32,11 @@ enum RecommendationPlanExplainer {
         nextPayday: Date?
     ) async throws -> String {
         let instructions = """
-        You explain paycheck plans inside a personal finance app.
+        You explain available-money allocation plans inside a personal finance app.
         Keep the response under 110 words.
         Use plain language.
         Base the answer only on the provided facts.
-        Mention the card strategy, the paycheck strategy, the top card action, and the top goal action when they exist.
+        Mention the card strategy, the allocation style, the top card action, and the top goal action when they exist.
         Do not invent numbers, dates, or risks.
         Do not add a disclaimer.
         """
@@ -51,7 +51,7 @@ enum RecommendationPlanExplainer {
         digest: RecommendationDigest,
         nextPayday: Date?
     ) -> String {
-        let nextPaydayText = nextPayday.map(MoneyMapFormatters.mediumDateString(for:)) ?? "Not set"
+        let planningWindowText = nextPayday.map(MoneyMapFormatters.mediumDateString(for:)) ?? "Not set"
         let cardLines = plan.creditCardPayments.prefix(3).map { recommendation in
             let dueDate = recommendation.dueDate.map(MoneyMapFormatters.mediumDateString(for:)) ?? "No due date"
             let apr = recommendation.annualPercentageRate.map {
@@ -64,19 +64,19 @@ enum RecommendationPlanExplainer {
             let schedule = insight.isBehindSchedule
                 ? "behind by \(MoneyMapFormatters.currencyString(for: insight.shortfallAmount))"
                 : "on track"
-            return "- \(insight.goalName): contribute \(MoneyMapFormatters.currencyString(for: insight.recommendedContribution)); target per paycheck \(MoneyMapFormatters.currencyString(for: insight.targetPerPaycheck)); \(schedule)"
+            return "- \(insight.goalName): contribute \(MoneyMapFormatters.currencyString(for: insight.recommendedContribution)); target per cycle \(MoneyMapFormatters.currencyString(for: insight.targetPerPaycheck)); \(schedule)"
         }.joined(separator: "\n")
 
         return """
-        Explain this paycheck plan in one short paragraph followed by one short action sentence.
+        Explain this allocation plan in one short paragraph followed by one short action sentence.
 
         Planning facts:
-        - Next payday: \(nextPaydayText)
+        - Planning window date: \(planningWindowText)
         - Available cash: \(MoneyMapFormatters.currencyString(for: plan.totalAvailable))
         - Card strategy: \(plan.payoffStrategy.title)
-        - Paycheck strategy: \(plan.allocationStrategy.title)
+        - Allocation style: \(plan.allocationStrategy.title)
         - Summary: \(plan.summary)
-        - Upcoming bills before payday: \(digest.upcomingBillCount)
+        - Upcoming bills in planning window: \(digest.upcomingBillCount)
         - Behind goals: \(digest.behindGoalCount)
         - Top card action: \(digest.topCardName ?? "None")
         - Top goal action: \(digest.topGoalName ?? "None")

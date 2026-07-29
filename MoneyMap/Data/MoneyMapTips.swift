@@ -14,7 +14,7 @@ struct RecommendationStrategiesTip: Tip {
     }
 
     var message: Text? {
-        Text("Switch between balanced, avalanche, snowball, and due-date strategies to see how your paycheck plan changes.")
+        Text("Switch between balanced, avalanche, snowball, and due-date strategies to see how your allocation plan changes.")
     }
 
     var image: Image? {

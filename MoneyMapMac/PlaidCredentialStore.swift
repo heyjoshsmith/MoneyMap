@@ -34,7 +34,10 @@ struct PlaidStoredCredentials {
 
 struct PlaidCredentialStore {
     private let service = "com.heyjoshsmith.MoneyMap.plaid"
+    private let bundledCredentialsAccount = "credentials.v1"
     private let defaults = UserDefaults.standard
+    private let savedCredentialsHintKey = "plaid.credentialsSaved"
+    private let savedSecretEnvironmentsKey = "plaid.savedSecretEnvironments"
 
     var selectedEnvironment: PlaidCredentialEnvironment {
         get {
@@ -49,45 +52,102 @@ struct PlaidCredentialStore {
         }
     }
 
+    var hasStoredCredentialsHint: Bool {
+        defaults.bool(forKey: savedCredentialsHintKey)
+    }
+
+    var savedSecretEnvironments: Set<PlaidCredentialEnvironment> {
+        let rawValues = defaults.stringArray(forKey: savedSecretEnvironmentsKey) ?? []
+        return Set(rawValues.compactMap(PlaidCredentialEnvironment.init(rawValue:)))
+    }
+
     func loadCredentials() throws -> PlaidStoredCredentials? {
         let environment = selectedEnvironment
+        if let bundle = try loadBundledCredentials(),
+           let secret = bundle.secrets[environment.rawValue],
+           !bundle.clientID.isEmpty,
+           !secret.isEmpty {
+            markCredentialsSaved(for: environment)
+            return PlaidStoredCredentials(clientID: bundle.clientID, secret: secret, environment: environment)
+        }
+
         guard
-            let clientID = try loadClientID(),
-            let secret = try secret(for: environment)
+            let clientID = try readString(account: "clientID"),
+            let secret = try readString(account: secretAccount(for: environment))
         else {
             return nil
         }
 
+        try updateBundledCredentials { bundle in
+            bundle.clientID = clientID
+            bundle.secrets[environment.rawValue] = secret
+        }
+        markCredentialsSaved(for: environment)
         return PlaidStoredCredentials(clientID: clientID, secret: secret, environment: environment)
     }
 
     func loadClientID() throws -> String? {
-        try readString(account: "clientID")
+        if let clientID = try loadBundledCredentials()?.clientID, !clientID.isEmpty {
+            return clientID
+        }
+        return try readString(account: "clientID")
     }
 
     func secret(for environment: PlaidCredentialEnvironment) throws -> String? {
-        try readString(account: secretAccount(for: environment))
+        if let secret = try loadBundledCredentials()?.secrets[environment.rawValue], !secret.isEmpty {
+            return secret
+        }
+        return try readString(account: secretAccount(for: environment))
     }
 
     func save(clientID: String, secret: String, environment: PlaidCredentialEnvironment) throws {
-        try writeString(clientID.trimmingCharacters(in: .whitespacesAndNewlines), account: "clientID")
-        try writeString(secret.trimmingCharacters(in: .whitespacesAndNewlines), account: secretAccount(for: environment))
+        try updateBundledCredentials { bundle in
+            bundle.clientID = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+            bundle.secrets[environment.rawValue] = secret.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         defaults.set(environment.rawValue, forKey: "plaid.selectedEnvironment")
+        markCredentialsSaved(for: environment)
     }
 
     func accessToken(for itemID: String) throws -> String? {
-        try readString(account: "accessToken.\(itemID)")
+        if let accessToken = try loadBundledCredentials()?.accessTokens[itemID], !accessToken.isEmpty {
+            return accessToken
+        }
+
+        guard let accessToken = try readString(account: "accessToken.\(itemID)") else {
+            return nil
+        }
+
+        try updateBundledCredentials { bundle in
+            bundle.accessTokens[itemID] = accessToken
+        }
+        return accessToken
     }
 
     func saveAccessToken(_ accessToken: String, itemID: String) throws {
-        try writeString(accessToken, account: "accessToken.\(itemID)")
+        try updateBundledCredentials { bundle in
+            bundle.accessTokens[itemID] = accessToken
+        }
     }
 
     func deleteAccessToken(for itemID: String) throws {
         try delete(account: "accessToken.\(itemID)")
+        guard var bundle = try loadBundledCredentials() else {
+            return
+        }
+
+        bundle.accessTokens.removeValue(forKey: itemID)
+        try saveBundledCredentials(bundle)
     }
 
     private func readString(account: String) throws -> String? {
+        guard let data = try readData(account: account) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func readData(account: String) throws -> Data? {
         var query = baseQuery(account: account)
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         query[kSecReturnData as String] = true
@@ -103,11 +163,10 @@ struct PlaidCredentialStore {
         guard let data = item as? Data else {
             return nil
         }
-        return String(data: data, encoding: .utf8)
+        return data
     }
 
-    private func writeString(_ value: String, account: String) throws {
-        let data = Data(value.utf8)
+    private func writeData(_ data: Data, account: String) throws {
         let query = baseQuery(account: account)
         let attributes: [String: Any] = [kSecValueData as String: data]
 
@@ -136,6 +195,44 @@ struct PlaidCredentialStore {
         "\(environment.rawValue).secret"
     }
 
+    private func loadBundledCredentials() throws -> PlaidStoredCredentialBundle? {
+        if PlaidCredentialBundleCache.didLoad {
+            return PlaidCredentialBundleCache.value
+        }
+
+        guard let data = try readData(account: bundledCredentialsAccount) else {
+            PlaidCredentialBundleCache.didLoad = true
+            PlaidCredentialBundleCache.value = nil
+            return nil
+        }
+
+        let bundle = try JSONDecoder().decode(PlaidStoredCredentialBundle.self, from: data)
+        PlaidCredentialBundleCache.didLoad = true
+        PlaidCredentialBundleCache.value = bundle
+        return bundle
+    }
+
+    private func updateBundledCredentials(_ update: (inout PlaidStoredCredentialBundle) -> Void) throws {
+        var bundle = try loadBundledCredentials() ?? PlaidStoredCredentialBundle()
+        update(&bundle)
+        try saveBundledCredentials(bundle)
+    }
+
+    private func saveBundledCredentials(_ bundle: PlaidStoredCredentialBundle) throws {
+        let data = try JSONEncoder().encode(bundle)
+        try writeData(data, account: bundledCredentialsAccount)
+        PlaidCredentialBundleCache.didLoad = true
+        PlaidCredentialBundleCache.value = bundle
+    }
+
+    func markCredentialsSaved(for environment: PlaidCredentialEnvironment) {
+        defaults.set(true, forKey: savedCredentialsHintKey)
+        let rawValues = Set(defaults.stringArray(forKey: savedSecretEnvironmentsKey) ?? [])
+            .union([environment.rawValue])
+            .sorted()
+        defaults.set(rawValues, forKey: savedSecretEnvironmentsKey)
+    }
+
     private func baseQuery(account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
@@ -143,6 +240,17 @@ struct PlaidCredentialStore {
             kSecAttrAccount as String: account
         ]
     }
+}
+
+private struct PlaidStoredCredentialBundle: Codable {
+    var clientID = ""
+    var secrets: [String: String] = [:]
+    var accessTokens: [String: String] = [:]
+}
+
+private enum PlaidCredentialBundleCache {
+    static var didLoad = false
+    static var value: PlaidStoredCredentialBundle?
 }
 
 struct KeychainError: LocalizedError {

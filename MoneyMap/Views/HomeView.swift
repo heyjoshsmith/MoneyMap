@@ -19,9 +19,11 @@ enum HomeNavigationTarget: String, Identifiable {
 }
 
 struct HomeView: View {
+    @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var paydayManager: PaydayManager
     @EnvironmentObject private var deepLinkManager: DeepLinkManager
     @Query private var bills: [Bill]
+    @Query private var transactions: [Transaction]
     @Query(sort: \Goal.deadline, order: .forward) private var goals: [Goal]
     @Query private var paydayConfigs: [PaydayConfig]
 
@@ -50,7 +52,7 @@ struct HomeView: View {
     }
 
     private var payAmount: Double {
-        paydayConfigs.first?.amountPerPayday ?? 0
+        MoneyMapPlanningStore.resolvedPaycheckAmount(manualAmount: paydayConfigs.first?.amountPerPayday ?? 0)
     }
 
     private var setupIsComplete: Bool {
@@ -96,15 +98,15 @@ struct HomeView: View {
     private var setupSteps: [SetupStep] {
         [
             SetupStep(
-                title: "Set your next payday",
-                detail: "Everything in MoneyMap gets easier once the app knows your next paycheck date.",
+                title: "Set your planning timing",
+                detail: "MoneyMap uses this timing to decide which bills and goals matter first.",
                 isComplete: hasPayday,
-                actionTitle: "Set Payday",
+                actionTitle: "Set Timing",
                 action: .payday
             ),
             SetupStep(
                 title: "Add the bills you need to cover",
-                detail: "Start with the bills due before your next payday.",
+                detail: "Start with the bills due in your current planning window.",
                 isComplete: hasBills,
                 actionTitle: "Add Bill",
                 action: .addBill
@@ -123,12 +125,12 @@ struct HomeView: View {
         if !hasPayday {
             return TodayAnswer(
                 eyebrow: "First step",
-                title: "Set your next payday",
+                title: "Set your planning timing",
                 metric: "Start here",
-                detail: "MoneyMap uses payday timing to decide which bills and goals matter first.",
+                detail: "MoneyMap uses timing to decide which bills and goals matter first.",
                 systemImage: "calendar.badge.plus",
                 tint: .blue,
-                actionTitle: "Set Payday",
+                actionTitle: "Set Timing",
                 action: .payday
             )
         }
@@ -138,7 +140,7 @@ struct HomeView: View {
                 eyebrow: "Next step",
                 title: "Add the bills you need to cover",
                 metric: "No bills yet",
-                detail: "Once bills are in, Today can show what needs attention before payday.",
+                detail: "Once bills are in, Today can show what needs attention in the current planning window.",
                 systemImage: "list.bullet.clipboard",
                 tint: .blue,
                 actionTitle: "Add Bill",
@@ -151,7 +153,7 @@ struct HomeView: View {
                 eyebrow: "Needs attention",
                 title: "\(overdueBills.count) bill\(overdueBills.count == 1 ? "" : "s") overdue",
                 metric: MoneyMapFormatters.currencyString(for: overdueBills.totalAmount),
-                detail: "Handle overdue bills before using the paycheck plan.",
+                detail: "Handle overdue bills before allocating extra money.",
                 systemImage: "exclamationmark.triangle.fill",
                 tint: .red,
                 actionTitle: "Review Bills",
@@ -162,21 +164,21 @@ struct HomeView: View {
         if let leftAfterBills {
             if leftAfterBills < 0 {
                 return TodayAnswer(
-                    eyebrow: "Before payday",
-                    title: "Payday needs attention",
+                    eyebrow: "Planning window",
+                    title: "Bills need attention",
                     metric: "\(MoneyMapFormatters.currencyString(for: abs(leftAfterBills))) short",
-                    detail: "Bills due before payday are higher than the paycheck amount currently saved in MoneyMap.",
+                    detail: "Upcoming bills are higher than the available amount currently saved in MoneyMap.",
                     systemImage: "exclamationmark.circle.fill",
                     tint: .orange,
-                    actionTitle: "Plan Paycheck",
+                    actionTitle: "Plan Money",
                     action: .recommendations
                 )
             }
 
             if !hasGoals {
                 return TodayAnswer(
-                    eyebrow: "Before payday",
-                    title: dueBeforePaydayTotal > 0 ? "Bills are mapped through payday" : "No bills due before payday",
+                    eyebrow: "Planning window",
+                    title: dueBeforePaydayTotal > 0 ? "Bills are mapped" : "No bills due soon",
                     metric: "\(MoneyMapFormatters.currencyString(for: leftAfterBills)) left",
                     detail: "Add a savings goal when you want MoneyMap to guide what happens after bills.",
                     systemImage: "checkmark.circle.fill",
@@ -187,25 +189,25 @@ struct HomeView: View {
             }
 
             return TodayAnswer(
-                eyebrow: "Before payday",
-                title: dueBeforePaydayTotal > 0 ? "You're covered through payday" : "No bills due before payday",
+                eyebrow: "Planning window",
+                title: dueBeforePaydayTotal > 0 ? "Upcoming bills are covered" : "No bills due soon",
                 metric: "\(MoneyMapFormatters.currencyString(for: leftAfterBills)) left",
                 detail: "Use Plan when you're ready to split the remaining money across cards and goals.",
                 systemImage: "checkmark.circle.fill",
                 tint: .green,
-                actionTitle: "Plan Paycheck",
+                actionTitle: "Plan Money",
                 action: .recommendations
             )
         }
 
         return TodayAnswer(
-            eyebrow: "Before payday",
-            title: "Ready for a paycheck plan",
+            eyebrow: "Available money",
+            title: "Ready for an allocation plan",
             metric: dueBeforePaydayTotal > 0 ? MoneyMapFormatters.currencyString(for: dueBeforePaydayTotal) : "No bills due",
             detail: "Add the money you want to plan so MoneyMap can split it across bills, cards, and goals.",
             systemImage: "wand.and.stars",
             tint: .purple,
-            actionTitle: "Plan Paycheck",
+            actionTitle: "Plan Money",
             action: .recommendations
         )
     }
@@ -269,7 +271,7 @@ struct HomeView: View {
                 let paydayConfig = paydayConfigs.first
                 let entity = PaydayStatusEntity(
                     nextPayday: paydayManager.nextPayday ?? paydayConfig?.nextPayday,
-                    amountPerPayday: paydayConfig?.amountPerPayday,
+                    amountPerPayday: payAmount,
                     savingsPerPaycheck: paydayConfig?.savingsPerPaycheck
                 )
                 activity.title = "Viewing Today"
@@ -277,7 +279,11 @@ struct HomeView: View {
             }
             .onAppear {
                 routeToRequestedDestinationIfNeeded()
+                refreshBillStatusesFromTransactions()
                 scheduleInitialIntentDonations()
+            }
+            .onChange(of: transactionPaymentSignature) { _, _ in
+                refreshBillStatusesFromTransactions()
             }
             .onChange(of: deepLinkManager.requestedPayDestination) { _, _ in
                 routeToRequestedDestinationIfNeeded()
@@ -285,6 +291,29 @@ struct HomeView: View {
             .onReceive(NotificationCenter.default.publisher(for: AppRefreshEvents.billsDidChange)) { _ in
                 billsRefreshToken += 1
             }
+        }
+    }
+
+    private var transactionPaymentSignature: String {
+        transactions
+            .sorted { BillPaymentMatcher.identityKey(for: $0) < BillPaymentMatcher.identityKey(for: $1) }
+            .map { transaction in
+                [
+                    BillPaymentMatcher.identityKey(for: transaction),
+                    "\((BillPaymentMatcher.transactionDate(for: transaction))?.timeIntervalSince1970 ?? 0)",
+                    "\(transaction.amountUSD ?? 0)",
+                    transaction.friendlyName ?? "",
+                    transaction.merchant ?? "",
+                    transaction.transactionDescription ?? ""
+                ].joined(separator: "|")
+            }
+            .joined(separator: ";")
+    }
+
+    private func refreshBillStatusesFromTransactions() {
+        if BillPaymentMatcher.refreshStatuses(for: bills, transactions: transactions) {
+            try? modelContext.save()
+            billsRefreshToken += 1
         }
     }
 
@@ -300,7 +329,7 @@ struct HomeView: View {
 
     private var setupSection: some View {
         Section("Get Started") {
-            Text("Start with your next payday and the bills you need to cover before then. Goals can come after that.")
+            Text("Start with your planning timing and the bills you need to cover. Goals can come after that.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -328,14 +357,14 @@ struct HomeView: View {
         Section("At a Glance") {
             if let nextPayday = paydayManager.nextPayday {
                 MoneyMapSummaryRow(
-                    title: "Next Payday",
+                    title: "Planning Date",
                     value: MoneyMapFormatters.mediumDateString(for: nextPayday),
-                    detail: "\(paydayManager.daysUntilNextPayday()) day\(paydayManager.daysUntilNextPayday() == 1 ? "" : "s") away",
+                    detail: "Used for bill urgency and goal pacing",
                     systemImage: "calendar"
                 )
             } else {
                 MoneyMapSummaryRow(
-                    title: "Next Payday",
+                    title: "Planning Date",
                     value: "Not set",
                     detail: "Set it to unlock clearer planning.",
                     systemImage: "calendar.badge.exclamationmark"
@@ -343,7 +372,7 @@ struct HomeView: View {
             }
 
             MoneyMapSummaryRow(
-                title: "Bills Before Payday",
+                title: "Upcoming Bills",
                 value: "\(billsBeforePayday.count)",
                 detail: MoneyMapFormatters.currencyString(for: billsBeforePayday.totalAmount),
                 systemImage: "banknote"
@@ -361,7 +390,7 @@ struct HomeView: View {
                 MoneyMapSummaryRow(
                     title: "Left After Bills",
                     value: MoneyMapFormatters.currencyString(for: leftAfterBills),
-                    detail: "Based on your current paycheck amount",
+                    detail: RecommendationPreferencesStore.paycheckCashSource == .linkedAccount ? "Based on your synced account" : "Based on your current available amount",
                     systemImage: "dollarsign.circle"
                 )
             }
@@ -376,8 +405,8 @@ struct HomeView: View {
                 MoneyMapIntentDonations.donatePaycheckPlan(availableCash: payAmount > 0 ? payAmount : nil)
             } label: {
                 MoneyMapActionListRow(
-                    title: "Plan This Paycheck",
-                    detail: "Review suggested card payments and goal contributions.",
+                    title: "Plan Available Money",
+                    detail: "Review suggested card payments, goal contributions, and saved allocations.",
                     systemImage: "wand.and.stars"
                 )
             }
@@ -389,7 +418,7 @@ struct HomeView: View {
                 } label: {
                     MoneyMapActionListRow(
                         title: "Review Upcoming Bills",
-                        detail: "See every bill due before the next payday.",
+                        detail: "See every bill in the current planning window.",
                         systemImage: "calendar.badge.exclamationmark",
                         tint: .orange
                     )
@@ -425,11 +454,11 @@ struct HomeView: View {
     }
 
     private var beforePaydaySection: some View {
-        Section("Before Payday") {
+        Section("Planning Window") {
             if billsBeforePayday.isEmpty {
                 MoneyMapEmptyState(
-                    title: "Nothing due before payday",
-                    message: "Your next pay cycle has breathing room.",
+                    title: "Nothing due soon",
+                    message: "This planning window has breathing room.",
                     systemImage: "checkmark.circle"
                 )
             } else {

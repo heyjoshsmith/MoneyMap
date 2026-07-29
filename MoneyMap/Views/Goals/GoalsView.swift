@@ -16,11 +16,10 @@ struct GoalsView: View {
     @EnvironmentObject private var deepLinkManager: DeepLinkManager
     @EnvironmentObject var paydayManager: PaydayManager
     @Query(sort: \Goal.deadline, order: .forward) var goals: [Goal]
+    @Query private var manualSavingsAccounts: [ManualSavingsAccount]
     
     @State private var addingGoal = false
-    @State private var addingSavings = false
-    @State private var savingsAmount = ""
-    @State private var allocation: [Goal: Double] = [:]
+    @State private var editingSavingsBalance = false
     
     @State private var showingResetAlert = false
     @State private var viewingGoal: Goal?
@@ -48,6 +47,10 @@ struct GoalsView: View {
     private var overallProgress: Double {
         guard totalTarget > 0 else { return 0 }
         return min(max(totalSaved / totalTarget, 0), 1)
+    }
+
+    private var manualSavingsAccount: ManualSavingsAccount? {
+        manualSavingsAccounts.first
     }
     
     
@@ -88,8 +91,8 @@ struct GoalsView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu("Goal Actions", systemImage: "ellipsis.circle") {
-                        Button("Add Savings", systemImage: "dollarsign.arrow.trianglehead.counterclockwise.rotate.90") {
-                            addingSavings.toggle()
+                        Button("Savings Account", systemImage: "banknote") {
+                            editingSavingsBalance.toggle()
                         }
                         Divider()
                         Button("Add Example Goal", systemImage: "text.badge.star") {
@@ -106,17 +109,14 @@ struct GoalsView: View {
                     AddGoalView()
                 }
             }
-            .alert("Add Savings", isPresented: $addingSavings) {
-                TextField("$500", text: $savingsAmount)
-                Button("Cancel", role: .cancel) {
-                    
-                }
-                Button("Add") {
-                    savePaycheckAmount()
-                    savingsAmount.removeAll()
-                }
-            } message: {
-                Text("How much money would you like to add to your savings?")
+            .sheet(isPresented: $editingSavingsBalance) {
+                ManualSavingsBalanceView(
+                    goals: goals,
+                    nextPayday: paydayManager.nextPayday,
+                    initialBalance: manualSavingsAccount?.balanceAmount ?? 0,
+                    updatedAt: manualSavingsAccount?.updatedAt,
+                    onApply: applySavingsBalance
+                )
             }
             .alert("Reset Savings", isPresented: $showingResetAlert) {
                 Button("Reset", role: .destructive) {
@@ -190,12 +190,12 @@ struct GoalsView: View {
     private var actionsSection: some View {
         Section("Actions") {
             Button {
-                addingSavings.toggle()
+                editingSavingsBalance.toggle()
             } label: {
                 MoneyMapActionListRow(
-                    title: "Add Savings",
-                    detail: "Distribute a savings amount across active goals by urgency and priority.",
-                    systemImage: "dollarsign.arrow.trianglehead.counterclockwise.rotate.90",
+                    title: "Savings Account",
+                    detail: manualSavingsDetail,
+                    systemImage: "banknote",
                     tint: MoneyMapDesign.calmGreen
                 )
             }
@@ -230,6 +230,15 @@ struct GoalsView: View {
         .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
+    private var manualSavingsDetail: String {
+        let balance = manualSavingsAccount?.balanceAmount ?? 0
+        guard balance > 0 else {
+            return "Type the total balance of your off-app savings account and split it across goals."
+        }
+
+        return "Manual balance: \(MoneyMapFormatters.currencyString(for: balance))"
+    }
+
     private func goalNavigationLink(_ goal: Goal) -> some View {
         Button {
             viewingGoal = goal
@@ -255,37 +264,31 @@ struct GoalsView: View {
         }
     }
     
-    func savePaycheckAmount() {
-        if let amount = Double(savingsAmount) {
-            let allocation = calculateSavingsDistribution(goals: goals, totalPerPaycheck: amount)
-            goals.forEach { goal in
-                if let allocatedAmount = allocation[goal] {
-                    goal.amountSaved += allocatedAmount
-                }
-            }
-            MoneyMapIntentDonations.donateSavingsSummary()
+    func applySavingsBalance(_ plan: SavingsBalancePlan) {
+        let groupID = UUID()
+
+        for allocation in plan.allocations {
+            guard let goal = goals.first(where: { $0.id == allocation.goalID }) else { continue }
+            let previousAmountSaved = goal.amountSaved
+            goal.amountSaved = allocation.allocatedAmount
+            AuditService.logGoalContribution(
+                goal: goal,
+                previousAmountSaved: previousAmountSaved,
+                contributionAmount: allocation.deltaAmount,
+                context: modelContext,
+                groupID: groupID
+            )
         }
-    }
-    
-    func calculateSavingsDistribution(goals: [Goal], totalPerPaycheck: Double) -> [Goal: Double] {
-        let filteredGoals = goals.filter { $0.remainingAmount > 0 } // Ignore fully saved goals
-        guard !filteredGoals.isEmpty else { return [:] }
-        
-        let weightedGoals = filteredGoals.map { goal -> (Goal, Double) in
-            let urgencyFactor = goal.daysUntilDeadline > 0 ? 1.0 / Double(goal.daysUntilDeadline) : 1.0
-            let weightedValue = urgencyFactor * goal.weight
-            return (goal, weightedValue)
+
+        if let account = manualSavingsAccount {
+            account.balanceAmount = plan.totalBalance
+            account.updatedAt = Date()
+        } else {
+            modelContext.insert(ManualSavingsAccount(balance: plan.totalBalance))
         }
-        
-        let totalWeight = weightedGoals.reduce(0) { $0 + $1.1 }
-        
-        var allocation: [Goal: Double] = [:]
-        for (goal, weight) in weightedGoals {
-            let percentage = weight / totalWeight
-            allocation[goal] = min(goal.remainingAmount, percentage * totalPerPaycheck)
-        }
-        
-        return allocation
+
+        try? modelContext.save()
+        MoneyMapIntentDonations.donateSavingsSummary()
     }
 
     func routeToRequestedGoalIfNeeded() {
@@ -355,6 +358,199 @@ private struct GoalOverviewPanel: View {
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct ManualSavingsBalanceView: View {
+    let goals: [Goal]
+    let nextPayday: Date?
+    let initialBalance: Double
+    let updatedAt: Date?
+    let onApply: (SavingsBalancePlan) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var balance: Double
+    @FocusState private var balanceFocused: Bool
+
+    init(
+        goals: [Goal],
+        nextPayday: Date?,
+        initialBalance: Double,
+        updatedAt: Date?,
+        onApply: @escaping (SavingsBalancePlan) -> Void
+    ) {
+        self.goals = goals
+        self.nextPayday = nextPayday
+        self.initialBalance = initialBalance
+        self.updatedAt = updatedAt
+        self.onApply = onApply
+        _balance = State(initialValue: initialBalance)
+    }
+
+    private var plan: SavingsBalancePlan {
+        FinancialPlanningEngine.allocateSavingsBalance(
+            balance: balance,
+            goals: goals,
+            nextPayday: nextPayday
+        )
+    }
+
+    private var canApply: Bool {
+        !plan.allocations.isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                balanceSection
+                allocationSection
+                unallocatedSection
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(MoneyMapDesign.groupedBackground)
+            .navigationTitle("Savings Account")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save & Split") {
+                        onApply(plan)
+                        dismiss()
+                    }
+                    .disabled(!canApply)
+                }
+                if balanceFocused {
+                    ToolbarItem(placement: .keyboard) {
+                        Spacer()
+                    }
+                    ToolbarItem(placement: .keyboard) {
+                        Button("Done") {
+                            balanceFocused = false
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var balanceSection: some View {
+        Section {
+            TextField("Balance", value: $balance, format: .currency(code: "USD"))
+                .keyboardType(.decimalPad)
+                .focused($balanceFocused)
+
+            if let updatedAt {
+                Label("Last updated \(MoneyMapFormatters.mediumDateString(for: updatedAt))", systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Manual Balance")
+        } footer: {
+            Text("Use the total amount currently in the savings account. MoneyMap will reconcile goal totals to this balance.")
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var allocationSection: some View {
+        Section("Goal Split") {
+            if goals.filter({ ($0.targetAmount ?? 0) > 0 }).isEmpty {
+                MoneyMapEmptyState(
+                    title: "No Goals To Split",
+                    message: "Add a target amount to at least one goal before splitting savings.",
+                    systemImage: "target"
+                )
+            } else {
+                ForEach(plan.allocations, id: \.goalID) { allocation in
+                    ManualSavingsAllocationRow(allocation: allocation)
+                }
+            }
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    @ViewBuilder
+    private var unallocatedSection: some View {
+        if plan.unallocatedBalance > 0 {
+            Section {
+                MoneyMapActionListRow(
+                    title: "Unassigned Savings",
+                    detail: "\(MoneyMapFormatters.currencyString(for: plan.unallocatedBalance)) is left after fully funding your current goals.",
+                    systemImage: "tray.full",
+                    tint: .blue
+                )
+            }
+            .listRowBackground(MoneyMapDesign.surfaceBackground)
+        }
+    }
+}
+
+private struct ManualSavingsAllocationRow: View {
+    let allocation: SavingsBalanceGoalAllocation
+
+    private var progress: Double {
+        guard allocation.targetAmount > 0 else { return 0 }
+        return min(max(allocation.allocatedAmount / allocation.targetAmount, 0), 1)
+    }
+
+    private var deltaText: String {
+        if allocation.deltaAmount > 0 {
+            return "Add \(MoneyMapFormatters.currencyString(for: allocation.deltaAmount))"
+        }
+        if allocation.deltaAmount < 0 {
+            return "Remove \(MoneyMapFormatters.currencyString(for: abs(allocation.deltaAmount)))"
+        }
+        return "No change"
+    }
+
+    private var deltaColor: Color {
+        if allocation.deltaAmount > 0 {
+            return MoneyMapDesign.calmGreen
+        }
+        if allocation.deltaAmount < 0 {
+            return MoneyMapDesign.warningGold
+        }
+        return .secondary
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(allocation.goalName)
+                    .font(.body.weight(.semibold))
+                Spacer(minLength: 12)
+                MoneyMapMoneyText(
+                    amount: allocation.allocatedAmount,
+                    font: .body.weight(.semibold),
+                    foregroundStyle: .primary
+                )
+            }
+
+            ProgressView(value: progress)
+                .tint(MoneyMapDesign.calmGreen)
+
+            HStack(spacing: 8) {
+                Label(deltaText, systemImage: allocation.deltaAmount < 0 ? "minus.circle" : "plus.circle")
+                    .foregroundStyle(deltaColor)
+
+                Spacer(minLength: 8)
+
+                Text("\(MoneyMapFormatters.currencyString(for: allocation.remainingAfterAllocation)) left")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption.weight(.semibold))
+
+            if allocation.isBehindSchedule {
+                Label("Behind pace", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(MoneyMapDesign.warningGold)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 

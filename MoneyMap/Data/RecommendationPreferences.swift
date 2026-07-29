@@ -82,10 +82,90 @@ enum PaycheckAllocationStrategy: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+enum PaycheckCashSource: String, CaseIterable, Codable, Identifiable {
+    case manual
+    case linkedAccount
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .manual:
+            return "Manual"
+        case .linkedAccount:
+            return "Bank Account"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .manual:
+            return "Type the money you have available to allocate right now."
+        case .linkedAccount:
+            return "Use the balance from the account where your extra money lands."
+        }
+    }
+}
+
+struct PaycheckCashAccount: Identifiable, Hashable {
+    let id: UUID
+    let accountID: String
+    let itemID: String
+    let institutionName: String?
+    let displayName: String
+    let lastFourLabel: String?
+    let currentBalance: Double?
+    let availableBalance: Double?
+    let updatedAt: Date
+
+    init(_ account: PlaidAccountSnapshot) {
+        id = account.id
+        accountID = account.accountID
+        itemID = account.itemID
+        institutionName = account.institutionName
+        displayName = account.displayName
+        lastFourLabel = account.lastFourLabel
+        currentBalance = account.currentBalance
+        availableBalance = account.availableBalance
+        updatedAt = account.updatedAt
+    }
+}
+
+enum PaycheckCashResolver {
+    static func availableCash(
+        source: PaycheckCashSource,
+        manualAmount: Double,
+        selectedAccountID: String?,
+        accounts: [PaycheckCashAccount]
+    ) -> Double {
+        switch source {
+        case .manual:
+            return max(manualAmount, 0)
+        case .linkedAccount:
+            guard
+                let selectedAccountID,
+                let account = accounts.first(where: { $0.accountID == selectedAccountID })
+            else {
+                return 0
+            }
+
+            return balance(for: account)
+        }
+    }
+
+    static func balance(for account: PaycheckCashAccount) -> Double {
+        max(account.availableBalance ?? account.currentBalance ?? 0, 0)
+    }
+}
+
 enum RecommendationPreferencesStore {
     private static let suiteName = "group.com.heyjoshsmith.MoneyMap"
     private static let cardStrategyKey = "recommendation_card_strategy"
     private static let paycheckStrategyKey = "recommendation_paycheck_strategy"
+    private static let paycheckCashSourceKey = "recommendation_paycheck_cash_source"
+    private static let paycheckCashAccountIDKey = "recommendation_paycheck_cash_account_id"
+    private static let manualSavingsBalanceKey = "recommendation_manual_savings_balance"
+    private static let manualSavingsUpdatedAtKey = "recommendation_manual_savings_updated_at"
 
     private static var defaults: UserDefaults {
         UserDefaults(suiteName: suiteName) ?? .standard
@@ -118,6 +198,58 @@ enum RecommendationPreferencesStore {
         }
         set {
             defaults.set(newValue.rawValue, forKey: paycheckStrategyKey)
+        }
+    }
+
+    static var paycheckCashSource: PaycheckCashSource {
+        get {
+            guard
+                let rawValue = defaults.string(forKey: paycheckCashSourceKey),
+                let source = PaycheckCashSource(rawValue: rawValue)
+            else {
+                return .manual
+            }
+            return source
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: paycheckCashSourceKey)
+        }
+    }
+
+    static var paycheckCashAccountID: String? {
+        get {
+            let value = defaults.string(forKey: paycheckCashAccountIDKey)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return value?.isEmpty == false ? value : nil
+        }
+        set {
+            if let newValue, !newValue.isEmpty {
+                defaults.set(newValue, forKey: paycheckCashAccountIDKey)
+            } else {
+                defaults.removeObject(forKey: paycheckCashAccountIDKey)
+            }
+        }
+    }
+
+    static var manualSavingsBalance: Double {
+        get {
+            max(defaults.double(forKey: manualSavingsBalanceKey), 0)
+        }
+        set {
+            defaults.set(max(newValue, 0), forKey: manualSavingsBalanceKey)
+        }
+    }
+
+    static var manualSavingsUpdatedAt: Date? {
+        get {
+            defaults.object(forKey: manualSavingsUpdatedAtKey) as? Date
+        }
+        set {
+            if let newValue {
+                defaults.set(newValue, forKey: manualSavingsUpdatedAtKey)
+            } else {
+                defaults.removeObject(forKey: manualSavingsUpdatedAtKey)
+            }
         }
     }
 }

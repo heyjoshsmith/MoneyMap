@@ -17,7 +17,8 @@ enum MoneyMapBillStore {
     static func fetchBills() throws -> [Bill] {
         let context = try makeContext()
         let bills = try context.fetch(FetchDescriptor<Bill>())
-        let didChange = refreshStatuses(for: bills)
+        let transactions = try context.fetch(FetchDescriptor<Transaction>())
+        let didChange = refreshStatuses(for: bills, transactions: transactions)
         if didChange {
             try context.save()
         }
@@ -200,23 +201,7 @@ enum MoneyMapBillStore {
     }
 
     @discardableResult
-    private static func refreshStatuses(for bills: [Bill]) -> Bool {
-        var didChange = false
-
-        for bill in bills {
-            let previousDueDate = bill.dueDate
-            let previousDatePaid = bill.datePaid
-            let previousStatus = bill.status
-
-            bill.checkStatus()
-
-            if previousDueDate != bill.dueDate ||
-                previousDatePaid != bill.datePaid ||
-                previousStatus != bill.status {
-                didChange = true
-            }
-        }
-
-        return didChange
+    private static func refreshStatuses(for bills: [Bill], transactions: [Transaction]) -> Bool {
+        BillPaymentMatcher.refreshStatuses(for: bills, transactions: transactions)
     }
 }

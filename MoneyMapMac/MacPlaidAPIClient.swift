@@ -9,7 +9,7 @@ import Foundation
 
 struct MacPlaidAPIClient {
     let credentials: PlaidStoredCredentials
-    var session: URLSession = .shared
+    var session: URLSession = Self.makeSession()
 
     func validateCredentials() async throws {
         _ = try await post(
@@ -190,9 +190,10 @@ struct MacPlaidAPIClient {
         var request = URLRequest(url: credentials.environment.baseURL.appending(path: path))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 45
         request.httpBody = try PlaidCoding.encoder.encode(body)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw PlaidAPIError.transport("Plaid did not return an HTTP response.")
         }
@@ -205,6 +206,57 @@ struct MacPlaidAPIClient {
         }
 
         return data
+    }
+
+    private func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        let maximumAttempts = 3
+        var lastTransportError: Error?
+
+        for attempt in 1...maximumAttempts {
+            do {
+                return try await session.data(for: request)
+            } catch {
+                guard Self.isRetryableTransportError(error), attempt < maximumAttempts else {
+                    lastTransportError = error
+                    break
+                }
+                lastTransportError = error
+                try await Task.sleep(nanoseconds: Self.retryDelayNanoseconds(for: attempt))
+            }
+        }
+
+        let detail = lastTransportError?.localizedDescription ?? "The request did not complete."
+        throw PlaidAPIError.transport("MoneyMap could not reach Plaid after a few attempts. Check the Mac's network connection and try again. \(detail)")
+    }
+
+    private static func makeSession() -> URLSession {
+        let configuration = URLSessionConfiguration.default
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForRequest = 45
+        configuration.timeoutIntervalForResource = 120
+        return URLSession(configuration: configuration)
+    }
+
+    private static func isRetryableTransportError(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .cannotConnectToHost,
+             .cannotFindHost,
+             .dnsLookupFailed,
+             .internationalRoamingOff,
+             .networkConnectionLost,
+             .notConnectedToInternet,
+             .resourceUnavailable,
+             .secureConnectionFailed,
+             .timedOut:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func retryDelayNanoseconds(for attempt: Int) -> UInt64 {
+        UInt64(attempt) * 1_500_000_000
     }
 }
 

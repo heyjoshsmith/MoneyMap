@@ -25,6 +25,8 @@ struct MacBankSyncDashboardView: View {
     @State private var showingCredentialSettings = false
     @State private var showingAdvancedDetails = false
     @State private var connectionPendingRemoval: PlaidConnection?
+    @AppStorage(MacBankSyncPreferences.automaticRefreshEnabledKey) private var automaticRefreshEnabled = true
+    @AppStorage(MacBankSyncPreferences.refreshIntervalMinutesKey) private var refreshIntervalMinutes = 60
 
     var body: some View {
         ScrollView {
@@ -43,9 +45,16 @@ struct MacBankSyncDashboardView: View {
         .frame(minWidth: 780, minHeight: 620)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
-            credentialEditor.load()
+            credentialEditor.loadStatus(hasConnections: !connections.isEmpty)
             launchAtLogin = LaunchAtLoginController.isEnabled
             showingCredentialSettings = !credentialEditor.hasStoredCredentials
+        }
+        .task(id: automaticRefreshConfigurationID) {
+            await coordinator.runAutomaticRefreshLoop(
+                context: modelContext,
+                automaticRefreshEnabled: automaticRefreshEnabled,
+                refreshIntervalMinutes: refreshIntervalMinutes
+            )
         }
         .confirmationDialog(
             removeConnectionTitle,
@@ -229,6 +238,8 @@ struct MacBankSyncDashboardView: View {
                     credentialFieldsContent
                     Divider()
                     launchAtLoginContent
+                    Divider()
+                    automaticRefreshContent
                 }
                 .padding(.top, 12)
             } label: {
@@ -329,6 +340,15 @@ struct MacBankSyncDashboardView: View {
             }
 
             HStack {
+                if credentialEditor.hasStoredCredentials {
+                    Button {
+                        loadCredentialValues()
+                    } label: {
+                        Label("Load Saved", systemImage: "key.viewfinder")
+                    }
+                    .disabled(coordinator.isWorking)
+                }
+
                 Button {
                     saveCredentials()
                 } label: {
@@ -364,6 +384,25 @@ struct MacBankSyncDashboardView: View {
                 Label(launchAtLoginMessage, systemImage: "info.circle")
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private var automaticRefreshContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle("Refresh bank data automatically", isOn: $automaticRefreshEnabled)
+
+            Picker("Refresh every", selection: $refreshIntervalMinutes) {
+                Text("30 min").tag(30)
+                Text("1 hour").tag(60)
+                Text("3 hours").tag(180)
+                Text("6 hours").tag(360)
+            }
+            .pickerStyle(.segmented)
+            .disabled(!automaticRefreshEnabled)
+
+            Label("iPhone refresh requests are checked while this app is open.", systemImage: "iphone.gen3")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -854,13 +893,37 @@ struct MacBankSyncDashboardView: View {
 
     private var syncHeadline: String {
         if let lastSyncAt = connections.compactMap(\.lastSyncAt).max() {
-            return "Last synced \(lastSyncAt.formatted(date: .abbreviated, time: .shortened))"
+            let freshness = BankSyncFreshness(lastSyncAt: lastSyncAt)
+            let prefix = freshness.level.isStale ? "Stale sync" : "Last synced"
+            let age = freshness.level.isStale ? " - \(freshness.ageLabel ?? "old")" : ""
+            return "\(prefix) \(lastSyncAt.formatted(date: .abbreviated, time: .shortened))\(age)"
         }
         return connections.isEmpty ? "Ready to connect a bank" : "Ready to sync"
     }
 
     private var syncDetail: String {
-        "Keep this Mac on to refresh bank data. iPhone and iPad read the shared snapshots; they do not hold Plaid secrets."
+        automaticRefreshEnabled
+            ? "This Mac refreshes every \(automaticRefreshIntervalLabel) while MoneyMap is open. iPhone and iPad read the shared snapshots."
+            : "Automatic refresh is off. iPhone and iPad read snapshots after you sync this Mac."
+    }
+
+    private var automaticRefreshConfigurationID: String {
+        "\(automaticRefreshEnabled)-\(refreshIntervalMinutes)-\(credentialEditor.hasStoredCredentials)-\(connections.count)"
+    }
+
+    private var automaticRefreshIntervalLabel: String {
+        switch refreshIntervalMinutes {
+        case 30:
+            return "30 minutes"
+        case 60:
+            return "hour"
+        case 180:
+            return "3 hours"
+        case 360:
+            return "6 hours"
+        default:
+            return "\(refreshIntervalMinutes) minutes"
+        }
     }
 
     private var removeConnectionTitle: String {
@@ -926,6 +989,15 @@ struct MacBankSyncDashboardView: View {
         }
 
         if let lastSyncAt = connections.compactMap(\.lastSyncAt).max() {
+            let freshness = BankSyncFreshness(lastSyncAt: lastSyncAt)
+            if freshness.level.isStale {
+                return (
+                    "Bank data is stale",
+                    "Last synced \(lastSyncAt.formatted(date: .abbreviated, time: .shortened)) (\(freshness.ageLabel ?? "old")). Run Sync Now to refresh Plaid and push a new iPhone snapshot.",
+                    "exclamationmark.triangle",
+                    .orange
+                )
+            }
             return (
                 "Bank sync is current",
                 "Last synced \(lastSyncAt.formatted(date: .abbreviated, time: .shortened)).",
@@ -1044,6 +1116,18 @@ struct MacBankSyncDashboardView: View {
         } catch {
             credentialErrorMessage = error.localizedDescription
             return false
+        }
+    }
+
+    private func loadCredentialValues() {
+        credentialStatusMessage = nil
+        credentialErrorMessage = nil
+
+        do {
+            try credentialEditor.loadValuesForEditing()
+            credentialStatusMessage = "Saved credentials loaded."
+        } catch {
+            credentialErrorMessage = error.localizedDescription
         }
     }
 
@@ -1260,6 +1344,7 @@ private struct PlaidCredentialEditorState {
     var secret = ""
     var environment = PlaidCredentialEnvironment.sandbox
     var hasStoredCredentials = false
+    private var savedSecretEnvironments: Set<PlaidCredentialEnvironment> = []
     private var secretsByEnvironment: [PlaidCredentialEnvironment: String] = [:]
 
     var canSave: Bool {
@@ -1268,21 +1353,35 @@ private struct PlaidCredentialEditorState {
     }
 
     func hasSavedSecret(for environment: PlaidCredentialEnvironment) -> Bool {
-        !(secretsByEnvironment[environment] ?? "")
+        if savedSecretEnvironments.contains(environment) {
+            return true
+        }
+
+        return !(secretsByEnvironment[environment] ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty
     }
 
-    mutating func load() {
+    mutating func loadStatus(hasConnections: Bool) {
         let store = PlaidCredentialStore()
         environment = store.selectedEnvironment
+        clientID = ""
+        secret = ""
+        secretsByEnvironment = [:]
+        savedSecretEnvironments = store.savedSecretEnvironments
+        hasStoredCredentials = store.hasStoredCredentialsHint || hasConnections
+    }
 
+    mutating func loadValuesForEditing() throws {
+        let store = PlaidCredentialStore()
+        environment = store.selectedEnvironment
         clientID = (try? store.loadClientID()) ?? ""
-        for environment in PlaidCredentialEnvironment.allCases {
-            secretsByEnvironment[environment] = (try? store.secret(for: environment)) ?? ""
-        }
-
+        secretsByEnvironment[environment] = (try? store.secret(for: environment)) ?? ""
         secret = secretsByEnvironment[environment] ?? ""
+        if canSave {
+            store.markCredentialsSaved(for: environment)
+            savedSecretEnvironments.insert(environment)
+        }
         hasStoredCredentials = canSave
     }
 
@@ -1300,6 +1399,7 @@ private struct PlaidCredentialEditorState {
         let store = PlaidCredentialStore()
         try store.save(clientID: clientID, secret: secret, environment: environment)
         secretsByEnvironment[environment] = secret.trimmingCharacters(in: .whitespacesAndNewlines)
+        savedSecretEnvironments.insert(environment)
         hasStoredCredentials = canSave
     }
 }
@@ -1318,4 +1418,9 @@ enum LaunchAtLoginController {
             try SMAppService.mainApp.unregister()
         }
     }
+}
+
+enum MacBankSyncPreferences {
+    static let automaticRefreshEnabledKey = "plaid.automaticRefreshEnabled"
+    static let refreshIntervalMinutesKey = "plaid.refreshIntervalMinutes"
 }

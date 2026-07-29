@@ -33,13 +33,7 @@ struct RecurringBillReviewView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
-                modePicker
-                    .padding(.horizontal)
-
-                feedbackStack
-            }
-            .padding(.top, 12)
+            feedbackStack
 
             switch selectedMode {
             case .upcoming:
@@ -48,7 +42,7 @@ struct RecurringBillReviewView: View {
                 allContent
             }
         }
-        .navigationTitle("Recurring")
+        .navigationTitle("Bill Calendar")
         .navigationBarTitleDisplayMode(.inline)
         .background(MoneyMapDesign.groupedBackground)
         .animation(.spring(response: 0.36, dampingFraction: 0.86), value: reviewSuggestions)
@@ -72,7 +66,14 @@ struct RecurringBillReviewView: View {
             reloadSuggestions(animated: true)
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    toggleSelectedMode()
+                } label: {
+                    Label(selectedMode.toggleActionTitle, systemImage: selectedMode.toggleActionSystemImage)
+                }
+                .accessibilityLabel(selectedMode.toggleAccessibilityLabel)
+
                 Button {
                     showingIgnoredSuggestions = true
                 } label: {
@@ -105,18 +106,6 @@ struct RecurringBillReviewView: View {
         }
     }
 
-    private var modePicker: some View {
-        Picker("Recurring View", selection: $selectedMode) {
-            ForEach(RecurringReviewMode.allCases) { mode in
-                Text(mode.title).tag(mode)
-            }
-        }
-        .pickerStyle(.segmented)
-        .frame(maxWidth: 260)
-        .frame(maxWidth: .infinity)
-        .accessibilityLabel("Recurring filter")
-    }
-
     @ViewBuilder
     private var feedbackStack: some View {
         if actionMessage != nil || actionErrorMessage != nil {
@@ -145,6 +134,13 @@ struct RecurringBillReviewView: View {
                 }
             }
             .padding(.horizontal)
+            .padding(.top, 12)
+        }
+    }
+
+    private func toggleSelectedMode() {
+        withAnimation(.snappy(duration: 0.2)) {
+            selectedMode = selectedMode.toggled
         }
     }
 
@@ -156,7 +152,7 @@ struct RecurringBillReviewView: View {
                         recurringCalendarSection(for: month)
                         recurringMonthlySummary(for: month)
 
-                        Text("Expected dates and amounts are estimates based on your transaction history.")
+                        Text("Dates and amounts combine saved bills with estimates from detected charges.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -223,9 +219,9 @@ struct RecurringBillReviewView: View {
                 RecurringLoadingRow(title: "Checking recent transactions")
             } else if items.isEmpty {
                 RecurringEmptyState(
-                    title: "No Upcoming Charges",
+                    title: "No Upcoming Bills",
                     systemImage: "calendar.badge.checkmark",
-                    detail: "Tracked subscriptions and detected recurring charges will appear here."
+                    detail: "Saved bills and detected charges will appear here."
                 )
             } else {
                 VStack(spacing: 0) {
@@ -266,7 +262,7 @@ struct RecurringBillReviewView: View {
 
     private var recurringAllSummary: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(allScheduleItems.count) Transaction\(allScheduleItems.count == 1 ? "" : "s")")
+            Text("\(allScheduleItems.count) Item\(allScheduleItems.count == 1 ? "" : "s")")
                 .font(.title3.weight(.semibold))
                 .fontDesign(.rounded)
                 .foregroundStyle(.secondary)
@@ -285,9 +281,9 @@ struct RecurringBillReviewView: View {
                 RecurringLoadingRow(title: "Checking recent transactions")
             } else if allScheduleItems.isEmpty {
                 RecurringEmptyState(
-                    title: "No Recurring Charges",
+                    title: "No Bills",
                     systemImage: "repeat",
-                    detail: "MoneyMap has not found or saved recurring transactions yet."
+                    detail: "Saved bills and detected charges will appear here."
                 )
             } else {
                 VStack(spacing: 0) {
@@ -338,7 +334,7 @@ struct RecurringBillReviewView: View {
             }
         }
 
-        let tracked = trackedRecurringBills
+        let tracked = trackedBills
             .filter { $0.lifecycleState == .active }
             .flatMap { bill in
                 projectedDates(
@@ -418,7 +414,7 @@ struct RecurringBillReviewView: View {
     }
 
     private var allScheduleItems: [RecurringScheduleItem] {
-        let tracked = trackedRecurringBills.map { RecurringScheduleItem(bill: $0, calendar: .current) }
+        let tracked = trackedBills.map { RecurringScheduleItem(bill: $0, calendar: .current) }
         let suggestions = reviewSuggestions.map { RecurringScheduleItem($0) }
         return (suggestions + tracked).sorted(by: RecurringScheduleItem.byDateThenTitle)
     }
@@ -459,7 +455,7 @@ struct RecurringBillReviewView: View {
     private var allSummaryText: String {
         let upcomingTotal = upcomingScheduleItems.reduce(0) { $0 + $1.amount }
         if upcomingScheduleItems.isEmpty {
-            return "Tracked and detected recurring charges will collect here as MoneyMap learns your patterns."
+            return "Saved bills and detected charges will collect here as MoneyMap learns your patterns."
         }
         return "\(upcomingScheduleItems.count) upcoming - \(MoneyMapFormatters.currencyString(for: upcomingTotal)) expected"
     }
@@ -561,7 +557,7 @@ struct RecurringBillReviewView: View {
                 ContentUnavailableView(
                     "Nothing to Review",
                     systemImage: "checkmark.circle",
-                    description: Text("MoneyMap will show this card again when imported transactions reveal a new recurring charge.")
+                    description: Text("MoneyMap will show this card again when imported transactions reveal a new detected charge.")
                 )
             } else {
                 ForEach(reviewSuggestions) { suggestion in
@@ -607,18 +603,18 @@ struct RecurringBillReviewView: View {
                 }
             }
         } footer: {
-            Text("Recurring charge is the umbrella. MoneyMap labels each item as a bill, subscription, loan, membership, service, utility, insurance, or housing cost so you can decide how to track it.")
+            Text("Review repeating imported transactions before saving them as bills.")
         }
         .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
     private var trackedRecurringSection: some View {
         Section {
-            if trackedRecurringBills.isEmpty {
-                Text("Tracked bills and subscriptions will appear here after you add them.")
+            if trackedBills.isEmpty {
+                Text("Saved bills will appear here after you add them.")
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(trackedRecurringBills) { bill in
+                ForEach(trackedBills) { bill in
                     Button {
                         viewingBill = bill
                     } label: {
@@ -629,9 +625,9 @@ struct RecurringBillReviewView: View {
                 }
             }
         } header: {
-            Text("Tracked Bills & Subscriptions")
+            Text("Saved Bills")
         } footer: {
-            Text("This includes active, paused, and canceled recurring items already saved in MoneyMap.")
+            Text("This includes active, paused, and canceled bills already saved in MoneyMap.")
         }
         .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
@@ -648,18 +644,17 @@ struct RecurringBillReviewView: View {
     }
 
     private var heroTitle: String {
-        reviewSuggestions.isEmpty ? "Recurring charges are current" : "\(reviewSuggestions.count) recurring charge\(reviewSuggestions.count == 1 ? "" : "s") found"
+        reviewSuggestions.isEmpty ? "Detected charges are current" : "\(reviewSuggestions.count) detected charge\(reviewSuggestions.count == 1 ? "" : "s") found"
     }
 
     private var heroDetail: String {
         reviewSuggestions.isEmpty
-            ? "There are no detected subscriptions waiting for review."
+            ? "There are no detected charges waiting for review."
             : "Review repeating imported transactions before adding them to MoneyMap."
     }
 
-    private var trackedRecurringBills: [Bill] {
+    private var trackedBills: [Bill] {
         bills.withoutCreditCards
-            .filter(\.isSubscriptionLike)
             .sorted { lhs, rhs in
                 if lhs.lifecycleState != rhs.lifecycleState {
                     return lhs.lifecycleState.sortPriority < rhs.lifecycleState.sortPriority
@@ -703,6 +698,13 @@ struct RecurringBillReviewView: View {
             let fetchedTransactions = try MoneyMapDiagnostics.measure("recurringReview.fetchTransactions") {
                 try fetchDetectionTransactions()
             }
+            let didUpdateBillStatuses = BillPaymentMatcher.refreshStatuses(
+                for: fetchedBills,
+                transactions: fetchedTransactions
+            )
+            if didUpdateBillStatuses {
+                try modelContext.save()
+            }
             let fetchedPlaidAccounts = try MoneyMapDiagnostics.measure("recurringReview.fetchPlaidAccounts") {
                 try modelContext.fetch(
                     FetchDescriptor<PlaidAccountSnapshot>(sortBy: [SortDescriptor(\.accountName)])
@@ -739,12 +741,13 @@ struct RecurringBillReviewView: View {
                     "durationMs": MoneyMapDiagnostics.durationMilliseconds(since: start),
                     "detected": "\(detected.count)",
                     "ignored": "\(ignoredSuggestions.count)",
-                    "visible": "\(reviewSuggestions.count)"
+                    "visible": "\(reviewSuggestions.count)",
+                    "updatedBillStatuses": "\(didUpdateBillStatuses)"
                 ]
             )
         } catch {
             isLoadingSuggestions = false
-            actionErrorMessage = "Could not check recurring charges: \(error.localizedDescription)"
+            actionErrorMessage = "Could not check detected charges: \(error.localizedDescription)"
             MoneyMapDiagnostics.record(
                 "recurringReview.reload.failed",
                 error: error,
@@ -1003,10 +1006,36 @@ private enum RecurringReviewMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .upcoming:
-            return "Upcoming"
+            return "Calendar"
         case .all:
-            return "All"
+            return "List"
         }
+    }
+
+    var toggled: RecurringReviewMode {
+        switch self {
+        case .upcoming:
+            return .all
+        case .all:
+            return .upcoming
+        }
+    }
+
+    var toggleActionTitle: String {
+        toggled.title
+    }
+
+    var toggleActionSystemImage: String {
+        switch toggled {
+        case .upcoming:
+            return "calendar"
+        case .all:
+            return "list.bullet"
+        }
+    }
+
+    var toggleAccessibilityLabel: String {
+        "Show \(toggleActionTitle.lowercased()) view"
     }
 }
 
@@ -1048,11 +1077,11 @@ private struct RecurringScheduleItem: Identifiable {
     init(bill: Bill, occurrenceDate: Date? = nil, calendar: Calendar) {
         let fallbackDate = occurrenceDate ?? bill.dueDate ?? bill.nextOccurrenceDate(calendar: calendar) ?? .distantFuture
         id = "bill-\(bill.id.uuidString)-\(Int(fallbackDate.timeIntervalSinceReferenceDate))"
-        title = bill.name?.nilIfBlank ?? "Recurring Charge"
+        title = bill.name?.nilIfBlank ?? "Bill"
         amount = bill.amount ?? 0
         date = fallbackDate
         cadenceText = Self.cadenceText(for: bill)
-        categoryName = bill.category?.name ?? "Recurring"
+        categoryName = bill.category?.name ?? "Bill"
         systemImage = bill.category?.icon ?? "repeat"
         tint = bill.category?.color ?? MoneyMapDesign.calmGreen
         lifecycleState = bill.lifecycleState
@@ -1068,7 +1097,7 @@ private struct RecurringScheduleItem: Identifiable {
 
         switch lifecycleState {
         case .active:
-            return "Tracked"
+            return "Saved"
         case .paused:
             return "Paused"
         case .canceled:
@@ -1110,7 +1139,7 @@ private struct RecurringScheduleItem: Identifiable {
     private static func cadenceText(for bill: Bill) -> String {
         guard let interval = bill.recurrenceInterval,
               let unit = bill.recurrenceUnit else {
-            return bill.category?.isSubscriptionCategory == true ? "Monthly" : "Recurring"
+            return bill.category?.isSubscriptionCategory == true ? "Subscription" : "One-time"
         }
 
         if interval == 1 {
@@ -1229,7 +1258,7 @@ private struct RecurringMonthlySummaryCard: View {
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Expected This Month")
+                Text("Scheduled This Month")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
 
@@ -1573,10 +1602,14 @@ private struct RecurringScheduleRow: View {
     private var dateText: String {
         switch dateStyle {
         case .relative:
-            return "Expected \(relativeDateText)"
+            return "\(datePrefix) \(relativeDateText)"
         case .full:
-            return "Expected \(MoneyMapFormatters.mediumDateString(for: item.date))"
+            return "\(datePrefix) \(MoneyMapFormatters.mediumDateString(for: item.date))"
         }
+    }
+
+    private var datePrefix: String {
+        item.isDetected ? "Expected" : "Due"
     }
 
     private var relativeDateText: String {
@@ -1738,7 +1771,7 @@ private struct TrackedRecurringChargeRow: View {
                 .background((bill.category?.color ?? MoneyMapDesign.calmGreen), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(bill.name ?? "Recurring Item")
+                Text(bill.name ?? "Bill")
                     .font(.headline)
                     .lineLimit(1)
 
@@ -1848,7 +1881,7 @@ private struct RecurringChargeDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes the imported transactions used for this recurring charge. Existing bills and subscriptions are not deleted.")
+            Text("This removes the imported transactions used for this detected charge. Saved bills are not deleted.")
         }
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: 10) {
@@ -2034,7 +2067,7 @@ private struct IgnoredRecurringChargesView: View {
                 ContentUnavailableView(
                     "No Ignored Charges",
                     systemImage: "archivebox",
-                    description: Text("Ignored recurring charges will appear here so you can bring them back.")
+                    description: Text("Ignored detected charges will appear here so you can bring them back.")
                 )
             } else {
                 Section {

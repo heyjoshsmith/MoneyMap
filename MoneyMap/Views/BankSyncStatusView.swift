@@ -117,6 +117,10 @@ struct BankSyncStatusView: View {
     @State private var isImporting = false
     @State private var connectionSnapshots: [PlaidConnectionValue] = []
     @State private var accountSnapshots: [PlaidAccountValue] = []
+    @State private var macRefreshCommand: PlaidMacRefreshCommand?
+    @State private var isRequestingMacRefresh = false
+    @State private var macRefreshStatusMessage: String?
+    @State private var macRefreshErrorMessage: String?
 
     var body: some View {
         Group {
@@ -133,6 +137,7 @@ struct BankSyncStatusView: View {
         }
         .task {
             loadSnapshotValues()
+            await loadMacRefreshCommand()
         }
     }
 
@@ -200,7 +205,7 @@ struct BankSyncStatusView: View {
                 title: syncStatusTitle,
                 detail: statusDetail,
                 systemImage: syncStatusIcon,
-                showsError: activeConnectionSnapshots.contains(where: { $0.errorMessage != nil }),
+                showsError: activeConnectionSnapshots.contains(where: { $0.errorMessage != nil }) || syncFreshness.level.isStale,
                 banks: activeConnectionSnapshots.count,
                 accounts: activeAccountSnapshots.count,
                 ready: readyReviewItems.count
@@ -217,13 +222,26 @@ struct BankSyncStatusView: View {
             } label: {
                 BankSyncFeatureRow(
                     title: isRefreshingCloud ? "Refreshing" : "Refresh from Mac",
-                    detail: "Download the latest bank snapshot",
+                    detail: syncFreshness.level.isStale ? "Downloads the latest Mac snapshot." : "Download the latest Mac bank snapshot",
                     systemImage: "icloud.and.arrow.down",
                     tint: .blue
                 )
             }
             .buttonStyle(.plain)
             .disabled(isRefreshingCloud)
+
+            Button {
+                Task { await requestMacRefresh() }
+            } label: {
+                BankSyncFeatureRow(
+                    title: isRequestingMacRefresh ? "Requesting Mac Refresh" : "Tell Mac to Refresh",
+                    detail: macRefreshCommandDetail,
+                    systemImage: "arrow.triangle.2.circlepath",
+                    tint: MoneyMapDesign.calmGreen
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(isRequestingMacRefresh)
 
             if readyReviewItems.isEmpty {
                 BankSyncFeatureRow(
@@ -253,6 +271,15 @@ struct BankSyncStatusView: View {
             }
             if let cloudErrorMessage {
                 Label(cloudErrorMessage, systemImage: "exclamationmark.icloud")
+                    .foregroundStyle(MoneyMapDesign.attentionRed)
+                    .textSelection(.enabled)
+            }
+            if let macRefreshStatusMessage {
+                Label(macRefreshStatusMessage, systemImage: "desktopcomputer")
+                    .foregroundStyle(.secondary)
+            }
+            if let macRefreshErrorMessage {
+                Label(macRefreshErrorMessage, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(MoneyMapDesign.attentionRed)
                     .textSelection(.enabled)
             }
@@ -310,6 +337,10 @@ struct BankSyncStatusView: View {
         activeConnectionSnapshots.compactMap(\.lastSyncAt).max()
     }
 
+    private var syncFreshness: BankSyncFreshness {
+        BankSyncFreshness(lastSyncAt: lastSyncAt)
+    }
+
     private var connectionValues: [PlaidConnectionValue] {
         connections.map(PlaidConnectionValue.init)
     }
@@ -344,6 +375,12 @@ struct BankSyncStatusView: View {
         if activeConnectionSnapshots.contains(where: { $0.errorMessage != nil }) {
             return "Mac sync needs attention"
         }
+        if syncFreshness.level == .veryStale {
+            return "Bank data is stale"
+        }
+        if syncFreshness.level == .stale {
+            return "Bank data is getting old"
+        }
         if lastSyncAt != nil {
             return "Bank sync is active"
         }
@@ -351,7 +388,10 @@ struct BankSyncStatusView: View {
     }
 
     private var syncStatusIcon: String {
-        activeConnectionSnapshots.contains(where: { $0.errorMessage != nil }) ? "exclamationmark.triangle" : "checkmark.circle"
+        if activeConnectionSnapshots.contains(where: { $0.errorMessage != nil }) || syncFreshness.level.isStale {
+            return "exclamationmark.triangle"
+        }
+        return "checkmark.circle"
     }
 
     private var statusDetail: String {
@@ -360,7 +400,11 @@ struct BankSyncStatusView: View {
         }
 
         if let lastSyncAt {
-            return "Last synced from the Mac on \(lastSyncAt.formatted(date: .abbreviated, time: .shortened))."
+            let synced = lastSyncAt.formatted(date: .abbreviated, time: .shortened)
+            if syncFreshness.level.isStale {
+                return "Last Mac sync was \(synced) (\(syncFreshness.ageLabel ?? "old")). Ask the Mac to refresh, then download the new snapshot."
+            }
+            return "Last synced from the Mac on \(synced)."
         }
 
         if activeConnectionSnapshots.isEmpty {
@@ -368,6 +412,26 @@ struct BankSyncStatusView: View {
         }
 
         return "Waiting for the Mac to send the first bank sync snapshot."
+    }
+
+    private var macRefreshCommandDetail: String {
+        guard let macRefreshCommand else {
+            return "Queue a refresh command for MoneyMap for Mac"
+        }
+
+        switch macRefreshCommand.state {
+        case .pending:
+            return "Waiting for MoneyMap for Mac to pick it up"
+        case .running:
+            return "MoneyMap for Mac is refreshing now"
+        case .completed:
+            if let completedAt = macRefreshCommand.completedAt {
+                return "Completed \(completedAt.formatted(date: .omitted, time: .shortened))"
+            }
+            return "The Mac completed the last refresh"
+        case .failed:
+            return macRefreshCommand.message ?? "The Mac could not complete the last refresh"
+        }
     }
 
     private func loadSnapshotValues() {
@@ -409,9 +473,34 @@ struct BankSyncStatusView: View {
         do {
             try await PlaidCloudSyncService.pull(context: plaidModelContext)
             loadSnapshotValues()
+            await loadMacRefreshCommand()
             cloudStatusMessage = "Downloaded latest Plaid sync data."
         } catch {
             cloudErrorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func requestMacRefresh() async {
+        isRequestingMacRefresh = true
+        macRefreshStatusMessage = nil
+        macRefreshErrorMessage = nil
+        defer { isRequestingMacRefresh = false }
+
+        do {
+            macRefreshCommand = try await PlaidCloudSyncService.requestMacRefresh(source: "iPhone")
+            macRefreshStatusMessage = "MoneyMap for Mac will refresh when it sees this request."
+        } catch {
+            macRefreshErrorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func loadMacRefreshCommand() async {
+        do {
+            macRefreshCommand = try await PlaidCloudSyncService.latestMacRefreshCommand()
+        } catch {
+            macRefreshErrorMessage = error.localizedDescription
         }
     }
 
@@ -573,14 +662,35 @@ private struct BankSyncFeatureRow: View {
 private struct PlaidConnectionSummaryRow: View {
     let connection: PlaidConnectionValue
 
+    private var freshness: BankSyncFreshness {
+        BankSyncFreshness(lastSyncAt: connection.lastSyncAt)
+    }
+
+    private var statusText: String? {
+        if freshness.level.isStale {
+            return "Stale"
+        }
+        return connection.status?.capitalized
+    }
+
+    private var statusColor: Color {
+        if freshness.level == .veryStale || connection.errorMessage != nil {
+            return MoneyMapDesign.attentionRed
+        }
+        if freshness.level == .stale {
+            return MoneyMapDesign.warningGold
+        }
+        return MoneyMapDesign.calmGreen
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(MoneyMapDesign.calmGreen.opacity(0.14))
+                    .fill(statusColor.opacity(0.14))
                 Image(systemName: "building.columns")
                     .font(.headline)
-                    .foregroundStyle(MoneyMapDesign.calmGreen)
+                    .foregroundStyle(statusColor)
             }
             .frame(width: 38, height: 34)
 
@@ -592,20 +702,20 @@ private struct PlaidConnectionSummaryRow: View {
 
                     Spacer(minLength: 8)
 
-                    if let status = connection.status {
-                        Text(status.capitalized)
+                    if let statusText {
+                        Text(statusText)
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(MoneyMapDesign.calmGreen)
+                            .foregroundStyle(statusColor)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .background(MoneyMapDesign.calmGreen.opacity(0.12), in: Capsule())
+                            .background(statusColor.opacity(0.12), in: Capsule())
                     }
                 }
 
                 if let lastSyncAt = connection.lastSyncAt {
-                    Text("Last synced \(lastSyncAt.formatted(date: .abbreviated, time: .shortened))")
+                    Text(lastSyncLabel(for: lastSyncAt))
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(freshness.level.isStale ? statusColor : .secondary)
                 }
 
                 if let errorMessage = connection.errorMessage {
@@ -617,6 +727,14 @@ private struct PlaidConnectionSummaryRow: View {
         }
         .padding(.vertical, 3)
         .accessibilityElement(children: .combine)
+    }
+
+    private func lastSyncLabel(for lastSyncAt: Date) -> String {
+        let formatted = lastSyncAt.formatted(date: .abbreviated, time: .shortened)
+        guard freshness.level.isStale else {
+            return "Last synced \(formatted)"
+        }
+        return "Last synced \(formatted) - \(freshness.ageLabel ?? "stale")"
     }
 }
 
@@ -780,6 +898,13 @@ private struct BankDataBrowserView: View {
             Section("Last Sync") {
                 if let lastSyncAt {
                     LabeledContent("Mac sync", value: lastSyncAt.formatted(date: .abbreviated, time: .shortened))
+                    if syncFreshness.level.isStale {
+                        Label(
+                            "This snapshot is \(syncFreshness.ageLabel ?? "stale"). Run Sync Now in MoneyMap for Mac, then refresh this screen.",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .foregroundStyle(syncFreshness.level == .veryStale ? MoneyMapDesign.attentionRed : MoneyMapDesign.warningGold)
+                    }
                 } else {
                     Text("No Mac sync has reached this device yet.")
                         .foregroundStyle(.secondary)
@@ -964,6 +1089,10 @@ private struct BankDataBrowserView: View {
 
     private var lastSyncAt: Date? {
         connections.compactMap(\.lastSyncAt).max()
+    }
+
+    private var syncFreshness: BankSyncFreshness {
+        BankSyncFreshness(lastSyncAt: lastSyncAt)
     }
 
     private func accountDetail(_ account: PlaidAccountSnapshot) -> String {

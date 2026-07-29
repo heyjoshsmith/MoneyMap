@@ -123,7 +123,10 @@ public enum MoneyMapSharedContainerFactory {
             PlaidConnection.self,
             PlaidAccountSnapshot.self,
             PlaidTransactionReviewItem.self,
-            PlaidSuggestion.self
+            PlaidSuggestion.self,
+            ManualSavingsAccount.self,
+            ExtraMoneyPlan.self,
+            ExtraMoneyPlanItem.self
         ])
     }
 

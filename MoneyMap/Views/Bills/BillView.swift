@@ -19,6 +19,7 @@ struct BillView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Query(sort: \PaymentMethod.name) private var paymentMethods: [PaymentMethod]
+    @Query(sort: \Transaction.transactionDate, order: .reverse) private var transactions: [Transaction]
     
     var bill: Bill
     
@@ -90,7 +91,7 @@ struct BillView: View {
     }
     
     var allCategories: [String] {
-        Set((bill.transactions ?? []).compactMap { $0.category }).sorted()
+        Set(displayTransactions.compactMap { $0.category }).sorted()
     }
 
     private var previewTransactions: [Transaction] {
@@ -107,7 +108,7 @@ struct BillView: View {
                         .frame(width: 26)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Transactions")
+                        Text("Transaction History")
                             .font(.headline)
                         Text(transactionSummaryText)
                             .font(.subheadline)
@@ -124,8 +125,8 @@ struct BillView: View {
                 .contentShape(.rect)
             }
             
-            if (bill.transactions ?? []).isEmpty {
-                Text("No transactions available.")
+            if displayTransactions.isEmpty {
+                Text("No matching transactions yet.")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(previewTransactions, id: \.self) { transaction in
@@ -146,7 +147,7 @@ struct BillView: View {
         }
         .padding()
         .background(MoneyMapDesign.surfaceBackground)
-        .clipShape(.rect(cornerRadius: MoneyMapDesign.cornerRadius))
+        .clipShape(.rect(cornerRadius: MoneyMapDesign.sectionCornerRadius))
     }
     
     var searchedTransactions: [Transaction] {
@@ -194,11 +195,12 @@ struct BillView: View {
                     }
                 }
                 Divider()
-                Button("Delete", systemImage: "trash", role: .destructive) {
+                Button("Delete Linked Transactions", systemImage: "trash", role: .destructive) {
                     (bill.transactions ?? []).forEach { transaction in
                         modelContext.delete(transaction)
                     }
                 }
+                .disabled((bill.transactions ?? []).isEmpty)
             }
         }
     }
@@ -239,9 +241,11 @@ struct BillView: View {
         }
         .onAppear {
             MoneyMapIntentDonations.donateOpenBill(bill)
-            bill.checkStatus()
+            refreshBillStatusFromTransactions()
             loadBillMeta()
-            try? modelContext.save()
+        }
+        .onChange(of: transactionPaymentSignature) { _, _ in
+            refreshBillStatusFromTransactions()
         }
         .onDisappear {
             saveBillMeta()
@@ -472,11 +476,10 @@ struct BillView: View {
     }
     
     private var sortedTransactions: [Transaction] {
-        let transactions = bill.transactions ?? []
         let sorted: [Transaction]
         switch transactionSortField {
         case .date:
-            sorted = transactions.sorted { lhs, rhs in
+            sorted = displayTransactions.sorted { lhs, rhs in
                 let lhsDate = lhs.transactionDate ?? .distantPast
                 let rhsDate = rhs.transactionDate ?? .distantPast
                 if transactionSortOrder == .ascending {
@@ -486,7 +489,7 @@ struct BillView: View {
                 }
             }
         case .amount:
-            sorted = transactions.sorted { lhs, rhs in
+            sorted = displayTransactions.sorted { lhs, rhs in
                 let lhsAmt = lhs.amountUSD ?? 0
                 let rhsAmt = rhs.amountUSD ?? 0
                 if transactionSortOrder == .ascending {
@@ -496,7 +499,7 @@ struct BillView: View {
                 }
             }
         case .merchant:
-            sorted = transactions.sorted { lhs, rhs in
+            sorted = displayTransactions.sorted { lhs, rhs in
                 let lhsM = lhs.merchant ?? ""
                 let rhsM = rhs.merchant ?? ""
                 if transactionSortOrder == .ascending {
@@ -512,6 +515,10 @@ struct BillView: View {
     private var filteredAndSortedTransactions: [Transaction] {
         guard let selected = selectedCategory, !selected.isEmpty else { return sortedTransactions }
         return sortedTransactions.filter { $0.category == selected }
+    }
+
+    private var displayTransactions: [Transaction] {
+        BillPaymentMatcher.matchedHistoryTransactions(for: bill, in: transactions)
     }
 
     private func handleImportResult(_ result: Result<[URL], Error>) {
@@ -548,7 +555,7 @@ struct BillView: View {
             let prefix = prefixSearchText.trimmingCharacters(in: .whitespaces)
             guard !prefix.isEmpty else { return }
 
-            let matchingTransactions = (bill.transactions ?? []).filter {
+            let matchingTransactions = displayTransactions.filter {
                 guard let merchantName = $0.merchant else { return false }
                 return merchantName.lowercased().hasPrefix(prefix.lowercased())
             }
@@ -556,7 +563,7 @@ struct BillView: View {
                 tx.friendlyName = pendingFriendlyName
             }
         } else {
-            let matchingTransactions = (bill.transactions ?? []).filter {
+            let matchingTransactions = displayTransactions.filter {
                 $0.merchant == merchant
             }
             for tx in matchingTransactions {
@@ -672,8 +679,24 @@ struct BillView: View {
     }
 
     private var transactionSummaryText: String {
-        let count = bill.transactions?.count ?? 0
+        let count = displayTransactions.count
         return "\(count) transaction\(count == 1 ? "" : "s")"
+    }
+
+    private var transactionPaymentSignature: String {
+        transactions
+            .map { transaction in
+                let timestamp = BillPaymentMatcher.transactionDate(for: transaction)?.timeIntervalSinceReferenceDate ?? 0
+                let amount = transaction.amountUSD ?? 0
+                return "\(BillPaymentMatcher.identityKey(for: transaction))|\(timestamp)|\(amount)"
+            }
+            .joined(separator: "|")
+    }
+
+    private func refreshBillStatusFromTransactions() {
+        if BillPaymentMatcher.refreshStatuses(for: [bill], transactions: transactions) {
+            try? modelContext.save()
+        }
     }
     
     private var billHeaderSection: some View {

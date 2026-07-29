@@ -188,18 +188,6 @@ struct WalletView: View {
                 .buttonStyle(WalletDestinationTileButtonStyle())
 
                 Button {
-                    destination = .recurringBills
-                } label: {
-                    WalletDestinationTile(
-                        title: "Recurring",
-                        detail: recurringDestinationDetail,
-                        systemImage: "repeat.circle.fill",
-                        tint: MoneyMapDesign.calmGreen
-                    )
-                }
-                .buttonStyle(WalletDestinationTileButtonStyle())
-
-                Button {
                     destination = .bankSyncSettings
                 } label: {
                     WalletDestinationTile(
@@ -271,12 +259,12 @@ struct WalletView: View {
             }
 
             NavigationLink {
-                destinationView(.recurringBills)
+                destinationView(.billCalendar)
             } label: {
                 WalletActionRow(
-                    title: "Recurring & Subscriptions",
+                    title: "Bill Calendar",
                     detail: recurringReviewSummary,
-                    systemImage: "repeat",
+                    systemImage: "calendar.badge.clock",
                     tint: MoneyMapDesign.calmGreen
                 )
             }
@@ -484,6 +472,17 @@ struct WalletView: View {
         }
     }
 
+    private var lastBankSyncAt: Date? {
+        plaidConnectionSnapshots
+            .filter { !$0.isDisconnected }
+            .compactMap(\.lastSyncAt)
+            .max()
+    }
+
+    private var bankSyncFreshness: BankSyncFreshness {
+        BankSyncFreshness(lastSyncAt: lastBankSyncAt)
+    }
+
     private var recentTransactions: [Transaction] {
         Array(transactions.prefix(8))
     }
@@ -584,10 +583,10 @@ struct WalletView: View {
 
         let ignoredCount = ignoredRecurringBillSuggestionIDs.split(separator: "|").count
         if ignoredCount > 0 {
-            return "\(ignoredCount) ignored - review recurring charges"
+            return "\(ignoredCount) ignored - review detected charges"
         }
 
-        return "Review detected bills and subscriptions"
+        return "Review bill dates and detected charges"
     }
 
     private var cardsDestinationDetail: String {
@@ -627,6 +626,9 @@ struct WalletView: View {
     private var billsDestinationDetail: String {
         let activeBills = bills.withoutCreditCards.filter { $0.lifecycleState == .active }
         guard !activeBills.isEmpty else {
+            if !recurringReviewSuggestions.isEmpty {
+                return "\(recurringReviewSuggestions.count) detected"
+            }
             return "Track upcoming bills"
         }
 
@@ -635,7 +637,14 @@ struct WalletView: View {
             bill.status != .paid && billNeedsAttentionPreview(bill)
         }
         if !needsAttention.isEmpty {
+            if !recurringReviewSuggestions.isEmpty {
+                return "\(needsAttention.count) action • \(recurringReviewSuggestions.count) detected"
+            }
             return "\(needsAttention.count) action • \(compactCurrencyString(for: unpaidBills.totalAmount))"
+        }
+
+        if !recurringReviewSuggestions.isEmpty {
+            return "\(activeBills.count) saved • \(recurringReviewSuggestions.count) detected"
         }
 
         if unpaidBills.isEmpty {
@@ -658,17 +667,13 @@ struct WalletView: View {
         return "\(paymentMethods.count) saved"
     }
 
-    private var recurringDestinationDetail: String {
-        if !recurringReviewSuggestions.isEmpty {
-            return "\(recurringReviewSuggestions.count) to review"
-        }
-
-        return "Scanning charges"
-    }
-
     private var bankSyncDestinationDetail: String {
         if isRefreshingBankData {
             return "Refreshing"
+        }
+
+        if bankSyncFreshness.level.isStale, let ageLabel = bankSyncFreshness.ageLabel {
+            return "Stale • \(ageLabel)"
         }
 
         if !unlinkedPlaidCreditAccounts.isEmpty {
@@ -705,7 +710,7 @@ struct WalletView: View {
             BankSyncStatusContainerView(mode: .settings)
         case .cardUpgrade:
             BankSyncStatusContainerView(mode: .cardUpgrade)
-        case .recurringBills:
+        case .billCalendar:
             RecurringBillReviewView(
                 initialSuggestions: recurringReviewSuggestions,
                 initialPlaidAccounts: plaidAccountSnapshots
@@ -783,7 +788,7 @@ struct WalletView: View {
             ]
         )
         refreshRecurringReviewSuggestions()
-        destination = .recurringBills
+        destination = .billCalendar
         MoneyMapDiagnostics.record(
             "wallet.recurringCard.destinationSet",
             metadata: ["refreshedSuggestions": "\(recurringReviewSuggestions.count)"]
@@ -936,7 +941,7 @@ private enum WalletDestination: Hashable, Identifiable {
     case cardUtilization
     case bankSyncSettings
     case cardUpgrade
-    case recurringBills
+    case billCalendar
 
     var id: Self { self }
 }
@@ -1313,11 +1318,11 @@ private struct WalletRecurringBillCallout: View {
     }
 
     private var title: String {
-        "\(suggestions.count) recurring charge\(suggestions.count == 1 ? "" : "s") found"
+        "\(suggestions.count) detected charge\(suggestions.count == 1 ? "" : "s") found"
     }
 
     private var detail: String {
-        "Review detected subscriptions and repeating bills from imported transactions."
+        "Review repeating imported transactions before saving them as bills."
     }
 
     private var highConfidenceCount: Int {

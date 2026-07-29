@@ -3,7 +3,7 @@ set -euo pipefail
 
 PROJECT="${PROJECT:-AddMoneyMap.xcodeproj}"
 SCHEME="${SCHEME:-MoneyMap}"
-DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-build/DerivedData}"
+DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-/tmp/MoneyMapVerifyDerivedData.noindex}"
 REQUIRED_WATCH_SDK="${REQUIRED_WATCH_SDK:-watchos26.2}"
 
 echo "Using Xcode:"
@@ -34,6 +34,7 @@ xcodebuild \
   -target MoneyMap \
   -configuration Release \
   -sdk iphoneos \
+  -derivedDataPath "$DERIVED_DATA_PATH" \
   CODE_SIGNING_ALLOWED=NO \
   build
 
@@ -44,6 +45,7 @@ xcodebuild \
   -target MoneyMapTests \
   -configuration Debug \
   -sdk iphonesimulator \
+  -derivedDataPath "$DERIVED_DATA_PATH" \
   CODE_SIGNING_ALLOWED=NO \
   build
 
