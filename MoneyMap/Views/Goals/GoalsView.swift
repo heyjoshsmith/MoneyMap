@@ -21,7 +21,6 @@ struct GoalsView: View {
     @State private var addingGoal = false
     @State private var editingSavingsBalance = false
     
-    @State private var showingResetAlert = false
     @State private var viewingGoal: Goal?
     
     private var activeGoals: [Goal] {
@@ -65,7 +64,7 @@ struct GoalsView: View {
 
                 activeGoalsSection
                 completedGoalsSection
-                actionsSection
+                savingsSection
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
@@ -94,13 +93,6 @@ struct GoalsView: View {
                         Button("Savings Account", systemImage: "banknote") {
                             editingSavingsBalance.toggle()
                         }
-                        Divider()
-                        Button("Add Example Goal", systemImage: "text.badge.star") {
-                            modelContext.insert(Goal.example)
-                        }
-                        Button("Reset Savings", systemImage: "trash", role: .destructive) {
-                            showingResetAlert.toggle()
-                        }
                     }
                 }
             }
@@ -118,18 +110,6 @@ struct GoalsView: View {
                     onApply: applySavingsBalance
                 )
             }
-            .alert("Reset Savings", isPresented: $showingResetAlert) {
-                Button("Reset", role: .destructive) {
-                    withAnimation {
-                        goals.forEach { goal in
-                            goal.amountSaved = 0
-                        }
-                    }
-                }
-            } message: {
-                Text("Are you sure you want to reset your savings? This action can't be undone.")
-            }
-
         }
     }
 
@@ -187,56 +167,22 @@ struct GoalsView: View {
         }
     }
 
-    private var actionsSection: some View {
-        Section("Actions") {
+    private var savingsSection: some View {
+        Section("Savings") {
             Button {
                 editingSavingsBalance.toggle()
             } label: {
-                MoneyMapActionListRow(
-                    title: "Savings Account",
-                    detail: manualSavingsDetail,
-                    systemImage: "banknote",
-                    tint: MoneyMapDesign.calmGreen
+                SavingsAccountCard(
+                    balance: manualSavingsAccount?.balanceAmount ?? 0,
+                    updatedAt: manualSavingsAccount?.updatedAt,
+                    allocatedAmount: totalSaved,
+                    goalCount: activeGoals.count
                 )
             }
             .buttonStyle(.plain)
-
-            Button {
-                modelContext.insert(Goal.example)
-            } label: {
-                MoneyMapActionListRow(
-                    title: "Add Example Goal",
-                    detail: "Create a sample goal to try the goals workflow.",
-                    systemImage: "text.badge.star",
-                    tint: .blue
-                )
-            }
-            .buttonStyle(.plain)
-
-            if !goals.isEmpty {
-                Button(role: .destructive) {
-                    showingResetAlert.toggle()
-                } label: {
-                    MoneyMapActionListRow(
-                        title: "Reset Savings",
-                        detail: "Set every goal's saved amount back to zero.",
-                        systemImage: "trash",
-                        tint: MoneyMapDesign.attentionRed
-                    )
-                }
-                .buttonStyle(.plain)
-            }
         }
-        .listRowBackground(MoneyMapDesign.surfaceBackground)
-    }
-
-    private var manualSavingsDetail: String {
-        let balance = manualSavingsAccount?.balanceAmount ?? 0
-        guard balance > 0 else {
-            return "Type the total balance of your off-app savings account and split it across goals."
-        }
-
-        return "Manual balance: \(MoneyMapFormatters.currencyString(for: balance))"
+        .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+        .listRowBackground(Color.clear)
     }
 
     private func goalNavigationLink(_ goal: Goal) -> some View {
@@ -300,6 +246,81 @@ struct GoalsView: View {
         deepLinkManager.requestedGoalID = nil
     }
     
+}
+
+private struct SavingsAccountCard: View {
+    let balance: Double
+    let updatedAt: Date?
+    let allocatedAmount: Double
+    let goalCount: Int
+
+    private var statusText: String {
+        if let updatedAt {
+            return "Updated \(MoneyMapFormatters.mediumDateString(for: updatedAt))"
+        }
+        return "Add the account balance you want split across goals."
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(MoneyMapDesign.calmGreen.opacity(0.14))
+                    Image(systemName: "banknote")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(MoneyMapDesign.calmGreen)
+                }
+                .frame(width: 46, height: 42)
+                .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Savings Account")
+                        .font(.headline)
+                    Text(statusText)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 8)
+
+                Image(systemName: "chevron.right")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(MoneyMapDesign.calmGreen)
+                    .padding(.top, 3)
+                    .accessibilityHidden(true)
+            }
+
+            HStack(spacing: 10) {
+                MoneyMapMetricTile(
+                    title: "Balance",
+                    value: MoneyMapFormatters.currencyString(for: balance),
+                    systemImage: "dollarsign.circle",
+                    tint: MoneyMapDesign.calmGreen
+                )
+                MoneyMapMetricTile(
+                    title: "Allocated",
+                    value: MoneyMapFormatters.currencyString(for: allocatedAmount),
+                    systemImage: "target",
+                    tint: .blue
+                )
+                MoneyMapMetricTile(
+                    title: "Active",
+                    value: "\(goalCount)",
+                    systemImage: "list.bullet",
+                    tint: .purple
+                )
+            }
+        }
+        .padding(16)
+        .background(MoneyMapDesign.surfaceBackground, in: RoundedRectangle(cornerRadius: MoneyMapDesign.sectionCornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: MoneyMapDesign.sectionCornerRadius, style: .continuous)
+                .stroke(MoneyMapDesign.separator.opacity(0.24), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+    }
 }
 
 private struct GoalOverviewPanel: View {

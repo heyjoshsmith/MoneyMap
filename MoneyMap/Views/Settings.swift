@@ -11,9 +11,11 @@ import SwiftData
 
 struct Settings: View {
     @State private var showDeleteAllDataConfirmation = false
+    @State private var showResetGoalSavingsConfirmation = false
     @State private var isDeletingAllData = false
     @AppStorage(MoneyMapDesign.appearanceStyleKey) private var appearanceStyleRawValue = MoneyMapAppearanceStyle.warm.rawValue
     @Environment(\.modelContext) private var modelContext
+    @Query private var goals: [Goal]
 
     var body: some View {
         NavigationStack {
@@ -41,6 +43,19 @@ struct Settings: View {
                     BankSyncStatusContainerView()
                 }
                 Section {
+                    Button(role: .destructive, action: { showResetGoalSavingsConfirmation = true }) {
+                        Label("Reset Goal Savings", systemImage: "target")
+                    }
+                    .disabled(!hasSavedGoalMoney)
+                    .confirmationDialog("Reset every goal's saved amount to zero?", isPresented: $showResetGoalSavingsConfirmation, titleVisibility: .visible) {
+                        Button("Reset Goal Savings", role: .destructive) {
+                            resetGoalSavings()
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("This keeps your goals and payment methods, but clears saved progress from every goal.")
+                    }
+
                     Button(role: .destructive, action: { showDeleteAllDataConfirmation = true }) {
                         Label("Remove All Data", systemImage: "trash")
                     }
@@ -62,6 +77,10 @@ struct Settings: View {
 }
 
 extension Settings {
+    private var hasSavedGoalMoney: Bool {
+        goals.contains { $0.amountSaved > 0 }
+    }
+
     private var appearanceStyle: Binding<MoneyMapAppearanceStyle> {
         Binding {
             MoneyMapAppearanceStyle(rawValue: appearanceStyleRawValue) ?? .warm
@@ -95,6 +114,21 @@ extension Settings {
             try await AppResetService.removeAllAppData(modelContext: modelContext)
         } catch {
             print("Failed to remove all app data: \(error)")
+        }
+    }
+
+    func resetGoalSavings() {
+        withAnimation {
+            goals.forEach { goal in
+                goal.amountSaved = 0
+            }
+        }
+
+        do {
+            try modelContext.save()
+            MoneyMapIntentDonations.donateSavingsSummary()
+        } catch {
+            print("Failed to reset goal savings: \(error)")
         }
     }
 }

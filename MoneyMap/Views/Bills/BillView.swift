@@ -19,7 +19,6 @@ struct BillView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Query(sort: \PaymentMethod.name) private var paymentMethods: [PaymentMethod]
-    @Query(sort: \Transaction.transactionDate, order: .reverse) private var transactions: [Transaction]
     
     var bill: Bill
     
@@ -46,12 +45,17 @@ struct BillView: View {
     @State private var paymentAmount = ""
     @State private var showMarkPaidConfirmation = false
     @State private var autopayEnabled = false
+    @State private var paymentMode: BillPaymentMode = .manual
     @State private var autopaySource = ""
     @State private var selectedPaymentMethodID: UUID?
     @State private var gracePeriodDays = 0
     @State private var plaidUnavailable = false
     @State private var showingPaymentLinkSetup = false
+    @State private var showingPaymentSettings = false
     @State private var showingPaymentMethodEditor = false
+    @State private var showingPlaidPaymentMethodSelector = false
+    @State private var showingScheduleManager = false
+    @State private var showingTransactionLinker = false
     @State private var showingScheduleResume = false
     @State private var showingBillEditor = false
     @State private var showingCardDataSources = false
@@ -85,6 +89,16 @@ struct BillView: View {
     }
     @State private var transactionSortField: TransactionSortField = .date
     @State private var transactionSortOrder: SortOrder = .descending
+
+    init(bill: Bill) {
+        self.bill = bill
+        _paymentMode = State(initialValue: bill.paymentMode)
+        _autopayEnabled = State(initialValue: bill.autopayEnabled)
+        _autopaySource = State(initialValue: bill.autopaySource ?? "")
+        _selectedPaymentMethodID = State(initialValue: bill.paymentMethodID)
+        _gracePeriodDays = State(initialValue: bill.gracePeriodDays ?? 0)
+        _plaidUnavailable = State(initialValue: bill.plaidUnavailable)
+    }
     
     private var dueDateValue: Date? {
         bill.dueDate
@@ -133,7 +147,7 @@ struct BillView: View {
                     TransactionRow(transaction: transaction, onSetFriendlyName: { selected in
                         pendingFriendlyName = ""
                         transactionForFriendlyName = selected
-                        prefixSearchText = selected.merchant ?? ""
+                        prefixSearchText = rawTransactionName(for: selected) ?? selected.merchant ?? ""
                         showingFriendlyNamePrompt = true
                     })
                     .padding(.vertical, 6)
@@ -165,7 +179,7 @@ struct BillView: View {
                 TransactionRow(transaction: transaction, onSetFriendlyName: { selected in
                     pendingFriendlyName = ""
                     transactionForFriendlyName = selected
-                    prefixSearchText = selected.merchant ?? ""
+                    prefixSearchText = rawTransactionName(for: selected) ?? selected.merchant ?? ""
                     showingFriendlyNamePrompt = true
                 })
             }
@@ -195,10 +209,11 @@ struct BillView: View {
                     }
                 }
                 Divider()
-                Button("Delete Linked Transactions", systemImage: "trash", role: .destructive) {
+                Button("Disconnect History", systemImage: "link.badge.minus") {
                     (bill.transactions ?? []).forEach { transaction in
-                        modelContext.delete(transaction)
+                        transaction.creditCard = nil
                     }
+                    saveLinkedTransactionChange()
                 }
                 .disabled((bill.transactions ?? []).isEmpty)
             }
@@ -210,23 +225,14 @@ struct BillView: View {
             VStack(alignment: .leading, spacing: MoneyMapDesign.sectionSpacing) {
                 billHeaderSection
 
-                billActionSection
-
-                if bill.category != .creditCard {
-                    BillLifecycleCard(
-                        bill: bill,
-                        delay: delayBill,
-                        skip: skipBill,
-                        pause: pauseBill,
-                        cancel: cancelBill,
-                        resume: { showingScheduleResume = true }
-                    )
+                if shouldShowNextStep {
+                    billActionSection
                 }
 
                 creditCardDetailsSection
-                recurrenceSection
-                billMetaSection
-                transactionView
+                paymentSummarySection
+                scheduleSummarySection
+                transactionSummarySection
             }
             .padding(.horizontal)
             .padding(.bottom, 24)
@@ -241,11 +247,7 @@ struct BillView: View {
         }
         .onAppear {
             MoneyMapIntentDonations.donateOpenBill(bill)
-            refreshBillStatusFromTransactions()
             loadBillMeta()
-        }
-        .onChange(of: transactionPaymentSignature) { _, _ in
-            refreshBillStatusFromTransactions()
         }
         .onDisappear {
             saveBillMeta()
@@ -392,11 +394,25 @@ struct BillView: View {
         .sheet(isPresented: $showingPaymentLinkSetup) {
             PaymentLinkSetupView(bill: bill)
         }
+        .sheet(isPresented: $showingPaymentSettings) {
+            BillPaymentSettingsSheet(
+                bill: bill,
+                paymentSettingsContent: {
+                    billMetaSection
+                }
+            )
+        }
         .sheet(isPresented: $showingPaymentMethodEditor) {
             PaymentMethodEditor { paymentMethod in
                 selectedPaymentMethodID = paymentMethod.id
                 saveBillMeta()
             }
+        }
+        .sheet(isPresented: $showingPlaidPaymentMethodSelector) {
+            PlaidPaymentMethodSelectorContainerView(
+                existingPaymentMethodAccountIDs: Set(paymentMethods.compactMap(\.plaidAccountID)),
+                createPaymentMethod: createPaymentMethodFromPlaidAccount
+            )
         }
         .sheet(isPresented: $showingBillEditor) {
             BillEditor(bill: bill)
@@ -418,6 +434,26 @@ struct BillView: View {
                 defaultDate: defaultScheduleDate,
                 confirmTitle: "Resume",
                 onConfirm: resumeBill
+            )
+        }
+        .sheet(isPresented: $showingScheduleManager) {
+            BillScheduleManagerSheet(
+                bill: bill,
+                recurrenceContent: {
+                    recurrenceSection
+                },
+                delay: delayBill,
+                skip: skipBill,
+                pause: pauseBill,
+                cancel: cancelBill,
+                resume: presentScheduleResumeFromManager
+            )
+        }
+        .sheet(isPresented: $showingTransactionLinker) {
+            BillTransactionLinkingView(
+                bill: bill,
+                linkTransaction: linkTransactionToBill,
+                unlinkTransaction: unlinkTransactionFromBill
             )
         }
         .imagePlaygroundSheet(isPresented: $creatingImage, onCompletion: { url in
@@ -518,7 +554,7 @@ struct BillView: View {
     }
 
     private var displayTransactions: [Transaction] {
-        BillPaymentMatcher.matchedHistoryTransactions(for: bill, in: transactions)
+        sortedDirectTransactions(bill.transactions ?? [])
     }
 
     private func handleImportResult(_ result: Result<[URL], Error>) {
@@ -546,28 +582,27 @@ struct BillView: View {
         }
 
         guard saved,
-              let transaction = transactionForFriendlyName,
-              let merchant = transaction.merchant else {
+              let transaction = transactionForFriendlyName else {
             return
         }
+
+        let normalizedFriendlyName = pendingFriendlyName.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if matchPrefix {
             let prefix = prefixSearchText.trimmingCharacters(in: .whitespaces)
             guard !prefix.isEmpty else { return }
 
-            let matchingTransactions = displayTransactions.filter {
-                guard let merchantName = $0.merchant else { return false }
-                return merchantName.lowercased().hasPrefix(prefix.lowercased())
+            let matchingTransactions = allTransactionsIncluding(transaction).filter {
+                guard let rawName = rawTransactionName(for: $0) else { return false }
+                return rawName.range(of: prefix, options: [.caseInsensitive, .anchored]) != nil
             }
             for tx in matchingTransactions {
-                tx.friendlyName = pendingFriendlyName
+                tx.friendlyName = normalizedFriendlyName
             }
         } else {
-            let matchingTransactions = displayTransactions.filter {
-                $0.merchant == merchant
-            }
+            let matchingTransactions = transactionsMatchingRawName(of: transaction, in: allTransactionsIncluding(transaction))
             for tx in matchingTransactions {
-                tx.friendlyName = pendingFriendlyName
+                tx.friendlyName = normalizedFriendlyName
             }
         }
 
@@ -626,6 +661,16 @@ struct BillView: View {
         }
     }
 
+    private var shouldShowNextStep: Bool {
+        if bill.lifecycleState == .active,
+           bill.category != .creditCard,
+           (bill.paymentMode == .autopay || bill.paymentMode == .inPerson) {
+            return false
+        }
+
+        return true
+    }
+
     private var primaryActionIcon: String {
         if bill.paymentURL != nil {
             return "arrow.up.forward.app"
@@ -660,6 +705,10 @@ struct BillView: View {
             return "Paid for this cycle. Adjust the payment date if the record is off."
         }
 
+        if bill.paymentMode == .inPerson {
+            return "MoneyMap will mark this paid when a matching synced transaction arrives."
+        }
+
         if bill.paymentURL == nil {
             return "No payment link is saved for this bill."
         }
@@ -683,20 +732,19 @@ struct BillView: View {
         return "\(count) transaction\(count == 1 ? "" : "s")"
     }
 
-    private var transactionPaymentSignature: String {
-        transactions
-            .map { transaction in
-                let timestamp = BillPaymentMatcher.transactionDate(for: transaction)?.timeIntervalSinceReferenceDate ?? 0
-                let amount = transaction.amountUSD ?? 0
-                return "\(BillPaymentMatcher.identityKey(for: transaction))|\(timestamp)|\(amount)"
-            }
-            .joined(separator: "|")
-    }
-
     private func refreshBillStatusFromTransactions() {
-        if BillPaymentMatcher.refreshStatuses(for: [bill], transactions: transactions) {
+        if BillPaymentMatcher.refreshStatuses(for: [bill], transactions: displayTransactions) {
             try? modelContext.save()
         }
+    }
+
+    private func sortedDirectTransactions(_ values: [Transaction]) -> [Transaction] {
+        values
+            .filter { $0.creditCard?.id == bill.id }
+            .sorted {
+                (BillPaymentMatcher.transactionDate(for: $0) ?? .distantPast) >
+                    (BillPaymentMatcher.transactionDate(for: $1) ?? .distantPast)
+            }
     }
     
     private var billHeaderSection: some View {
@@ -852,7 +900,7 @@ struct BillView: View {
 
     private var actionGridColumns: [GridItem] {
         [
-            GridItem(.adaptive(minimum: 148), spacing: 8, alignment: .top)
+            GridItem(.flexible(), spacing: 8, alignment: .top)
         ]
     }
 
@@ -875,7 +923,7 @@ struct BillView: View {
     private var primaryActions: [BillDetailAction] {
         var actions: [BillDetailAction] = []
 
-        if let paymentURL = bill.paymentURL {
+        if let paymentURL = bill.paymentURL, bill.paymentMode == .payLink {
             actions.append(
                 BillDetailAction(
                     title: "Open Pay Link",
@@ -887,7 +935,7 @@ struct BillView: View {
                     openURL(paymentURL)
                 }
             )
-        } else {
+        } else if bill.paymentMode == .payLink || bill.paymentMode == .manual {
             actions.append(
                 BillDetailAction(
                     title: "Set Up Link",
@@ -1138,6 +1186,125 @@ struct BillView: View {
         .clipShape(.rect(cornerRadius: MoneyMapDesign.sectionCornerRadius))
     }
 
+    private var paymentSummarySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            BillSectionHeader(
+                title: "Payment",
+                systemImage: bill.paymentModeIcon,
+                actionTitle: "Change",
+                action: { showingPaymentSettings = true }
+            )
+
+            Divider()
+
+            BillSummaryLine(
+                title: bill.paymentModeTitle,
+                value: paymentMethodSummaryText,
+                systemImage: selectedPaymentMethod?.type.icon ?? "wallet.pass",
+                tint: paymentMode == .autopay || paymentMode == .inPerson ? MoneyMapDesign.calmGreen : .secondary
+            )
+
+            BillSummaryLine(
+                title: paymentTrackingTitle,
+                value: paymentTrackingStatusText,
+                systemImage: paymentTrackingIcon,
+                tint: paymentTrackingTint
+            )
+
+            BillSummaryLine(
+                title: "Grace Period",
+                value: "\(gracePeriodDays) day\(gracePeriodDays == 1 ? "" : "s")",
+                systemImage: "calendar.badge.clock",
+                tint: MoneyMapDesign.warningGold
+            )
+        }
+        .padding()
+        .background(MoneyMapDesign.surfaceBackground)
+        .clipShape(.rect(cornerRadius: MoneyMapDesign.sectionCornerRadius))
+    }
+
+    private var scheduleSummarySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            BillSectionHeader(
+                title: "Schedule",
+                systemImage: "calendar",
+                actionTitle: "Manage",
+                action: { showingScheduleManager = true }
+            )
+
+            Divider()
+
+            BillSummaryLine(
+                title: "Due",
+                value: dueDateText,
+                systemImage: "calendar",
+                tint: bill.displayStatusColor
+            )
+
+            BillSummaryLine(
+                title: "Repeats",
+                value: recurrenceText,
+                systemImage: "repeat",
+                tint: .blue
+            )
+
+            BillSummaryLine(
+                title: "Status",
+                value: bill.lifecycleState.title,
+                systemImage: bill.lifecycleState.icon,
+                tint: bill.lifecycleState.color
+            )
+        }
+        .padding()
+        .background(MoneyMapDesign.surfaceBackground)
+        .clipShape(.rect(cornerRadius: MoneyMapDesign.sectionCornerRadius))
+    }
+
+    private var transactionSummarySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            BillSectionHeader(
+                title: "History",
+                systemImage: "list.bullet.rectangle",
+                actionTitle: "Connect",
+                action: { showingTransactionLinker = true }
+            )
+
+            Divider()
+
+            if displayTransactions.isEmpty {
+                Text("No transactions are connected to this bill yet.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(previewTransactions, id: \.self) { transaction in
+                    BillHistoryPreviewRow(transaction: transaction)
+                }
+
+                if filteredAndSortedTransactions.count > 3 {
+                    Text("+ \(filteredAndSortedTransactions.count - 3) more")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            NavigationLink {
+                transactionList
+            } label: {
+                MoneyMapActionCardLabel(
+                    title: "View History",
+                    detail: transactionSummaryText,
+                    systemImage: "clock.arrow.circlepath",
+                    tint: .blue
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(displayTransactions.isEmpty)
+        }
+        .padding()
+        .background(MoneyMapDesign.surfaceBackground)
+        .clipShape(.rect(cornerRadius: MoneyMapDesign.sectionCornerRadius))
+    }
+
     private var billMetaSection: some View {
         VStack(alignment: .leading, spacing: MoneyMapDesign.sectionSpacing) {
             VStack(alignment: .leading, spacing: 12) {
@@ -1146,57 +1313,60 @@ struct BillView: View {
 
                 Divider()
 
-                Toggle("Autopay", isOn: $autopayEnabled)
-                    .onChange(of: autopayEnabled) { _, isEnabled in
-                        if !isEnabled {
-                            autopaySource = ""
-                        }
-                        saveBillMeta()
-                    }
-
-                Picker("Pay From", selection: $selectedPaymentMethodID) {
-                    Text("No Payment Method").tag(Optional<UUID>.none)
-                    ForEach(sortedPaymentMethods) { method in
-                        Label(method.displayName, systemImage: method.type.icon)
-                            .tag(Optional(method.id))
+                Picker("Payment Type", selection: $paymentMode) {
+                    ForEach(BillPaymentMode.allCases) { mode in
+                        Label(mode.title, systemImage: mode.icon)
+                            .tag(mode)
                     }
                 }
-                .onChange(of: selectedPaymentMethodID) { _, _ in
+                .onChange(of: paymentMode) { _, mode in
+                    autopayEnabled = mode == .autopay
+                    if mode != .autopay {
+                        autopaySource = ""
+                        selectedPaymentMethodID = nil
+                    }
                     saveBillMeta()
                 }
+                .padding(12)
+                .background(MoneyMapDesign.controlBackground, in: RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius, style: .continuous))
 
-                if let selectedPaymentMethod {
-                    BillDetailRow(
-                        title: "Pay From",
-                        value: selectedPaymentMethod.detailText,
-                        systemImage: selectedPaymentMethod.type.icon,
-                        tint: selectedPaymentMethod.type.color
-                    )
-                }
-
-                Button {
-                    showingPaymentMethodEditor = true
-                } label: {
-                    MoneyMapNeutralButtonLabel(
-                        title: "Add Payment Method",
-                        systemImage: "plus.circle",
-                        iconColor: MoneyMapDesign.calmGreen,
-                        fillsWidth: false
-                    )
-                }
-                .buttonStyle(.bordered)
-
-                if autopayEnabled && selectedPaymentMethod == nil {
-                    HStack {
-                        Text("Autopay Source")
-                        Spacer(minLength: 12)
-                        TextField("Checking Account", text: $autopaySource)
-                            .multilineTextAlignment(.trailing)
-                            .foregroundStyle(.secondary)
-                            .onSubmit(saveBillMeta)
-                            .onChange(of: autopaySource) { _, _ in
-                                saveBillMeta()
+                if paymentMode == .autopay {
+                    Menu {
+                        Picker("Pay From", selection: $selectedPaymentMethodID) {
+                            Text("No Payment Method").tag(Optional<UUID>.none)
+                            ForEach(sortedPaymentMethods) { method in
+                                Label(method.displayName, systemImage: method.type.icon)
+                                    .tag(Optional(method.id))
                             }
+                        }
+                    } label: {
+                        MoneyMapActionCardLabel(
+                            title: selectedPaymentMethodTitle,
+                            detail: selectedPaymentMethodDetail,
+                            systemImage: selectedPaymentMethodIcon,
+                            tint: selectedPaymentMethodTint,
+                            trailingSystemImage: "chevron.up.chevron.down"
+                        )
+                    }
+                    .onChange(of: selectedPaymentMethodID) { _, _ in
+                        saveBillMeta()
+                    }
+                    .buttonStyle(.plain)
+
+                    paymentMethodActionGrid
+
+                    if selectedPaymentMethod == nil {
+                        HStack {
+                            Text("Autopay Source")
+                            Spacer(minLength: 12)
+                            TextField("Checking Account", text: $autopaySource)
+                                .multilineTextAlignment(.trailing)
+                                .foregroundStyle(.secondary)
+                                .onSubmit(saveBillMeta)
+                                .onChange(of: autopaySource) { _, _ in
+                                    saveBillMeta()
+                                }
+                        }
                     }
                 }
 
@@ -1205,6 +1375,8 @@ struct BillView: View {
                     value: $gracePeriodDays,
                     in: 0...31
                 )
+                .padding(12)
+                .background(MoneyMapDesign.controlBackground, in: RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius, style: .continuous))
                 .onChange(of: gracePeriodDays) { _, _ in
                     saveBillMeta()
                 }
@@ -1226,15 +1398,17 @@ struct BillView: View {
             .background(MoneyMapDesign.surfaceBackground)
             .clipShape(.rect(cornerRadius: MoneyMapDesign.sectionCornerRadius))
 
-            PaymentLinkSummaryCard(
-                bill: bill,
-                openPaymentLink: { url in
-                    openURL(url)
-                },
-                configurePaymentLink: {
-                    showingPaymentLinkSetup = true
-                }
-            )
+            if bill.paymentMode == .payLink {
+                PaymentLinkSummaryCard(
+                    bill: bill,
+                    openPaymentLink: { url in
+                        openURL(url)
+                    },
+                    configurePaymentLink: {
+                        showingPaymentLinkSetup = true
+                    }
+                )
+            }
 
             if let notes = bill.notes, !notes.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
@@ -1372,6 +1546,13 @@ struct BillView: View {
         saveScheduleChange()
     }
 
+    private func presentScheduleResumeFromManager() {
+        showingScheduleManager = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            showingScheduleResume = true
+        }
+    }
+
     private func saveScheduleChange() {
         do {
             try modelContext.save()
@@ -1393,10 +1574,14 @@ struct BillView: View {
     }
 
     private var canManuallyMarkPaid: Bool {
-        bill.lifecycleState == .active && bill.status != .paid && !bill.autopayEnabled
+        bill.lifecycleState == .active &&
+            bill.status != .paid &&
+            bill.paymentMode != .autopay &&
+            bill.paymentMode != .inPerson
     }
 
     private func loadBillMeta() {
+        paymentMode = bill.paymentMode
         autopayEnabled = bill.autopayEnabled
         autopaySource = bill.autopaySource ?? ""
         selectedPaymentMethodID = bill.paymentMethodID
@@ -1407,10 +1592,11 @@ struct BillView: View {
     private func saveBillMeta() {
         let normalizedAutopaySource = autopaySource.trimmingCharacters(in: .whitespacesAndNewlines)
         bill.updatePaymentSettings(
-            autopayEnabled: autopayEnabled,
-            paymentMethodID: selectedPaymentMethodID,
+            autopayEnabled: paymentMode == .autopay,
+            paymentMethodID: paymentMode == .autopay ? selectedPaymentMethodID : nil,
             autopaySource: normalizedAutopaySourceForSave(fallback: normalizedAutopaySource),
-            gracePeriodDays: gracePeriodDays
+            gracePeriodDays: gracePeriodDays,
+            paymentMode: paymentMode
         )
         bill.plaidUnavailable = shouldShowPlaidUnavailableToggle && plaidUnavailable
         bill.checkStatus()
@@ -1437,8 +1623,199 @@ struct BillView: View {
         return paymentMethods.first { $0.id == selectedPaymentMethodID }
     }
 
+    private var selectedPaymentMethodTitle: String {
+        selectedPaymentMethod?.displayName ?? "No Payment Method"
+    }
+
+    private var selectedPaymentMethodDetail: String {
+        selectedPaymentMethod?.detailText ?? "Choose the account or method used to pay this bill."
+    }
+
+    private var selectedPaymentMethodIcon: String {
+        selectedPaymentMethod?.type.icon ?? "wallet.pass"
+    }
+
+    private var selectedPaymentMethodTint: Color {
+        selectedPaymentMethod?.type.color ?? .secondary
+    }
+
+    private var paymentMethodSummaryText: String {
+        if paymentMode == .inPerson {
+            return displayTransactions.isEmpty
+                ? "Connect matching history to teach MoneyMap"
+                : "Watching matching synced transactions"
+        }
+
+        if paymentMode == .payLink {
+            return bill.paymentHost ?? "Website or app"
+        }
+
+        if let selectedPaymentMethod {
+            return selectedPaymentMethod.detailText == selectedPaymentMethod.type.name
+                ? selectedPaymentMethod.displayName
+                : "\(selectedPaymentMethod.displayName) - \(selectedPaymentMethod.detailText)"
+        }
+
+        let trimmedSource = autopaySource.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedSource.isEmpty ? "No payment method" : trimmedSource
+    }
+
+    private var paymentTrackingTitle: String {
+        paymentMode == .inPerson ? "Transaction Match" : "Payment Link"
+    }
+
+    private var paymentTrackingStatusText: String {
+        if paymentMode == .inPerson {
+            return displayTransactions.isEmpty ? "Needs one connected transaction" : transactionSummaryText
+        }
+
+        return paymentLinkStatusText
+    }
+
+    private var paymentTrackingIcon: String {
+        if paymentMode == .inPerson {
+            return displayTransactions.isEmpty ? "link.badge.plus" : "checkmark.circle"
+        }
+
+        return bill.paymentURL == nil ? "link.badge.plus" : "link"
+    }
+
+    private var paymentTrackingTint: Color {
+        if paymentMode == .inPerson {
+            return displayTransactions.isEmpty ? MoneyMapDesign.warningGold : MoneyMapDesign.calmGreen
+        }
+
+        return bill.paymentURL == nil ? MoneyMapDesign.warningGold : .blue
+    }
+
+    private var paymentLinkStatusText: String {
+        if bill.paymentURL != nil {
+            return bill.paymentHost ?? "App link"
+        }
+
+        if let rawValue = bill.paymentURLString, !rawValue.isEmpty {
+            return "Needs attention"
+        }
+
+        return "Not set"
+    }
+
+    private var paymentMethodActionGrid: some View {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 8, alignment: .top)], spacing: 8) {
+            Button {
+                showingPaymentMethodEditor = true
+            } label: {
+                MoneyMapActionCardLabel(
+                    title: "Add Manual",
+                    detail: "Create a saved payment method.",
+                    systemImage: "plus.circle",
+                    tint: MoneyMapDesign.calmGreen
+                )
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                showingPlaidPaymentMethodSelector = true
+            } label: {
+                MoneyMapActionCardLabel(
+                    title: "Connect Plaid",
+                    detail: "Use a synced bank account.",
+                    systemImage: "link",
+                    tint: .blue
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func createPaymentMethodFromPlaidAccount(_ account: PlaidAccountValue) {
+        if let existing = paymentMethods.first(where: { $0.plaidAccountID == account.accountID }) {
+            selectedPaymentMethodID = existing.id
+            saveBillMeta()
+            return
+        }
+
+        let paymentMethod = PaymentMethod(
+            name: account.displayName,
+            type: paymentMethodType(forPlaidAccount: account),
+            institutionName: account.institutionName,
+            lastFourDigits: account.mask,
+            plaidAccountID: account.accountID,
+            plaidItemID: account.itemID,
+            plaidUpdatedAt: .now
+        )
+        modelContext.insert(paymentMethod)
+        selectedPaymentMethodID = paymentMethod.id
+        saveBillMeta()
+    }
+
+    private func linkTransactionToBill(_ transaction: Transaction) {
+        let matchingTransactions = transactionsMatchingRawName(of: transaction, in: allTransactionsIncluding(transaction))
+            .filter { $0.creditCard == nil || $0.creditCard?.id == bill.id }
+
+        if matchingTransactions.isEmpty {
+            transaction.creditCard = bill
+        } else {
+            matchingTransactions.forEach { $0.creditCard = bill }
+        }
+
+        saveLinkedTransactionChange()
+    }
+
+    private func allTransactionsIncluding(_ transaction: Transaction) -> [Transaction] {
+        do {
+            var fetchedTransactions = try modelContext.fetch(FetchDescriptor<Transaction>())
+            let selectedKey = BillPaymentMatcher.identityKey(for: transaction)
+            if !fetchedTransactions.contains(where: { BillPaymentMatcher.identityKey(for: $0) == selectedKey }) {
+                fetchedTransactions.append(transaction)
+            }
+            return fetchedTransactions
+        } catch {
+            importErrorMessage = "Could not load matching transactions: \(error.localizedDescription)"
+            importErrorAlert = true
+            return [transaction]
+        }
+    }
+
+    private func unlinkTransactionFromBill(_ transaction: Transaction) {
+        guard transaction.creditCard?.id == bill.id else { return }
+        transaction.creditCard = nil
+        saveLinkedTransactionChange()
+    }
+
+    private func saveLinkedTransactionChange() {
+        do {
+            try modelContext.save()
+            refreshBillStatusFromTransactions()
+            AppRefreshEvents.notifyBillsDidChange()
+        } catch {
+            importErrorMessage = "Could not update transaction history: \(error.localizedDescription)"
+            importErrorAlert = true
+        }
+    }
+
+    private func paymentMethodType(forPlaidAccount account: PlaidAccountValue) -> PaymentMethodType {
+        switch account.subtype ?? account.type {
+        case "credit card":
+            return .creditCard
+        case "savings", "money market":
+            return .savings
+        case "checking":
+            return .checking
+        default:
+            switch account.type {
+            case "credit":
+                return .creditCard
+            case "depository":
+                return .checking
+            default:
+                return .other
+            }
+        }
+    }
+
     private func normalizedAutopaySourceForSave(fallback: String) -> String? {
-        guard autopayEnabled else { return nil }
+        guard paymentMode == .autopay else { return nil }
         if let selectedPaymentMethod {
             return selectedPaymentMethod.displayName
         }
@@ -1497,6 +1874,33 @@ struct BillView: View {
     }
 }
 
+private func rawTransactionName(for transaction: Transaction) -> String? {
+    [
+        transaction.transactionDescription,
+        transaction.merchant
+    ]
+    .compactMap { value -> String? in
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+    .first
+}
+
+private func transactionsMatchingRawName(
+    of transaction: Transaction,
+    in transactions: [Transaction]
+) -> [Transaction] {
+    guard let rawName = rawTransactionName(for: transaction) else {
+        return [transaction]
+    }
+
+    return transactions.filter {
+        rawTransactionName(for: $0)?.caseInsensitiveCompare(rawName) == .orderedSame
+    }
+}
+
 private struct BillDetailAction: Identifiable {
     enum Style: Equatable {
         case prominent
@@ -1523,38 +1927,13 @@ private struct BillDetailActionButton: View {
         Button(role: action.role) {
             action.handler()
         } label: {
-            HStack(alignment: .center, spacing: 10) {
-                Image(systemName: action.systemImage)
-                    .font(.headline)
-                    .foregroundStyle(action.tint)
-                    .frame(width: 24)
-                    .accessibilityHidden(true)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(action.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-
-                    Text(action.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.82)
-                }
-
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(MoneyMapDesign.controlBackground)
-            .clipShape(.rect(cornerRadius: MoneyMapDesign.controlCornerRadius))
-            .overlay {
-                RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius)
-                    .stroke(MoneyMapDesign.separator.opacity(0.24), lineWidth: 0.5)
-            }
+            MoneyMapActionCardLabel(
+                title: action.title,
+                detail: action.detail,
+                systemImage: action.systemImage,
+                tint: action.tint,
+                isProminent: action.style == .prominent
+            )
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
@@ -1636,6 +2015,507 @@ private struct BillDetailRow: View {
     }
 }
 
+private struct BillSectionHeader: View {
+    let title: String
+    let systemImage: String
+    let actionTitle: String
+    let action: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Label(title, systemImage: systemImage)
+                .font(.headline)
+
+            Spacer(minLength: 8)
+
+            Button(actionTitle, action: action)
+                .font(.subheadline.weight(.semibold))
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+    }
+}
+
+private struct BillSummaryLine: View {
+    let title: String
+    let value: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Image(systemName: systemImage)
+                .foregroundStyle(tint)
+                .frame(width: 24)
+                .accessibilityHidden(true)
+
+            Text(title)
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 12)
+
+            Text(value)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+                .minimumScaleFactor(0.82)
+        }
+        .font(.subheadline)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct BillHistoryPreviewRow: View {
+    let transaction: Transaction
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(MoneyMapDesign.calmGreen)
+                .frame(width: 24)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(transactionTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+
+                Text(transactionSubtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            if let amount = transaction.amountUSD {
+                Text(MoneyMapFormatters.currencyString(for: amount))
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var transactionTitle: String {
+        transaction.friendlyName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ??
+            transaction.merchant?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ??
+            transaction.transactionDescription?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ??
+            "Transaction"
+    }
+
+    private var transactionSubtitle: String {
+        [
+            transaction.transactionDate.map(MoneyMapFormatters.mediumDateString(for:)),
+            transaction.category?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        ]
+        .compactMap { $0 }
+        .joined(separator: " - ")
+    }
+}
+
+private struct BillPaymentSettingsSheet<PaymentSettingsContent: View>: View {
+    let bill: Bill
+    let paymentSettingsContent: () -> PaymentSettingsContent
+
+    @Environment(\.dismiss) private var dismiss
+
+    init(
+        bill: Bill,
+        @ViewBuilder paymentSettingsContent: @escaping () -> PaymentSettingsContent
+    ) {
+        self.bill = bill
+        self.paymentSettingsContent = paymentSettingsContent
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: MoneyMapDesign.sectionSpacing) {
+                    paymentSettingsContent()
+                }
+                .padding()
+            }
+            .background(MoneyMapDesign.groupedBackground)
+            .navigationTitle("Payment")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct BillScheduleManagerSheet<RecurrenceContent: View>: View {
+    let bill: Bill
+    let recurrenceContent: () -> RecurrenceContent
+    let delay: (Date) -> Void
+    let skip: () -> Void
+    let pause: () -> Void
+    let cancel: () -> Void
+    let resume: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    init(
+        bill: Bill,
+        @ViewBuilder recurrenceContent: @escaping () -> RecurrenceContent,
+        delay: @escaping (Date) -> Void,
+        skip: @escaping () -> Void,
+        pause: @escaping () -> Void,
+        cancel: @escaping () -> Void,
+        resume: @escaping () -> Void
+    ) {
+        self.bill = bill
+        self.recurrenceContent = recurrenceContent
+        self.delay = delay
+        self.skip = skip
+        self.pause = pause
+        self.cancel = cancel
+        self.resume = resume
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: MoneyMapDesign.sectionSpacing) {
+                    recurrenceContent()
+
+                    if bill.category != .creditCard {
+                        BillLifecycleCard(
+                            bill: bill,
+                            delay: delay,
+                            skip: skip,
+                            pause: pause,
+                            cancel: cancel,
+                            resume: resume
+                        )
+                    }
+                }
+                .padding()
+            }
+            .background(MoneyMapDesign.groupedBackground)
+            .navigationTitle("Schedule")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct BillTransactionLinkingView: View {
+    let bill: Bill
+    let linkTransaction: (Transaction) -> Void
+    let unlinkTransaction: (Transaction) -> Void
+
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+    @Query(sort: \Transaction.transactionDate, order: .reverse) private var transactions: [Transaction]
+    @State private var searchText = ""
+    @State private var showingFriendlyNamePrompt = false
+    @State private var pendingFriendlyName = ""
+    @State private var transactionForFriendlyName: Transaction?
+    @State private var matchPrefix = false
+    @State private var prefixSearchText = ""
+
+    private var linkedTransactions: [Transaction] {
+        sorted((bill.transactions ?? []).filter { $0.creditCard?.id == bill.id })
+    }
+
+    private var suggestedTransactions: [Transaction] {
+        let linkedKeys = Set(linkedTransactions.map(BillPaymentMatcher.identityKey(for:)))
+        return BillPaymentMatcher.matchedHistoryTransactions(for: bill, in: transactions)
+            .filter { $0.creditCard == nil }
+            .filter { !linkedKeys.contains(BillPaymentMatcher.identityKey(for: $0)) }
+    }
+
+    private var availableTransactions: [Transaction] {
+        let excludedKeys = Set((linkedTransactions + suggestedTransactions).map(BillPaymentMatcher.identityKey(for:)))
+        return sorted(transactions)
+            .filter { transaction in
+                transaction.creditCard == nil &&
+                    !excludedKeys.contains(BillPaymentMatcher.identityKey(for: transaction))
+            }
+            .filter(matchesSearch)
+    }
+
+    private var filteredSuggestedTransactions: [Transaction] {
+        suggestedTransactions.filter(matchesSearch)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if linkedTransactions.isEmpty && filteredSuggestedTransactions.isEmpty && availableTransactions.isEmpty {
+                    MoneyMapEmptyState(
+                        title: "No Transactions",
+                        message: "Import or sync transactions first, then connect the payments that belong to this bill.",
+                        systemImage: "list.bullet.rectangle"
+                    )
+                    .listRowBackground(MoneyMapDesign.surfaceBackground)
+                }
+
+                if !linkedTransactions.isEmpty {
+                    Section("Connected") {
+                        ForEach(linkedTransactions, id: \.self) { transaction in
+                            BillTransactionCandidateRow(
+                                transaction: transaction,
+                                state: .connected,
+                                action: {
+                                    unlinkTransaction(transaction)
+                                },
+                                renameAction: {
+                                    beginFriendlyNameEdit(for: transaction)
+                                }
+                            )
+                        }
+                    }
+                    .listRowBackground(MoneyMapDesign.surfaceBackground)
+                }
+
+                if !filteredSuggestedTransactions.isEmpty {
+                    Section("Suggested") {
+                        ForEach(filteredSuggestedTransactions, id: \.self) { transaction in
+                            BillTransactionCandidateRow(
+                                transaction: transaction,
+                                state: .suggested,
+                                action: {
+                                    linkTransaction(transaction)
+                                },
+                                renameAction: {
+                                    beginFriendlyNameEdit(for: transaction)
+                                }
+                            )
+                        }
+                    }
+                    .listRowBackground(MoneyMapDesign.surfaceBackground)
+                }
+
+                if !availableTransactions.isEmpty {
+                    Section("All Transactions") {
+                        ForEach(availableTransactions, id: \.self) { transaction in
+                            BillTransactionCandidateRow(
+                                transaction: transaction,
+                                state: .available,
+                                action: {
+                                    linkTransaction(transaction)
+                                },
+                                renameAction: {
+                                    beginFriendlyNameEdit(for: transaction)
+                                }
+                            )
+                        }
+                    }
+                    .listRowBackground(MoneyMapDesign.surfaceBackground)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(MoneyMapDesign.groupedBackground)
+            .navigationTitle("Connect History")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $searchText, prompt: "Search transactions")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+            .sheet(isPresented: $showingFriendlyNamePrompt) {
+                FriendlyNameSheet(
+                    isPresented: $showingFriendlyNamePrompt,
+                    friendlyName: $pendingFriendlyName,
+                    matchPrefix: $matchPrefix,
+                    prefixSearchText: $prefixSearchText
+                ) { saved in
+                    handleFriendlyNameResult(saved: saved)
+                }
+            }
+        }
+    }
+
+    private func sorted(_ values: [Transaction]) -> [Transaction] {
+        values.sorted {
+            (BillPaymentMatcher.transactionDate(for: $0) ?? .distantPast) >
+                (BillPaymentMatcher.transactionDate(for: $1) ?? .distantPast)
+        }
+    }
+
+    private func matchesSearch(_ transaction: Transaction) -> Bool {
+        let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSearch.isEmpty else { return true }
+        return transactionSearchText(transaction)
+            .localizedCaseInsensitiveContains(trimmedSearch)
+    }
+
+    private func transactionSearchText(_ transaction: Transaction) -> String {
+        [
+            transaction.friendlyName,
+            transaction.merchant,
+            transaction.transactionDescription,
+            transaction.category,
+            transaction.type,
+            transaction.amountUSD.map(MoneyMapFormatters.currencyString(for:)),
+            BillPaymentMatcher.transactionDate(for: transaction).map(MoneyMapFormatters.mediumDateString(for:))
+        ]
+        .compactMap { $0 }
+        .joined(separator: " ")
+    }
+
+    private func beginFriendlyNameEdit(for transaction: Transaction) {
+        pendingFriendlyName = transaction.friendlyName ?? ""
+        transactionForFriendlyName = transaction
+        prefixSearchText = rawTransactionName(for: transaction) ?? transaction.merchant ?? ""
+        showingFriendlyNamePrompt = true
+    }
+
+    private func handleFriendlyNameResult(saved: Bool) {
+        defer {
+            transactionForFriendlyName = nil
+            pendingFriendlyName = ""
+            matchPrefix = false
+            prefixSearchText = ""
+        }
+
+        guard saved, let transaction = transactionForFriendlyName else {
+            return
+        }
+
+        let normalizedFriendlyName = pendingFriendlyName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matchingTransactions: [Transaction]
+        if matchPrefix {
+            let prefix = prefixSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !prefix.isEmpty else { return }
+            matchingTransactions = transactions.filter {
+                guard let rawName = rawTransactionName(for: $0) else { return false }
+                return rawName.range(of: prefix, options: [.caseInsensitive, .anchored]) != nil
+            }
+        } else {
+            matchingTransactions = transactionsMatchingRawName(of: transaction, in: transactions)
+        }
+
+        matchingTransactions.forEach { $0.friendlyName = normalizedFriendlyName }
+        try? modelContext.save()
+    }
+}
+
+private struct BillTransactionCandidateRow: View {
+    enum State {
+        case connected
+        case suggested
+        case available
+    }
+
+    let transaction: Transaction
+    let state: State
+    let action: () -> Void
+    var renameAction: (() -> Void)?
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: systemImage)
+                    .foregroundStyle(tint)
+                    .frame(width: 28)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 8)
+
+                if let amount = transaction.amountUSD {
+                    Text(MoneyMapFormatters.currencyString(for: amount))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .monospacedDigit()
+                }
+            }
+            .padding(.vertical, 3)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .contextMenu {
+            if let renameAction {
+                Button("Rename Matching Transactions", systemImage: "text.badge.checkmark") {
+                    renameAction()
+                }
+            }
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            if let renameAction {
+                Button {
+                    renameAction()
+                } label: {
+                    Label("Rename", systemImage: "text.badge.checkmark")
+                }
+                .tint(.blue)
+            }
+        }
+    }
+
+    private var systemImage: String {
+        switch state {
+        case .connected:
+            return "checkmark.circle.fill"
+        case .suggested:
+            return "sparkle.magnifyingglass"
+        case .available:
+            return "plus.circle"
+        }
+    }
+
+    private var tint: Color {
+        switch state {
+        case .connected:
+            return MoneyMapDesign.calmGreen
+        case .suggested:
+            return .blue
+        case .available:
+            return .secondary
+        }
+    }
+
+    private var title: String {
+        transaction.friendlyName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ??
+            transaction.merchant?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ??
+            transaction.transactionDescription?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ??
+            "Transaction"
+    }
+
+    private var subtitle: String {
+        [
+            BillPaymentMatcher.transactionDate(for: transaction).map(MoneyMapFormatters.mediumDateString(for:)),
+            transaction.category?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            transaction.purchasedBy?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        ]
+        .compactMap { $0 }
+        .joined(separator: " - ")
+    }
+}
+
 private struct BillDetailConfirmationDialogs: ViewModifier {
     let billName: String?
     @Binding var showingMarkPaid: Bool
@@ -1698,7 +2578,11 @@ struct FriendlyNameSheet: View {
             Form {
                 Section {
                     TextField("Friendly Name", text: $friendlyName)
-                    Toggle("Match all transactions that begin with this text", isOn: $matchPrefix)
+                    Text("By default this applies to every transaction with the same raw name.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    Toggle("Apply to raw names that begin with this text", isOn: $matchPrefix)
                     if matchPrefix {
                         TextField("Prefix to match", text: $prefixSearchText)
                     }
@@ -1749,6 +2633,177 @@ enum ImagePickerSource: Int, Identifiable, CaseIterable {
         case .files: return .purple
         case .playground: return .green
         }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
+    }
+}
+
+private struct PlaidPaymentMethodSelectorContainerView: View {
+    let existingPaymentMethodAccountIDs: Set<String>
+    let createPaymentMethod: (PlaidAccountValue) -> Void
+
+    private let plaidContainer: ModelContainer
+
+    init(
+        existingPaymentMethodAccountIDs: Set<String>,
+        createPaymentMethod: @escaping (PlaidAccountValue) -> Void
+    ) {
+        self.existingPaymentMethodAccountIDs = existingPaymentMethodAccountIDs
+        self.createPaymentMethod = createPaymentMethod
+        do {
+            plaidContainer = try PlaidSyncContainerFactory.make()
+        } catch {
+            plaidContainer = PlaidSyncContainerFactory.makeInMemory(fallbackReason: "Could not open Plaid payment accounts: \(error.localizedDescription)")
+        }
+    }
+
+    var body: some View {
+        PlaidPaymentMethodSelectorView(
+            existingPaymentMethodAccountIDs: existingPaymentMethodAccountIDs,
+            createPaymentMethod: createPaymentMethod
+        )
+        .modelContainer(plaidContainer)
+    }
+}
+
+private struct PlaidPaymentMethodSelectorView: View {
+    let existingPaymentMethodAccountIDs: Set<String>
+    let createPaymentMethod: (PlaidAccountValue) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Query(sort: \PlaidAccountSnapshot.accountName) private var accounts: [PlaidAccountSnapshot]
+
+    private var paymentAccounts: [PlaidAccountValue] {
+        accounts
+            .map(PlaidAccountValue.init)
+            .filter { account in
+                paymentMethodType(for: account) != .creditCard
+            }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if paymentAccounts.isEmpty {
+                    MoneyMapEmptyState(
+                        title: "No Plaid Accounts",
+                        message: "Refresh Bank Sync after connecting a checking or savings account.",
+                        systemImage: "link"
+                    )
+                    .listRowBackground(MoneyMapDesign.surfaceBackground)
+                } else {
+                    Section("Synced Accounts") {
+                        ForEach(paymentAccounts) { account in
+                            Button {
+                                createPaymentMethod(account)
+                                dismiss()
+                            } label: {
+                                PlaidPaymentAccountRow(
+                                    account: account,
+                                    type: paymentMethodType(for: account),
+                                    isAlreadySaved: existingPaymentMethodAccountIDs.contains(account.accountID)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .listRowBackground(MoneyMapDesign.surfaceBackground)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(MoneyMapDesign.groupedBackground)
+            .navigationTitle("Connect Plaid")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    private func paymentMethodType(for account: PlaidAccountValue) -> PaymentMethodType {
+        switch account.subtype ?? account.type {
+        case "credit card":
+            return .creditCard
+        case "savings", "money market":
+            return .savings
+        case "checking":
+            return .checking
+        default:
+            switch account.type {
+            case "credit":
+                return .creditCard
+            case "depository":
+                return .checking
+            default:
+                return .other
+            }
+        }
+    }
+}
+
+private struct PlaidPaymentAccountRow: View {
+    let account: PlaidAccountValue
+    let type: PaymentMethodType
+    let isAlreadySaved: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: type.icon)
+                .foregroundStyle(type.color)
+                .frame(width: 28)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(account.displayName)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                Text(detailText)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 8)
+
+            if isAlreadySaved {
+                Text("Saved")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MoneyMapDesign.calmGreen)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(MoneyMapDesign.calmGreen.opacity(0.12), in: Capsule())
+            } else {
+                Image(systemName: "plus.circle.fill")
+                    .foregroundStyle(type.color)
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var detailText: String {
+        let parts = [
+            account.institutionName,
+            account.lastFourLabel,
+            type.name
+        ]
+        .compactMap { value -> String? in
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }
+
+        return parts.joined(separator: " - ")
     }
 }
 

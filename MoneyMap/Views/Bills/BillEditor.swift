@@ -29,6 +29,7 @@ struct BillEditor: View {
     @State private var selectedLifecycleState: BillLifecycleState
 
     @State private var autopayEnabled: Bool
+    @State private var paymentMode: BillPaymentMode
     @State private var autopaySource: String
     @State private var selectedPaymentMethodID: UUID?
     @State private var showingPaymentMethodEditor = false
@@ -66,6 +67,7 @@ struct BillEditor: View {
         _selectedLifecycleState = State(initialValue: bill?.lifecycleState ?? .active)
 
         _autopayEnabled = State(initialValue: bill?.autopayEnabled ?? false)
+        _paymentMode = State(initialValue: bill?.paymentMode ?? .manual)
         _autopaySource = State(initialValue: bill?.autopaySource ?? "")
         _selectedPaymentMethodID = State(initialValue: bill?.paymentMethodID)
         _gracePeriodDays = State(initialValue: bill?.gracePeriodDays ?? 0)
@@ -151,6 +153,13 @@ struct BillEditor: View {
                     autopaySource = ""
                 }
             }
+            .onChange(of: paymentMode) { _, mode in
+                autopayEnabled = mode == .autopay
+                if mode != .autopay {
+                    autopaySource = ""
+                    selectedPaymentMethodID = nil
+                }
+            }
             .sheet(isPresented: $showingPaymentMethodEditor) {
                 PaymentMethodEditor { paymentMethod in
                     selectedPaymentMethodID = paymentMethod.id
@@ -231,33 +240,40 @@ struct BillEditor: View {
 
     private var paymentSection: some View {
         Section {
-            Toggle("Autopay", isOn: $autopayEnabled)
-
-            Picker("Pay From", selection: $selectedPaymentMethodID) {
-                Text("No Payment Method").tag(Optional<UUID>.none)
-                ForEach(sortedPaymentMethods) { method in
-                    Label(method.displayName, systemImage: method.type.icon)
-                        .tag(Optional(method.id))
+            Picker("Payment Type", selection: $paymentMode) {
+                ForEach(BillPaymentMode.allCases) { mode in
+                    Label(mode.title, systemImage: mode.icon)
+                        .tag(mode)
                 }
             }
 
-            if let selectedPaymentMethod {
-                PaymentMethodSummaryRow(paymentMethod: selectedPaymentMethod)
-            }
+            if paymentMode == .autopay {
+                Picker("Pay From", selection: $selectedPaymentMethodID) {
+                    Text("No Payment Method").tag(Optional<UUID>.none)
+                    ForEach(sortedPaymentMethods) { method in
+                        Label(method.displayName, systemImage: method.type.icon)
+                            .tag(Optional(method.id))
+                    }
+                }
 
-            Button {
-                showingPaymentMethodEditor = true
-            } label: {
-                Label("Add Payment Method", systemImage: "plus.circle")
-            }
+                if let selectedPaymentMethod {
+                    PaymentMethodSummaryRow(paymentMethod: selectedPaymentMethod)
+                }
 
-            if autopayEnabled && selectedPaymentMethod == nil {
-                HStack {
-                    Text("Autopay Source")
-                    Spacer()
-                    TextField("Checking Account", text: $autopaySource)
-                        .multilineTextAlignment(.trailing)
-                        .focused($focusedField, equals: .autopaySource)
+                Button {
+                    showingPaymentMethodEditor = true
+                } label: {
+                    Label("Add Payment Method", systemImage: "plus.circle")
+                }
+
+                if selectedPaymentMethod == nil {
+                    HStack {
+                        Text("Autopay Source")
+                        Spacer()
+                        TextField("Checking Account", text: $autopaySource)
+                            .multilineTextAlignment(.trailing)
+                            .focused($focusedField, equals: .autopaySource)
+                    }
                 }
             }
 
@@ -267,11 +283,17 @@ struct BillEditor: View {
                 in: 0...31
             )
 
-            PaymentLinkInputControls(linkText: $paymentLink)
+            if paymentMode == .payLink {
+                PaymentLinkInputControls(linkText: $paymentLink)
+            }
 
-            TipView(AutopayBillTip())
+            if paymentMode == .autopay {
+                TipView(AutopayBillTip())
+            }
         } header: {
             Text("Payment")
+        } footer: {
+            Text(paymentMode.detail + paymentModeFooterSuffix)
         }
     }
 
@@ -361,6 +383,12 @@ struct BillEditor: View {
         paymentLinkIsValid
     }
 
+    private var paymentModeFooterSuffix: String {
+        paymentMode == .inPerson
+            ? " Connect one matching transaction from History to teach MoneyMap what merchant text to watch for."
+            : ""
+    }
+
     private func moveFocus(direction: Int) {
         var fields: [Field] = [.name, .amount, .autopaySource, .notes]
 
@@ -421,12 +449,13 @@ struct BillEditor: View {
         targetBill.recurrenceInterval = repeats ? recurrenceInterval : nil
         targetBill.recurrenceUnit = repeats ? selectedRecurrenceUnit : nil
         targetBill.updatePaymentSettings(
-            autopayEnabled: autopayEnabled,
-            paymentMethodID: selectedPaymentMethodID,
+            autopayEnabled: paymentMode == .autopay,
+            paymentMethodID: paymentMode == .autopay ? selectedPaymentMethodID : nil,
             autopaySource: normalizedAutopaySource,
-            gracePeriodDays: gracePeriodDays
+            gracePeriodDays: gracePeriodDays,
+            paymentMode: paymentMode
         )
-        targetBill.paymentURLString = normalizedPaymentLink
+        targetBill.paymentURLString = paymentMode == .payLink ? normalizedPaymentLink : nil
         targetBill.notes = normalizedNotes
         targetBill.lifecycleState = selectedLifecycleState
 
@@ -476,12 +505,12 @@ struct BillEditor: View {
     }
 
     private var normalizedAutopaySource: String? {
-        if autopayEnabled, let selectedPaymentMethod {
+        if paymentMode == .autopay, let selectedPaymentMethod {
             return selectedPaymentMethod.displayName
         }
 
         let trimmed = autopaySource.trimmingCharacters(in: .whitespacesAndNewlines)
-        return autopayEnabled && !trimmed.isEmpty ? trimmed : nil
+        return paymentMode == .autopay && !trimmed.isEmpty ? trimmed : nil
     }
 
     private var sortedPaymentMethods: [PaymentMethod] {
@@ -516,7 +545,7 @@ struct BillEditor: View {
 
     private var paymentLinkIsValid: Bool {
         let trimmed = paymentLink.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty || Bill.paymentURL(from: paymentLink) != nil
+        return paymentMode != .payLink || trimmed.isEmpty || Bill.paymentURL(from: paymentLink) != nil
     }
 }
 

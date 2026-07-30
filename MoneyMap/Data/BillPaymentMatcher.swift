@@ -163,24 +163,46 @@ enum BillPaymentMatcher {
     }
 
     private static func textMatches(bill: Bill, transaction: Transaction) -> Bool {
-        guard let billName = bill.name?.nilIfBlank else { return false }
-        let billText = normalizedText(billName)
-        guard !billText.isEmpty else { return false }
+        let billTexts = billMatchTexts(for: bill)
+        guard !billTexts.isEmpty else { return false }
 
         return transactionMatchTexts(for: transaction).contains { transactionText in
-            guard !transactionText.isEmpty else { return false }
-            if transactionText == billText ||
-                transactionText.contains(billText) ||
-                billText.contains(transactionText) {
-                return true
+            billTexts.contains { billText in
+                textsMatch(billText: billText, transactionText: transactionText)
             }
-
-            let billTokens = Set(significantTokens(in: billText))
-            let transactionTokens = Set(significantTokens(in: transactionText))
-            guard !billTokens.isEmpty, !transactionTokens.isEmpty else { return false }
-            let overlap = billTokens.intersection(transactionTokens).count
-            return min(billTokens.count, transactionTokens.count) <= 2 ? overlap >= 1 : overlap >= 2
         }
+    }
+
+    private static func billMatchTexts(for bill: Bill) -> [String] {
+        var seen = Set<String>()
+        let values = [bill.name] + (bill.transactions ?? []).flatMap { transaction in
+            [
+                transaction.friendlyName,
+                transaction.merchant,
+                transaction.transactionDescription
+            ]
+        }
+
+        return values
+            .compactMap { $0?.nilIfBlank }
+            .map(normalizedText)
+            .filter { !$0.isEmpty }
+            .filter { seen.insert($0).inserted }
+    }
+
+    private static func textsMatch(billText: String, transactionText: String) -> Bool {
+        guard !billText.isEmpty, !transactionText.isEmpty else { return false }
+        if transactionText == billText ||
+            transactionText.contains(billText) ||
+            billText.contains(transactionText) {
+            return true
+        }
+
+        let billTokens = Set(significantTokens(in: billText))
+        let transactionTokens = Set(significantTokens(in: transactionText))
+        guard !billTokens.isEmpty, !transactionTokens.isEmpty else { return false }
+        let overlap = billTokens.intersection(transactionTokens).count
+        return min(billTokens.count, transactionTokens.count) <= 2 ? overlap >= 1 : overlap >= 2
     }
 
     private static func transactionMatchTexts(for transaction: Transaction) -> [String] {

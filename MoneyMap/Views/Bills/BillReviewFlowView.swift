@@ -98,7 +98,7 @@ struct BillReviewFlowView: View {
         }
 
         if dueDay == today {
-            return !bill.autopayEnabled
+            return bill.paymentMode != .autopay && bill.paymentMode != .inPerson
         }
 
         return false
@@ -397,7 +397,11 @@ private struct BillReviewCard: View {
                     )
                 }
 
-                if let paymentHost = bill.paymentHost {
+                if bill.paymentMode == .inPerson {
+                    Label("Transaction tracked", systemImage: "checkmark.circle")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else if let paymentHost = bill.paymentHost {
                     Label(paymentHost, systemImage: "link")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -409,7 +413,7 @@ private struct BillReviewCard: View {
 
                 Label(paymentText, systemImage: bill.paymentModeIcon)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(bill.autopayEnabled ? .green : .secondary)
+                    .foregroundStyle(bill.paymentMode == .autopay || bill.paymentMode == .inPerson ? .green : .secondary)
 
                 Spacer()
             }
@@ -439,10 +443,13 @@ private struct BillReviewCard: View {
     }
 
     private var paymentText: String {
+        if bill.paymentMode == .inPerson {
+            return "Watching transactions"
+        }
         if let methodName = bill.paymentMethodName(in: paymentMethods) {
             return "\(bill.paymentModeTitle) from \(methodName)"
         }
-        return bill.autopayEnabled ? "Autopay" : "Manual pay"
+        return bill.paymentMode == .autopay ? "Autopay" : bill.paymentModeTitle
     }
 }
 

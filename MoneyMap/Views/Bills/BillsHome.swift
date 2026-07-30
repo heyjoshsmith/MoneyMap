@@ -34,6 +34,7 @@ struct BillsHome: View {
     @State private var billPendingResume: Bill?
     @State private var showingDeleteConfirmation = false
     @State private var showingCancelConfirmation = false
+    @State private var recurringBillSuggestions: [RecurringBillSuggestion] = []
     
     var body: some View {
         NavigationStack {
@@ -195,6 +196,7 @@ struct BillsHome: View {
                 routeToRequestedBillIfNeeded()
                 routeToRequestedDestinationIfNeeded()
                 syncSystemIntegrations()
+                refreshRecurringBillSuggestions()
             }
             .onChange(of: deepLinkManager.requestedBillID) { _, _ in
                 routeToRequestedBillIfNeeded()
@@ -207,6 +209,13 @@ struct BillsHome: View {
             }
             .onChange(of: billsIntegrationSignature) { _, _ in
                 syncSystemIntegrations()
+                refreshRecurringBillSuggestions()
+            }
+            .onChange(of: transactions.count) { _, _ in
+                refreshRecurringBillSuggestions()
+            }
+            .onChange(of: ignoredRecurringBillSuggestionIDs) { _, _ in
+                refreshRecurringBillSuggestions()
             }
         }
     }
@@ -237,13 +246,6 @@ struct BillsHome: View {
             }
     }
 
-    private var recurringBillSuggestions: [RecurringBillSuggestion] {
-        let ignoredIDs = Set(ignoredRecurringBillSuggestionIDs.split(separator: "|").map(String.init))
-        return RecurringBillDetector
-            .detect(transactions: transactions, existingBills: bills)
-            .filter { !ignoredIDs.contains($0.id) }
-    }
-
     private var pausedBills: [Bill] {
         lifecycleBills(.paused)
     }
@@ -267,7 +269,7 @@ struct BillsHome: View {
         }
 
         if dueDay == today {
-            return !bill.autopayEnabled
+            return bill.paymentMode != .autopay && bill.paymentMode != .inPerson
         }
 
         return false
@@ -406,6 +408,13 @@ struct BillsHome: View {
         deepLinkManager.requestedBillsDestination = nil
     }
 
+    private func refreshRecurringBillSuggestions() {
+        let ignoredIDs = Set(ignoredRecurringBillSuggestionIDs.split(separator: "|").map(String.init))
+        recurringBillSuggestions = RecurringBillDetector
+            .detect(transactions: transactions, existingBills: bills)
+            .filter { !ignoredIDs.contains($0.id) }
+    }
+
     private func requestDelete(_ bill: Bill) {
         billPendingDelete = bill
         showingDeleteConfirmation = true
@@ -470,6 +479,7 @@ struct BillsHome: View {
         var ignoredIDs = Set(ignoredRecurringBillSuggestionIDs.split(separator: "|").map(String.init))
         ignoredIDs.insert(suggestion.id)
         ignoredRecurringBillSuggestionIDs = ignoredIDs.sorted().joined(separator: "|")
+        recurringBillSuggestions.removeAll { $0.id == suggestion.id }
     }
 
     private func resume(_ bill: Bill, on date: Date) {
@@ -784,7 +794,10 @@ private struct ManagedBillRow: View {
     }
 
     private var canMarkPaid: Bool {
-        bill.lifecycleState == .active && bill.status != .paid && !bill.autopayEnabled
+        bill.lifecycleState == .active &&
+            bill.status != .paid &&
+            bill.paymentMode != .autopay &&
+            bill.paymentMode != .inPerson
     }
 }
 
@@ -855,7 +868,10 @@ struct BillStateRow: View {
     }
 
     private var paymentText: String? {
-        guard bill.autopayEnabled else { return nil }
+        if bill.paymentMode == .inPerson {
+            return "Watching transactions"
+        }
+        guard bill.paymentMode == .autopay else { return nil }
         if let methodName = bill.paymentMethodName(in: paymentMethods) {
             return "Autopay from \(methodName)"
         }
@@ -863,7 +879,7 @@ struct BillStateRow: View {
     }
 
     private var paymentColor: Color {
-        bill.autopayEnabled ? MoneyMapDesign.calmGreen : .secondary
+        bill.paymentMode == .autopay || bill.paymentMode == .inPerson ? MoneyMapDesign.calmGreen : .secondary
     }
 
     var body: some View {

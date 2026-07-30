@@ -217,83 +217,87 @@ struct BankSyncStatusView: View {
 
     private var bankSyncActionSection: some View {
         Section {
-            Button {
-                Task { await refreshFromCloud() }
-            } label: {
-                BankSyncFeatureRow(
-                    title: isRefreshingCloud ? "Refreshing" : "Refresh from Mac",
-                    detail: syncFreshness.level.isStale ? "Downloads the latest Mac snapshot." : "Download the latest Mac bank snapshot",
-                    systemImage: "icloud.and.arrow.down",
-                    tint: .blue
-                )
-            }
-            .buttonStyle(.plain)
-            .disabled(isRefreshingCloud)
-
-            Button {
-                Task { await requestMacRefresh() }
-            } label: {
-                BankSyncFeatureRow(
-                    title: isRequestingMacRefresh ? "Requesting Mac Refresh" : "Tell Mac to Refresh",
-                    detail: macRefreshCommandDetail,
-                    systemImage: "arrow.triangle.2.circlepath",
-                    tint: MoneyMapDesign.calmGreen
-                )
-            }
-            .buttonStyle(.plain)
-            .disabled(isRequestingMacRefresh)
-
-            if readyReviewItems.isEmpty {
-                BankSyncFeatureRow(
-                    title: "Transactions are current",
-                    detail: "No reviewed transactions are waiting",
-                    systemImage: "checkmark.circle.fill",
-                    tint: MoneyMapDesign.calmGreen
-                )
-            } else {
+            VStack(spacing: 10) {
                 Button {
-                    Task { await importReadyTransactions() }
+                    Task { await refreshFromCloud() }
                 } label: {
-                    BankSyncFeatureRow(
-                        title: isImporting ? "Importing Transactions" : "Import Transactions",
-                        detail: "\(readyReviewItems.count) waiting for Wallet",
-                        systemImage: "square.and.arrow.down",
-                        tint: MoneyMapDesign.warningGold
+                    MoneyMapActionCardLabel(
+                        title: isRefreshingCloud ? "Refreshing" : "Refresh from Mac",
+                        detail: syncFreshness.level.isStale ? "Download the latest Mac snapshot now." : "Download the latest Mac bank snapshot.",
+                        systemImage: "icloud.and.arrow.down",
+                        tint: .blue,
+                        isProminent: syncFreshness.level.isStale
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(isImporting)
-            }
+                .disabled(isRefreshingCloud)
 
-            if let cloudStatusMessage {
-                Label(cloudStatusMessage, systemImage: "icloud.and.arrow.down")
-                    .foregroundStyle(.secondary)
-            }
-            if let cloudErrorMessage {
-                Label(cloudErrorMessage, systemImage: "exclamationmark.icloud")
-                    .foregroundStyle(MoneyMapDesign.attentionRed)
-                    .textSelection(.enabled)
-            }
-            if let macRefreshStatusMessage {
-                Label(macRefreshStatusMessage, systemImage: "desktopcomputer")
-                    .foregroundStyle(.secondary)
-            }
-            if let macRefreshErrorMessage {
-                Label(macRefreshErrorMessage, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(MoneyMapDesign.attentionRed)
-                    .textSelection(.enabled)
-            }
-            if let importStatusMessage {
-                Label(importStatusMessage, systemImage: "checkmark.circle")
-                    .foregroundStyle(.secondary)
-            }
-            if let importErrorMessage {
-                Label(importErrorMessage, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(MoneyMapDesign.attentionRed)
-                    .textSelection(.enabled)
+                Button {
+                    Task { await requestMacRefresh() }
+                } label: {
+                    MoneyMapActionCardLabel(
+                        title: isRequestingMacRefresh ? "Requesting Mac Refresh" : "Tell Mac to Refresh",
+                        detail: macRefreshCommandDetail,
+                        systemImage: "arrow.triangle.2.circlepath",
+                        tint: MoneyMapDesign.calmGreen
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(isRequestingMacRefresh)
+
+                if readyReviewItems.isEmpty {
+                    MoneyMapStatusBanner(
+                        message: "Transactions are current. No reviewed transactions are waiting.",
+                        systemImage: "checkmark.circle.fill",
+                        tint: MoneyMapDesign.calmGreen
+                    )
+                } else {
+                    Button {
+                        Task { await importReadyTransactions() }
+                    } label: {
+                        MoneyMapActionCardLabel(
+                            title: isImporting ? "Importing Transactions" : "Import Transactions",
+                            detail: "\(readyReviewItems.count) waiting for Wallet.",
+                            systemImage: "square.and.arrow.down",
+                            tint: MoneyMapDesign.warningGold,
+                            isProminent: true
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isImporting)
+                }
+
+                bankSyncStatusMessages
             }
         } header: {
             Text("Sync")
+        }
+        .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+        .listRowBackground(Color.clear)
+    }
+
+    @ViewBuilder
+    private var bankSyncStatusMessages: some View {
+        if let cloudStatusMessage {
+            MoneyMapStatusBanner(message: cloudStatusMessage, systemImage: "icloud.and.arrow.down")
+        }
+        if let cloudErrorMessage {
+            MoneyMapStatusBanner(message: cloudErrorMessage, systemImage: "exclamationmark.icloud", tint: MoneyMapDesign.attentionRed)
+                .textSelection(.enabled)
+        }
+        if let macRefreshStatusMessage {
+            MoneyMapStatusBanner(message: macRefreshStatusMessage, systemImage: "desktopcomputer")
+        }
+        if let macRefreshErrorMessage {
+            MoneyMapStatusBanner(message: macRefreshErrorMessage, systemImage: "exclamationmark.triangle", tint: MoneyMapDesign.attentionRed)
+                .textSelection(.enabled)
+        }
+        if let importStatusMessage {
+            MoneyMapStatusBanner(message: importStatusMessage, systemImage: "checkmark.circle")
+        }
+        if let importErrorMessage {
+            MoneyMapStatusBanner(message: importErrorMessage, systemImage: "exclamationmark.triangle", tint: MoneyMapDesign.attentionRed)
+                .textSelection(.enabled)
         }
     }
 

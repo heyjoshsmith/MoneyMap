@@ -39,22 +39,49 @@ struct PaymentLinkSetupView: View {
 
                 Section {
                     if let paymentURL {
-                        Button("Open Link", systemImage: "arrow.up.forward.app") {
+                        Button {
                             openURL(paymentURL)
+                        } label: {
+                            MoneyMapActionCardLabel(
+                                title: "Open Link",
+                                detail: Bill.paymentHost(from: linkText) ?? "Website or app",
+                                systemImage: "arrow.up.forward.app",
+                                tint: .blue
+                            )
                         }
+                        .buttonStyle(.plain)
 
-                        Button("Save Link", systemImage: "checkmark") {
+                        Button {
                             saveLink()
+                        } label: {
+                            MoneyMapActionCardLabel(
+                                title: "Save Link",
+                                detail: "Use this destination for payments.",
+                                systemImage: "checkmark.circle",
+                                tint: MoneyMapDesign.calmGreen,
+                                isProminent: true
+                            )
                         }
+                        .buttonStyle(.plain)
                     } else {
-                        Label("Enter a website or app link", systemImage: "exclamationmark.circle")
-                            .foregroundStyle(.secondary)
+                        MoneyMapStatusBanner(
+                            message: "Enter a website or app link.",
+                            systemImage: "exclamationmark.circle"
+                        )
                     }
 
                     if bill.paymentURLString != nil {
-                        Button("Remove Link", systemImage: "trash", role: .destructive) {
+                        Button(role: .destructive) {
                             removeLink()
+                        } label: {
+                            MoneyMapActionCardLabel(
+                                title: "Remove Link",
+                                detail: "Clear the saved destination.",
+                                systemImage: "trash",
+                                tint: MoneyMapDesign.attentionRed
+                            )
                         }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -200,13 +227,17 @@ struct PaymentLinkSummaryCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "link")
-                    .foregroundStyle(.blue)
-                    .font(.title3)
-                    .frame(width: 26)
-                    .accessibilityHidden(true)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.blue.opacity(0.12))
+                    Image(systemName: "link")
+                        .foregroundStyle(.blue)
+                        .font(.title3.weight(.semibold))
+                }
+                .frame(width: 46, height: 42)
+                .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Payment Link")
@@ -242,7 +273,7 @@ struct PaymentLinkSummaryCard: View {
 
     private var actionGridColumns: [GridItem] {
         [
-            GridItem(.adaptive(minimum: 148), spacing: 8, alignment: .top)
+            GridItem(.flexible(), spacing: 8, alignment: .top)
         ]
     }
 
@@ -308,37 +339,13 @@ private struct PaymentLinkActionButton: View {
         Button {
             action.handler()
         } label: {
-            HStack(alignment: .center, spacing: 10) {
-                Image(systemName: action.systemImage)
-                    .font(.headline)
-                    .foregroundStyle(action.tint)
-                    .frame(width: 24)
-                    .accessibilityHidden(true)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(action.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-                    Text(action.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.82)
-                }
-
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(MoneyMapDesign.controlBackground)
-            .clipShape(.rect(cornerRadius: MoneyMapDesign.controlCornerRadius))
-            .overlay {
-                RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius)
-                    .stroke(MoneyMapDesign.separator.opacity(0.24), lineWidth: 0.5)
-            }
+            MoneyMapActionCardLabel(
+                title: action.title,
+                detail: action.detail,
+                systemImage: action.systemImage,
+                tint: action.tint,
+                isProminent: action.style == .prominent
+            )
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)

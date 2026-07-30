@@ -344,6 +344,76 @@ struct MoneyMapNeutralButtonLabel: View {
     }
 }
 
+struct MoneyMapActionCardLabel: View {
+    let title: String
+    let detail: String
+    let systemImage: String
+    var tint: Color = .accentColor
+    var isProminent = false
+    var trailingSystemImage = "chevron.right"
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(tint.opacity(isProminent ? 0.18 : 0.12))
+                Image(systemName: systemImage)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(tint)
+            }
+            .frame(width: 42, height: 38)
+            .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.82)
+            }
+
+            Spacer(minLength: 8)
+
+            Image(systemName: trailingSystemImage)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(tint.opacity(isProminent ? 0.95 : 0.72))
+                .accessibilityHidden(true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+        .padding(12)
+        .background(MoneyMapDesign.controlBackground, in: RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius, style: .continuous)
+                .stroke(isProminent ? tint.opacity(0.38) : MoneyMapDesign.separator.opacity(0.22), lineWidth: 1)
+        }
+        .contentShape(.rect)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct MoneyMapStatusBanner: View {
+    let message: String
+    let systemImage: String
+    var tint: Color = .secondary
+
+    var body: some View {
+        Label(message, systemImage: systemImage)
+            .font(.footnote)
+            .foregroundStyle(tint)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .accessibilityElement(children: .combine)
+    }
+}
+
 struct MoneyMapEmptyState: View {
     let title: String
     let message: String

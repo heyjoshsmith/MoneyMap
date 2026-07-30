@@ -27,6 +27,7 @@ public enum BillCategory: String, CaseIterable, Codable {
     case internet
     case entertainment
     case healthcare
+    case personalCare
     case childcare
     case education
     case loans
@@ -53,6 +54,7 @@ public enum BillCategory: String, CaseIterable, Codable {
         case .internet:      return "Internet"
         case .entertainment: return "Entertainment"
         case .healthcare:    return "Healthcare"
+        case .personalCare:  return "Personal Care"
         case .childcare:     return "Childcare"
         case .education:     return "Education"
         case .loans:         return "Loans"
@@ -81,6 +83,7 @@ public enum BillCategory: String, CaseIterable, Codable {
         case .internet:      return "wifi"
         case .entertainment: return "gamecontroller"
         case .healthcare:    return "cross.case"
+        case .personalCare:  return "scissors"
         case .childcare:     return "figure.2"
         case .education:     return "graduationcap"
         case .loans:         return "banknote"
@@ -109,6 +112,7 @@ public enum BillCategory: String, CaseIterable, Codable {
         case .internet:      return Color(red: 0.28, green: 0.48, blue: 0.62)
         case .entertainment: return Color(red: 0.54, green: 0.36, blue: 0.56)
         case .healthcare:    return Color(red: 0.62, green: 0.30, blue: 0.29)
+        case .personalCare:  return Color(red: 0.58, green: 0.34, blue: 0.40)
         case .childcare:     return Color(red: 0.66, green: 0.43, blue: 0.43)
         case .education:     return Color(red: 0.42, green: 0.40, blue: 0.58)
         case .loans:         return Color(red: 0.55, green: 0.42, blue: 0.27)
@@ -180,6 +184,54 @@ public enum BillLifecycleState: String, CaseIterable, Codable {
             return .orange
         case .canceled:
             return .red
+        }
+    }
+}
+
+public enum BillPaymentMode: String, CaseIterable, Codable, Identifiable {
+    case manual
+    case payLink
+    case inPerson
+    case autopay
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .manual:
+            return "Manual"
+        case .payLink:
+            return "Pay Link"
+        case .inPerson:
+            return "In Person"
+        case .autopay:
+            return "Autopay"
+        }
+    }
+
+    public var icon: String {
+        switch self {
+        case .manual:
+            return "hand.tap"
+        case .payLink:
+            return "link"
+        case .inPerson:
+            return "person.crop.circle.badge.checkmark"
+        case .autopay:
+            return "arrow.triangle.2.circlepath"
+        }
+    }
+
+    public var detail: String {
+        switch self {
+        case .manual:
+            return "Mark paid yourself when needed."
+        case .payLink:
+            return "Open a saved website or app link."
+        case .inPerson:
+            return "Watch synced transactions after you pay in person."
+        case .autopay:
+            return "Expect the payment to happen automatically."
         }
     }
 }
@@ -430,6 +482,7 @@ public class Bill {
     public var gracePeriodDays: Int?
     public var paymentURLString: String?
     public var paymentMethodID: UUID?
+    public var paymentModeRawValue: String?
     public var lifecycleStateRaw: String?
     public var lifecycleUpdatedAt: Date?
     public var plaidAccountID: String?
@@ -476,7 +529,7 @@ public class Bill {
     }
     #endif
 
-    public init(name: String?, amount: Double?, dueDate: Date?, category: BillCategory?, recurrenceInterval: Int?, recurrenceUnit: RecurrenceUnit?, creditCardDetails: CreditCardDetails? = nil, imageData: Data? = nil, autopayEnabled: Bool = false, notes: String? = nil, autopaySource: String? = nil, gracePeriodDays: Int? = nil, paymentURLString: String? = nil, paymentMethodID: UUID? = nil, lifecycleState: BillLifecycleState = .active, lifecycleUpdatedAt: Date? = nil, plaidAccountID: String? = nil, plaidItemID: String? = nil, plaidInstitutionID: String? = nil, plaidUpdatedAt: Date? = nil, plaidUnavailable: Bool = false) {
+    public init(name: String?, amount: Double?, dueDate: Date?, category: BillCategory?, recurrenceInterval: Int?, recurrenceUnit: RecurrenceUnit?, creditCardDetails: CreditCardDetails? = nil, imageData: Data? = nil, autopayEnabled: Bool = false, notes: String? = nil, autopaySource: String? = nil, gracePeriodDays: Int? = nil, paymentURLString: String? = nil, paymentMethodID: UUID? = nil, paymentMode: BillPaymentMode? = nil, lifecycleState: BillLifecycleState = .active, lifecycleUpdatedAt: Date? = nil, plaidAccountID: String? = nil, plaidItemID: String? = nil, plaidInstitutionID: String? = nil, plaidUpdatedAt: Date? = nil, plaidUnavailable: Bool = false) {
         self.name = name
         self.amount = amount
         self.dueDate = dueDate
@@ -491,6 +544,7 @@ public class Bill {
         self.gracePeriodDays = gracePeriodDays
         self.paymentURLString = paymentURLString
         self.paymentMethodID = paymentMethodID
+        self.paymentModeRawValue = paymentMode?.rawValue
         self.lifecycleStateRaw = lifecycleState == .active ? nil : lifecycleState.rawValue
         self.lifecycleUpdatedAt = lifecycleUpdatedAt
         self.plaidAccountID = plaidAccountID
@@ -502,7 +556,11 @@ public class Bill {
     
     public func makePayment(of amount: Double) {
         if let currentBalance = self.creditCardDetails?.cardBalance {
-            self.creditCardDetails?.cardBalance = currentBalance - amount
+            if currentBalance < 0 {
+                self.creditCardDetails?.cardBalance = min(currentBalance + amount, 0)
+            } else {
+                self.creditCardDetails?.cardBalance = max(currentBalance - amount, 0)
+            }
         }
         datePaid = .now
         status = .paid
@@ -607,12 +665,32 @@ extension Bill {
         paymentURL != nil
     }
 
+    public var paymentMode: BillPaymentMode {
+        get {
+            if let paymentModeRawValue,
+               let mode = BillPaymentMode(rawValue: paymentModeRawValue) {
+                return mode
+            }
+            if autopayEnabled {
+                return .autopay
+            }
+            if paymentURL != nil {
+                return .payLink
+            }
+            return .manual
+        }
+        set {
+            paymentModeRawValue = newValue.rawValue
+            autopayEnabled = newValue == .autopay
+        }
+    }
+
     public var paymentModeTitle: String {
-        autopayEnabled ? "Autopay" : "Manual"
+        paymentMode.title
     }
 
     public var paymentModeIcon: String {
-        autopayEnabled ? "arrow.triangle.2.circlepath" : "hand.tap"
+        paymentMode.icon
     }
 
     public func paymentMethod(in paymentMethods: [PaymentMethod]) -> PaymentMethod? {
@@ -628,14 +706,17 @@ extension Bill {
         autopayEnabled: Bool,
         paymentMethodID: UUID?,
         autopaySource: String?,
-        gracePeriodDays: Int
+        gracePeriodDays: Int,
+        paymentMode: BillPaymentMode? = nil
     ) {
-        self.autopayEnabled = autopayEnabled
+        let resolvedMode = paymentMode ?? (autopayEnabled ? .autopay : self.paymentMode)
+        self.paymentModeRawValue = resolvedMode.rawValue
+        self.autopayEnabled = resolvedMode == .autopay
         self.paymentMethodID = paymentMethodID
 
         let normalizedSource = autopaySource?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        self.autopaySource = autopayEnabled && normalizedSource?.isEmpty == false ? normalizedSource : nil
+        self.autopaySource = resolvedMode == .autopay && normalizedSource?.isEmpty == false ? normalizedSource : nil
         self.gracePeriodDays = gracePeriodDays > 0 ? gracePeriodDays : nil
     }
 

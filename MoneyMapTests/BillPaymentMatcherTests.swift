@@ -92,6 +92,44 @@ final class BillPaymentMatcherTests: XCTestCase {
         XCTAssertEqual(history.map(\.plaidTransactionID), ["plaid-utility-1"])
     }
 
+    func testConnectedHistoryTeachesFutureInPersonTransactionMatch() {
+        let bill = Bill(
+            name: "Haircut",
+            amount: 30,
+            dueDate: date(2026, 8, 5),
+            category: .personalCare,
+            recurrenceInterval: nil,
+            recurrenceUnit: nil,
+            paymentMode: .inPerson
+        )
+        let historicalTransaction = paymentTransaction(
+            merchant: "Great Clips",
+            amount: 30,
+            date: date(2026, 7, 5),
+            plaidTransactionID: "plaid-haircut-history"
+        )
+        historicalTransaction.creditCard = bill
+        bill.transactions = [historicalTransaction]
+
+        let futureTransaction = paymentTransaction(
+            merchant: "Great Clips",
+            amount: 30,
+            date: date(2026, 8, 5),
+            plaidTransactionID: "plaid-haircut-current"
+        )
+
+        let didChange = BillPaymentMatcher.refreshStatuses(
+            for: [bill],
+            transactions: [futureTransaction],
+            today: date(2026, 8, 6),
+            calendar: calendar
+        )
+
+        XCTAssertTrue(didChange)
+        XCTAssertEqual(bill.status, .paid)
+        XCTAssertEqual(bill.datePaid, date(2026, 8, 5))
+    }
+
     private func paymentTransaction(
         merchant: String,
         amount: Double,
