@@ -103,6 +103,7 @@ struct BillEditor: View {
                     creditCardSection
                 }
             }
+            .moneyMapGroupedListBackground()
             .navigationTitle(bill == nil ? "New Bill" : "Edit Bill")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -201,6 +202,7 @@ struct BillEditor: View {
         } header: {
             Text("Basics")
         }
+        .moneyMapListSectionBackground()
     }
 
     private var scheduleSection: some View {
@@ -236,6 +238,7 @@ struct BillEditor: View {
                 Text("Paused and canceled bills stay in your data, but they are removed from upcoming review until resumed.")
             }
         }
+        .moneyMapListSectionBackground()
     }
 
     private var paymentSection: some View {
@@ -295,6 +298,7 @@ struct BillEditor: View {
         } footer: {
             Text(paymentMode.detail + paymentModeFooterSuffix)
         }
+        .moneyMapListSectionBackground()
     }
 
     private var statusSection: some View {
@@ -309,6 +313,7 @@ struct BillEditor: View {
         } footer: {
             Text("Changing the payment date updates the bill's paid state without changing the bill amount or schedule.")
         }
+        .moneyMapListSectionBackground()
     }
 
     private var detailsSection: some View {
@@ -319,6 +324,7 @@ struct BillEditor: View {
         } header: {
             Text("Details")
         }
+        .moneyMapListSectionBackground()
     }
 
     private var creditCardSection: some View {
@@ -366,6 +372,7 @@ struct BillEditor: View {
         } header: {
             Text("Card Info")
         }
+        .moneyMapListSectionBackground()
     }
 
     private func currencyField(_ title: String, value: Binding<Double>, focus: Field) -> some View {

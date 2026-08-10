@@ -21,11 +21,14 @@ struct RecommendationsView: View {
     @Query private var manualSavingsAccounts: [ManualSavingsAccount]
     @AppStorage("hasSeenRecommendationsWelcome") private var hasSeenRecommendationsWelcome = false
 
+    private let plaidContainer: ModelContainer
+
     @State private var showingAllocationFlow = false
     @State private var manualAvailableCash: Double = 0
     @State private var paycheckCashSource: PaycheckCashSource = RecommendationPreferencesStore.paycheckCashSource
     @State private var selectedPaycheckAccountID = RecommendationPreferencesStore.paycheckCashAccountID ?? ""
     @State private var paycheckAccounts: [PaycheckCashAccount] = []
+    @State private var creditAccounts: [CreditCardPlanningAccount] = []
     @State private var paycheckAccountLoadError: String?
     @State private var payoffStrategy: CreditCardPayoffStrategy = RecommendationPreferencesStore.cardStrategy
     @State private var allocationStrategy: PaycheckAllocationStrategy = RecommendationPreferencesStore.paycheckStrategy
@@ -36,18 +39,29 @@ struct RecommendationsView: View {
     @State private var showingManualCashEditor = false
     @State private var showingDeletePlanConfirmation = false
     @State private var planPendingDeletion: ExtraMoneyPlan?
+    @State private var selectedSavedPlan: ExtraMoneyPlan?
     @State private var generatedExplanation: String?
     @State private var explanationError: String?
     @State private var isGeneratingExplanation = false
     @FocusState private var amountFieldFocused: Bool
+
+    init() {
+        do {
+            plaidContainer = try PlaidSyncContainerFactory.make()
+        } catch {
+            plaidContainer = PlaidSyncContainerFactory.makeInMemory(fallbackReason: "Recommendations could not open the Plaid sync store: \(error.localizedDescription)")
+        }
+    }
 
     private var creditCards: [Bill] {
         bills.filter { $0.category == .creditCard }
     }
 
     private var totalCreditCardDebt: Double {
-        creditCards.reduce(0) { total, bill in
-            total + max(bill.creditCardDetails?.cardBalance ?? 0, 0)
+        let creditAccountsByID = Dictionary(uniqueKeysWithValues: creditAccounts.map { ($0.accountID, $0) })
+        return creditCards.reduce(0) { total, bill in
+            let linkedBalance = bill.plaidAccountID.flatMap { creditAccountsByID[$0]?.balanceAmount } ?? 0
+            return total + max(linkedBalance, abs(bill.creditCardDetails?.cardBalance ?? 0))
         }
     }
 
@@ -159,6 +173,7 @@ struct RecommendationsView: View {
             goals: goals,
             bills: bills,
             nextPayday: paydayManager.nextPayday,
+            creditAccounts: creditAccounts,
             allocationStrategy: allocationStrategy,
             payoffStrategy: payoffStrategy
         )
@@ -170,6 +185,7 @@ struct RecommendationsView: View {
             goals: goals,
             bills: bills,
             nextPayday: paydayManager.nextPayday,
+            creditAccounts: creditAccounts,
             allocationStrategy: allocationStrategy,
             payoffStrategy: payoffStrategy
         )
@@ -181,6 +197,7 @@ struct RecommendationsView: View {
             goals: goals,
             bills: bills,
             nextPayday: paydayManager.nextPayday,
+            creditAccounts: creditAccounts,
             allocationStrategy: allocationStrategy,
             payoffStrategy: payoffStrategy
         )
@@ -226,6 +243,7 @@ struct RecommendationsView: View {
                     matchingActivePlanCount: matchingActivePlans.count,
                     goals: goals,
                     bills: bills,
+                    creditAccounts: creditAccounts,
                     nextPayday: paydayManager.nextPayday,
                     onClose: commitPlanDraft,
                     onSave: saveCurrentPlan(from:)
@@ -257,6 +275,17 @@ struct RecommendationsView: View {
                 persistManualAvailableCash()
             }
         }
+        .sheet(item: $selectedSavedPlan) { savedPlan in
+            NavigationStack {
+                SavedExtraMoneyPlanDetailView(
+                    plan: savedPlan,
+                    items: items(for: savedPlan),
+                    onApplyPayments: {
+                        applySavedCardPayments(savedPlan)
+                    }
+                )
+            }
+        }
         .confirmationDialog(
             "Delete this plan?",
             isPresented: $showingDeletePlanConfirmation,
@@ -285,7 +314,10 @@ struct RecommendationsView: View {
             }
         }
         .task {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
             loadPaycheckAccounts()
+            loadCreditAccounts()
         }
         .onChange(of: manualAvailableCash) { _, newValue in
             didApplyGoalPlan = false
@@ -538,28 +570,28 @@ struct RecommendationsView: View {
                 saveCurrentPlan()
             } label: {
                 MoneyMapActionListRow(
-                    title: didSavePlan ? "Plan Saved" : "Save Allocation Plan",
-                    detail: didSavePlan ? "This money is now reserved in Plan History." : "Reserve these decisions so the same dollars are not planned twice.",
-                    systemImage: didSavePlan ? "checkmark.circle.fill" : "square.and.arrow.down",
-                    tint: didSavePlan ? MoneyMapDesign.calmGreen : .blue
+                    title: didSavePlan || didApplyCardPlan ? "Plan Saved" : "Save Allocation Plan",
+                    detail: didApplyCardPlan ? "Card payments are pending in Plan History." : didSavePlan ? "This money is now reserved in Plan History." : "Reserve these decisions so the same dollars are not planned twice.",
+                    systemImage: didSavePlan || didApplyCardPlan ? "checkmark.circle.fill" : "square.and.arrow.down",
+                    tint: didSavePlan || didApplyCardPlan ? MoneyMapDesign.calmGreen : .blue
                 )
             }
             .buttonStyle(.plain)
-            .disabled(didSavePlan || plan.totalAvailable <= 0)
+            .disabled(didSavePlan || didApplyCardPlan || plan.totalAvailable <= 0)
 
             if !plan.creditCardPayments.isEmpty {
                 Button {
                     applyCardPlan()
                 } label: {
                     MoneyMapActionListRow(
-                        title: didApplyCardPlan ? "Applied Card Plan" : "Apply Card Payments",
-                        detail: "\(MoneyMapFormatters.currencyString(for: cardPaymentTotal)) across \(plan.creditCardPayments.count) card\(plan.creditCardPayments.count == 1 ? "" : "s")",
-                        systemImage: didApplyCardPlan ? "checkmark.circle.fill" : "creditcard",
+                        title: didApplyCardPlan ? "Payments Pending" : "Apply Card Payments",
+                        detail: didApplyCardPlan ? "MoneyMap will confirm these when matching bank debits import." : "\(MoneyMapFormatters.currencyString(for: cardPaymentTotal)) across \(plan.creditCardPayments.count) card\(plan.creditCardPayments.count == 1 ? "" : "s")",
+                        systemImage: didApplyCardPlan ? "clock.badge.checkmark" : "creditcard",
                         tint: didApplyCardPlan ? .green : .blue
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(didApplyCardPlan)
+                .disabled(didApplyCardPlan || didSavePlan)
             }
 
             if !plan.goalContributions.isEmpty {
@@ -622,6 +654,15 @@ struct RecommendationsView: View {
                     SavedExtraMoneyPlanRow(
                         plan: savedPlan,
                         itemCount: savedPlanItems.filter { $0.planID == savedPlan.id }.count,
+                        pendingPaymentCount: savedPlanItems.filter { $0.planID == savedPlan.id && $0.kind == .creditCardPayment && $0.matchedTransactionIDText == nil }.count,
+                        matchedPaymentCount: savedPlanItems.filter { $0.planID == savedPlan.id && $0.kind == .creditCardPayment && $0.matchedTransactionIDText != nil }.count,
+                        canApplyPayments: canApplySavedCardPayments(savedPlan),
+                        onViewDetails: {
+                            selectedSavedPlan = savedPlan
+                        },
+                        onApplyPayments: {
+                            applySavedCardPayments(savedPlan)
+                        },
                         onCancel: {
                             cancel(savedPlan)
                         },
@@ -643,6 +684,31 @@ struct RecommendationsView: View {
             }
         }
         .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private func items(for savedPlan: ExtraMoneyPlan) -> [ExtraMoneyPlanItem] {
+        savedPlanItems
+            .filter { $0.planID == savedPlan.id }
+            .sorted { lhs, rhs in
+                if lhs.kindRaw != rhs.kindRaw {
+                    return itemKindSortOrder(lhs.kind) < itemKindSortOrder(rhs.kind)
+                }
+                if lhs.amountValue != rhs.amountValue {
+                    return lhs.amountValue > rhs.amountValue
+                }
+                return lhs.targetNameText.localizedStandardCompare(rhs.targetNameText) == .orderedAscending
+            }
+    }
+
+    private func itemKindSortOrder(_ kind: ExtraMoneyPlanItemKind) -> Int {
+        switch kind {
+        case .creditCardPayment:
+            return 0
+        case .goalContribution:
+            return 1
+        case .flexibleCash:
+            return 2
+        }
     }
 
     private var beforePaydaySection: some View {
@@ -770,30 +836,16 @@ struct RecommendationsView: View {
     }
 
     private func applyCardPlan() {
-        let groupID = UUID()
-        for recommendation in plan.creditCardPayments {
-            guard let bill = bills.first(where: { $0.id == recommendation.billID }) else { continue }
-            let previousBalance = bill.creditCardDetails?.cardBalance
-            let previousDatePaid = bill.datePaid
-            let previousDueDate = bill.dueDate
-            let previousStatus = bill.status
-            bill.makePayment(of: recommendation.recommendedPayment)
-            AuditService.logBillPayment(
-                bill: bill,
-                previousBalance: previousBalance,
-                previousDatePaid: previousDatePaid,
-                previousDueDate: previousDueDate,
-                previousStatus: previousStatus,
-                amount: recommendation.recommendedPayment,
-                context: modelContext,
-                source: .recommendations,
-                groupID: groupID
-            )
-        }
-        let totalAmount = plan.creditCardPayments.reduce(0) { $0 + $1.recommendedPayment }
-        AuditService.logRecommendationBatch(cardCount: plan.creditCardPayments.count, goalCount: 0, totalAmount: totalAmount, context: modelContext, groupID: groupID)
-        try? modelContext.save()
-        AppRefreshEvents.notifyBillsDidChange()
+        savePlan(
+            draft: currentPlanDraft,
+            plan: plan,
+            grossAvailableCash: grossAvailableCash,
+            sourceAccountName: sourceAccountName,
+            sourceAccountID: selectedPaycheckAccountIDValue,
+            includesGoalContributions: false,
+            appliedAt: Date(),
+            marksPlanSaved: false
+        )
         MoneyMapIntentDonations.donatePaycheckPlan(availableCash: availableCash)
         didApplyCardPlan = true
     }
@@ -826,22 +878,27 @@ struct RecommendationsView: View {
         plan: PaycheckRecommendationPlan,
         grossAvailableCash: Double,
         sourceAccountName: String?,
-        sourceAccountID: String?
+        sourceAccountID: String?,
+        includesGoalContributions: Bool = true,
+        appliedAt: Date? = nil,
+        marksPlanSaved: Bool = true
     ) {
         let plannedCardAmount = plan.creditCardPayments.reduce(0) { $0 + $1.recommendedPayment }
-        let plannedGoalAmount = plan.goalContributions.reduce(0) { $0 + $1.recommendedContribution }
+        let plannedGoalAmount = includesGoalContributions ? plan.goalContributions.reduce(0) { $0 + $1.recommendedContribution } : 0
+        let savedAvailableAmount = appliedAt == nil ? plan.totalAvailable : plannedCardAmount + plannedGoalAmount
         let savedPlan = ExtraMoneyPlan(
             source: source(for: draft),
             sourceAccountID: sourceAccountID,
             sourceAccountName: sourceAccountName,
             startingBalance: grossAvailableCash,
             alreadyAllocated: activeAllocatedCash,
-            available: plan.totalAvailable,
+            available: savedAvailableAmount,
             plannedCardAmount: plannedCardAmount,
             plannedGoalAmount: plannedGoalAmount,
-            unallocatedAmount: plan.unallocatedCash,
+            unallocatedAmount: appliedAt == nil ? plan.unallocatedCash : 0,
             strategyRaw: draft.allocationStrategy.rawValue,
-            payoffStrategyRaw: draft.payoffStrategy.rawValue
+            payoffStrategyRaw: draft.payoffStrategy.rawValue,
+            appliedAt: appliedAt
         )
         modelContext.insert(savedPlan)
 
@@ -852,36 +909,43 @@ struct RecommendationsView: View {
                     kind: .creditCardPayment,
                     targetID: recommendation.billID,
                     targetName: recommendation.billName,
-                    amount: recommendation.recommendedPayment
+                    amount: recommendation.recommendedPayment,
+                    rationale: recommendation.decisionExplanation
                 )
             )
         }
 
-        for insight in plan.goalContributions {
-            modelContext.insert(
-                ExtraMoneyPlanItem(
-                    planID: savedPlan.id,
-                    kind: .goalContribution,
-                    targetID: insight.goalID,
-                    targetName: insight.goalName,
-                    amount: insight.recommendedContribution
+        if includesGoalContributions {
+            for insight in plan.goalContributions {
+                modelContext.insert(
+                    ExtraMoneyPlanItem(
+                        planID: savedPlan.id,
+                        kind: .goalContribution,
+                        targetID: insight.goalID,
+                        targetName: insight.goalName,
+                        amount: insight.recommendedContribution,
+                        rationale: insight.decisionExplanation
+                    )
                 )
-            )
+            }
         }
 
-        if plan.unallocatedCash > 0 {
+        if appliedAt == nil && plan.unallocatedCash > 0 {
             modelContext.insert(
                 ExtraMoneyPlanItem(
                     planID: savedPlan.id,
                     kind: .flexibleCash,
                     targetName: "Flexible Cash",
-                    amount: plan.unallocatedCash
+                    amount: plan.unallocatedCash,
+                    rationale: "Left flexible because the plan did not need this amount for selected card payments or goal contributions."
                 )
             )
         }
 
         try? modelContext.save()
-        didSavePlan = true
+        if marksPlanSaved {
+            didSavePlan = true
+        }
         showingAllocationFlow = false
         MoneyMapIntentDonations.donatePaycheckPlan(availableCash: plan.totalAvailable)
     }
@@ -925,6 +989,7 @@ struct RecommendationsView: View {
             goals: goals,
             bills: bills,
             nextPayday: paydayManager.nextPayday,
+            creditAccounts: creditAccounts,
             allocationStrategy: draft.allocationStrategy,
             payoffStrategy: draft.payoffStrategy
         )
@@ -978,6 +1043,24 @@ struct RecommendationsView: View {
     private func undo(_ savedPlan: ExtraMoneyPlan) {
         savedPlan.status = .undone
         savedPlan.undoneAt = Date()
+        try? modelContext.save()
+    }
+
+    private func canApplySavedCardPayments(_ savedPlan: ExtraMoneyPlan) -> Bool {
+        savedPlan.status == .active &&
+            savedPlan.appliedAt == nil &&
+            savedPlanItems.contains {
+                $0.planID == savedPlan.id &&
+                    $0.kind == .creditCardPayment &&
+                    $0.matchedTransactionIDText == nil
+            }
+    }
+
+    private func applySavedCardPayments(_ savedPlan: ExtraMoneyPlan) {
+        guard canApplySavedCardPayments(savedPlan) else { return }
+
+        savedPlan.appliedAt = Date()
+        savedPlan.updatedAt = Date()
         try? modelContext.save()
     }
 
@@ -1041,12 +1124,31 @@ struct RecommendationsView: View {
     private func syncPaycheckCashSelection() {
         guard paycheckCashSource == .linkedAccount else { return }
 
+        let availableAccountIDs = Set(orderedPaycheckAccounts.map(\.accountID))
         if selectedPaycheckAccountID.isEmpty {
-            if let storedAccountID = RecommendationPreferencesStore.paycheckCashAccountID {
+            if let storedAccountID = RecommendationPreferencesStore.paycheckCashAccountID,
+               availableAccountIDs.contains(storedAccountID) {
                 selectedPaycheckAccountID = storedAccountID
             } else if let firstAccountID = orderedPaycheckAccounts.first?.accountID {
                 selectedPaycheckAccountID = firstAccountID
                 RecommendationPreferencesStore.paycheckCashAccountID = firstAccountID
+            } else {
+                paycheckCashSource = .manual
+                RecommendationPreferencesStore.paycheckCashSource = .manual
+                RecommendationPreferencesStore.paycheckCashAccountID = ""
+            }
+            return
+        }
+
+        guard availableAccountIDs.contains(selectedPaycheckAccountID) else {
+            if let firstAccountID = orderedPaycheckAccounts.first?.accountID {
+                selectedPaycheckAccountID = firstAccountID
+                RecommendationPreferencesStore.paycheckCashAccountID = firstAccountID
+            } else {
+                selectedPaycheckAccountID = ""
+                paycheckCashSource = .manual
+                RecommendationPreferencesStore.paycheckCashSource = .manual
+                RecommendationPreferencesStore.paycheckCashAccountID = ""
             }
             return
         }
@@ -1056,13 +1158,34 @@ struct RecommendationsView: View {
 
     private func loadPaycheckAccounts() {
         do {
-            paycheckAccounts = try MoneyMapPlanningStore.fetchPaycheckCashAccounts()
+            paycheckAccounts = try MoneyMapDiagnostics.measure("plan.paycheckAccounts.fetch") {
+                try MoneyMapPlanningStore.fetchPaycheckCashAccounts()
+            }
             paycheckAccountLoadError = nil
             syncPaycheckCashSelection()
         } catch {
             paycheckAccounts = []
             paycheckAccountLoadError = error.localizedDescription
         }
+    }
+
+    private func loadCreditAccounts() {
+        let context = ModelContext(plaidContainer)
+        let accounts = MoneyMapDiagnostics.measure("plan.creditAccounts.fetch") {
+            (try? context.fetch(FetchDescriptor<PlaidAccountSnapshot>())) ?? []
+        }
+        creditAccounts = accounts
+            .filter { account in
+                account.type.localizedCaseInsensitiveCompare("credit") == .orderedSame
+                    || account.subtype?.localizedCaseInsensitiveCompare("credit card") == .orderedSame
+            }
+            .map {
+                CreditCardPlanningAccount(
+                    accountID: $0.accountID,
+                    currentBalance: $0.currentBalance,
+                    availableBalance: $0.availableBalance
+                )
+            }
     }
 
     private func paycheckAccountPickerTitle(for account: PaycheckCashAccount) -> String {
@@ -1308,7 +1431,9 @@ private struct ManualAvailableCashEditor: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                .moneyMapListSectionBackground()
             }
+            .moneyMapGroupedListBackground()
             .navigationTitle("Manual Amount")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1354,6 +1479,7 @@ private struct AllocationGuidedPlanView: View {
     let matchingActivePlanCount: Int
     let goals: [Goal]
     let bills: [Bill]
+    let creditAccounts: [CreditCardPlanningAccount]
     let nextPayday: Date?
     let onClose: (AllocationPlanDraft) -> Void
     let onSave: (AllocationPlanDraft) -> Void
@@ -1374,6 +1500,7 @@ private struct AllocationGuidedPlanView: View {
         matchingActivePlanCount: Int,
         goals: [Goal],
         bills: [Bill],
+        creditAccounts: [CreditCardPlanningAccount],
         nextPayday: Date?,
         onClose: @escaping (AllocationPlanDraft) -> Void,
         onSave: @escaping (AllocationPlanDraft) -> Void
@@ -1391,6 +1518,7 @@ private struct AllocationGuidedPlanView: View {
         self.matchingActivePlanCount = matchingActivePlanCount
         self.goals = goals
         self.bills = bills
+        self.creditAccounts = creditAccounts
         self.nextPayday = nextPayday
         self.onClose = onClose
         self.onSave = onSave
@@ -1402,6 +1530,22 @@ private struct AllocationGuidedPlanView: View {
 
     private var selectedPaycheckAccountIDValue: String? {
         draft.selectedPaycheckAccountID.isEmpty ? nil : draft.selectedPaycheckAccountID
+    }
+
+    private func syncDraftPaycheckCashSelection() {
+        guard draft.paycheckCashSource == .linkedAccount else { return }
+        let availableAccountIDs = Set(orderedPaycheckAccounts.map(\.accountID))
+
+        if availableAccountIDs.contains(draft.selectedPaycheckAccountID) {
+            return
+        }
+
+        if let firstAccountID = orderedPaycheckAccounts.first?.accountID {
+            draft.selectedPaycheckAccountID = firstAccountID
+        } else {
+            draft.selectedPaycheckAccountID = ""
+            draft.paycheckCashSource = .manual
+        }
     }
 
     private var grossAvailableCash: Double {
@@ -1423,6 +1567,7 @@ private struct AllocationGuidedPlanView: View {
             goals: goals,
             bills: bills,
             nextPayday: nextPayday,
+            creditAccounts: creditAccounts,
             allocationStrategy: draft.allocationStrategy,
             payoffStrategy: draft.payoffStrategy
         )
@@ -1434,6 +1579,7 @@ private struct AllocationGuidedPlanView: View {
             goals: goals,
             bills: bills,
             nextPayday: nextPayday,
+            creditAccounts: creditAccounts,
             allocationStrategy: draft.allocationStrategy,
             payoffStrategy: draft.payoffStrategy
         )
@@ -1445,6 +1591,7 @@ private struct AllocationGuidedPlanView: View {
             goals: goals,
             bills: bills,
             nextPayday: nextPayday,
+            creditAccounts: creditAccounts,
             allocationStrategy: draft.allocationStrategy,
             payoffStrategy: draft.payoffStrategy
         )
@@ -1501,6 +1648,15 @@ private struct AllocationGuidedPlanView: View {
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom) {
             guidedNavigationFooter
+        }
+        .onAppear {
+            syncDraftPaycheckCashSelection()
+        }
+        .onChange(of: draft.paycheckCashSource) { _, _ in
+            syncDraftPaycheckCashSelection()
+        }
+        .onChange(of: orderedPaycheckAccounts.map(\.accountID)) { _, _ in
+            syncDraftPaycheckCashSelection()
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -1818,6 +1974,11 @@ private struct AllocationGuidedPlanView: View {
 private struct SavedExtraMoneyPlanRow: View {
     let plan: ExtraMoneyPlan
     let itemCount: Int
+    let pendingPaymentCount: Int
+    let matchedPaymentCount: Int
+    let canApplyPayments: Bool
+    let onViewDetails: () -> Void
+    let onApplyPayments: () -> Void
     let onCancel: () -> Void
     let onUndo: () -> Void
     let onDelete: () -> Void
@@ -1829,12 +1990,40 @@ private struct SavedExtraMoneyPlanRow: View {
     private var statusColor: Color {
         switch plan.status {
         case .active:
-            return MoneyMapDesign.calmGreen
+            return plan.appliedAt == nil ? MoneyMapDesign.calmGreen : MoneyMapDesign.warningGold
         case .canceled, .undone:
             return MoneyMapDesign.warningGold
         case .completed:
             return .blue
         }
+    }
+
+    private var statusTitle: String {
+        if plan.status == .active, plan.appliedAt != nil {
+            return "Payment Pending"
+        }
+
+        return plan.status.title
+    }
+
+    private var statusImage: String {
+        if plan.status == .active, plan.appliedAt != nil {
+            return "clock"
+        }
+
+        return plan.status == .active ? "lock.fill" : "clock"
+    }
+
+    private var statusDetail: String {
+        if plan.appliedAt != nil, pendingPaymentCount > 0 {
+            return "\(pendingPaymentCount) pending bank match\(pendingPaymentCount == 1 ? "" : "es")"
+        }
+
+        if matchedPaymentCount > 0 {
+            return "\(matchedPaymentCount) payment\(matchedPaymentCount == 1 ? "" : "s") confirmed"
+        }
+
+        return "\(itemCount) decision\(itemCount == 1 ? "" : "s")"
     }
 
     var body: some View {
@@ -1856,9 +2045,9 @@ private struct SavedExtraMoneyPlanRow: View {
             }
 
             HStack(spacing: 8) {
-                Label(plan.status.title, systemImage: plan.status == .active ? "lock.fill" : "clock")
+                Label(statusTitle, systemImage: statusImage)
                     .foregroundStyle(statusColor)
-                Text("\(itemCount) decision\(itemCount == 1 ? "" : "s")")
+                Text(statusDetail)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
             }
@@ -1880,22 +2069,58 @@ private struct SavedExtraMoneyPlanRow: View {
             }
 
             if plan.status == .active {
-                HStack {
-                    Button("Cancel Plan", role: .destructive, action: onCancel)
-                    Spacer()
-                    Button("Undo", action: onUndo)
-                    Spacer()
-                    Button("Delete", role: .destructive, action: onDelete)
+                HStack(spacing: 14) {
+                    if canApplyPayments {
+                        Button("Apply Payments", action: onApplyPayments)
+                    }
+                    Button("View Details", action: onViewDetails)
+                    Spacer(minLength: 0)
+                    Menu {
+                        if canApplyPayments {
+                            Button(action: onApplyPayments) {
+                                Label("Apply Payments", systemImage: "creditcard")
+                            }
+                        }
+
+                        Button(role: .destructive, action: onCancel) {
+                            Label("Cancel Plan", systemImage: "xmark.circle")
+                        }
+
+                        Button(action: onUndo) {
+                            Label("Undo", systemImage: "arrow.uturn.backward")
+                        }
+
+                        Button(role: .destructive, action: onDelete) {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    } label: {
+                        Label("More", systemImage: "ellipsis.circle")
+                            .labelStyle(.iconOnly)
+                    }
                 }
                 .font(.caption.weight(.semibold))
             } else {
-                Button("Delete Plan", role: .destructive, action: onDelete)
-                    .font(.caption.weight(.semibold))
+                HStack(spacing: 14) {
+                    Button("View Details", action: onViewDetails)
+                    Spacer(minLength: 0)
+                    Button("Delete Plan", role: .destructive, action: onDelete)
+                }
+                .font(.caption.weight(.semibold))
             }
         }
         .padding(.vertical, 4)
         .contextMenu {
+            Button(action: onViewDetails) {
+                Label("View Details", systemImage: "list.bullet.rectangle")
+            }
+
             if plan.status == .active {
+                if canApplyPayments {
+                    Button(action: onApplyPayments) {
+                        Label("Apply Payments", systemImage: "creditcard")
+                    }
+                }
+
                 Button(role: .destructive, action: onCancel) {
                     Label("Cancel Plan", systemImage: "xmark.circle")
                 }
@@ -1908,6 +2133,355 @@ private struct SavedExtraMoneyPlanRow: View {
             Button(role: .destructive, action: onDelete) {
                 Label("Delete Plan", systemImage: "trash")
             }
+        }
+    }
+}
+
+private struct SavedExtraMoneyPlanDetailView: View {
+    @Environment(\.dismiss) private var dismiss
+    let plan: ExtraMoneyPlan
+    let items: [ExtraMoneyPlanItem]
+    let onApplyPayments: () -> Void
+
+    private var cardItems: [ExtraMoneyPlanItem] {
+        items.filter { $0.kind == .creditCardPayment }
+    }
+
+    private var goalItems: [ExtraMoneyPlanItem] {
+        items.filter { $0.kind == .goalContribution }
+    }
+
+    private var flexibleItems: [ExtraMoneyPlanItem] {
+        items.filter { $0.kind == .flexibleCash }
+    }
+
+    private var canApplyPayments: Bool {
+        plan.status == .active &&
+            plan.appliedAt == nil &&
+            cardItems.contains { $0.matchedTransactionIDText == nil }
+    }
+
+    private var allocatedTotal: Double {
+        plan.plannedCardAmount + plan.plannedGoalAmount
+    }
+
+    private var sourceTitle: String {
+        plan.sourceAccountNameText ?? (plan.source == .manual ? "Manual amount" : "Bank account")
+    }
+
+    var body: some View {
+        List {
+            Section("Summary") {
+                MoneyMapSummaryRow(
+                    title: "Source",
+                    value: sourceTitle,
+                    detail: plan.createdAt.formatted(date: .abbreviated, time: .shortened),
+                    systemImage: plan.source == .linkedAccount ? "building.columns" : "keyboard",
+                    tint: .blue
+                )
+
+                MoneyMapSummaryRow(
+                    title: "Status",
+                    value: statusTitle,
+                    detail: statusDetail,
+                    systemImage: statusImage,
+                    tint: statusColor
+                )
+
+                LazyVGrid(columns: metricColumns, spacing: 10) {
+                    MoneyMapMetricTile(
+                        title: "Available",
+                        value: MoneyMapFormatters.currencyString(for: plan.availableAmount),
+                        systemImage: "banknote",
+                        tint: .purple
+                    )
+                    MoneyMapMetricTile(
+                        title: "Allocated",
+                        value: MoneyMapFormatters.currencyString(for: allocatedTotal),
+                        systemImage: "checkmark.circle",
+                        tint: MoneyMapDesign.calmGreen
+                    )
+                    MoneyMapMetricTile(
+                        title: "Unallocated",
+                        value: MoneyMapFormatters.currencyString(for: plan.unallocatedAmount),
+                        systemImage: "dollarsign.circle",
+                        tint: plan.unallocatedAmount > 0 ? MoneyMapDesign.warningGold : .secondary
+                    )
+                }
+                .padding(.vertical, 4)
+            }
+            .moneyMapListSectionBackground()
+
+            if canApplyPayments {
+                Section("Payments") {
+                    Button {
+                        onApplyPayments()
+                    } label: {
+                        MoneyMapActionListRow(
+                            title: "Apply Payments",
+                            detail: "Move saved card payments into pending status until matching bank debits import.",
+                            systemImage: "creditcard",
+                            tint: .blue
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+                .moneyMapListSectionBackground()
+            }
+
+            planItemSection(
+                title: "Card Payments",
+                items: cardItems,
+                emptyTitle: "No card payments saved"
+            )
+
+            planItemSection(
+                title: "Goal Contributions",
+                items: goalItems,
+                emptyTitle: "No goal contributions saved"
+            )
+
+            if !flexibleItems.isEmpty {
+                planItemSection(
+                    title: "Flexible Cash",
+                    items: flexibleItems,
+                    emptyTitle: "No flexible cash saved"
+                )
+            }
+
+            Section("Cash Accounting") {
+                SavedExtraMoneyPlanAccountingRow(
+                    title: "Starting balance",
+                    amount: plan.startingBalanceAmount
+                )
+                SavedExtraMoneyPlanAccountingRow(
+                    title: "Already reserved",
+                    amount: plan.alreadyAllocatedAmount
+                )
+                SavedExtraMoneyPlanAccountingRow(
+                    title: "Available for this plan",
+                    amount: plan.availableAmount
+                )
+            }
+            .moneyMapListSectionBackground()
+        }
+        .listStyle(.insetGrouped)
+        .moneyMapGroupedListBackground()
+        .navigationTitle("Plan Details")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done") {
+                    dismiss()
+                }
+            }
+        }
+    }
+
+    private func planItemSection(
+        title: String,
+        items: [ExtraMoneyPlanItem],
+        emptyTitle: String
+    ) -> some View {
+        Section(title) {
+            if items.isEmpty {
+                Label(emptyTitle, systemImage: "tray")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(items) { item in
+                    SavedExtraMoneyPlanItemRow(item: item, isAppliedPlan: plan.appliedAt != nil)
+                }
+            }
+        }
+        .moneyMapListSectionBackground()
+    }
+
+    private var payoffStrategyTitle: String {
+        CreditCardPayoffStrategy(rawValue: plan.payoffStrategyRaw)?.title ?? "Balanced"
+    }
+
+    private var allocationStrategyTitle: String {
+        PaycheckAllocationStrategy(rawValue: plan.strategyRaw)?.title ?? "Balanced"
+    }
+
+    private var statusColor: Color {
+        switch plan.status {
+        case .active:
+            return plan.appliedAt == nil ? MoneyMapDesign.calmGreen : MoneyMapDesign.warningGold
+        case .canceled, .undone:
+            return MoneyMapDesign.warningGold
+        case .completed:
+            return .blue
+        }
+    }
+
+    private var statusTitle: String {
+        if plan.status == .active, plan.appliedAt != nil {
+            return "Payment Pending"
+        }
+
+        return plan.status.title
+    }
+
+    private var statusImage: String {
+        if plan.status == .active, plan.appliedAt != nil {
+            return "clock"
+        }
+
+        return plan.status == .active ? "lock.fill" : "clock"
+    }
+
+    private var statusDetail: String {
+        if let appliedAt = plan.appliedAt {
+            return plan.status == .completed
+                ? "Confirmed from bank transactions"
+                : "Applied \(appliedAt.formatted(date: .abbreviated, time: .shortened)); waiting for bank match"
+        }
+
+        return "\(allocationStrategyTitle) allocation, \(payoffStrategyTitle) payoff"
+    }
+
+    private var metricColumns: [GridItem] {
+        [
+            GridItem(.adaptive(minimum: 104), spacing: 10)
+        ]
+    }
+}
+
+private struct SavedExtraMoneyPlanItemRow: View {
+    let item: ExtraMoneyPlanItem
+    let isAppliedPlan: Bool
+    @State private var isShowingReason = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: systemImage)
+                    .font(.headline)
+                    .foregroundStyle(tint)
+                    .frame(width: 26)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.targetNameText)
+                        .font(.body.weight(.semibold))
+                    Text(kindTitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 12)
+
+                MoneyMapMoneyText(
+                    amount: item.amountValue,
+                    font: .body.weight(.semibold),
+                    foregroundStyle: .primary
+                )
+            }
+
+            if let paymentStatusText {
+                Label(paymentStatusText, systemImage: paymentStatusImage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(paymentStatusTint)
+                    .padding(.leading, 38)
+            }
+
+            if let rationale = item.rationaleText?.nilIfBlank {
+                DisclosureGroup(isExpanded: $isShowingReason) {
+                    Text(rationale)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
+                } label: {
+                    Label("Why this", systemImage: "info.circle")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(tint)
+                }
+                .padding(.leading, 38)
+            }
+        }
+        .padding(.vertical, 3)
+    }
+
+    private var kindTitle: String {
+        switch item.kind {
+        case .creditCardPayment:
+            if item.matchedTransactionIDText != nil {
+                return "Card payment confirmed"
+            }
+
+            if isAppliedPlan {
+                return "Card payment pending"
+            }
+
+            return "Card payment"
+        case .goalContribution:
+            return "Goal contribution"
+        case .flexibleCash:
+            return "Flexible cash"
+        }
+    }
+
+    private var systemImage: String {
+        switch item.kind {
+        case .creditCardPayment:
+            return "creditcard"
+        case .goalContribution:
+            return "target"
+        case .flexibleCash:
+            return "dollarsign.circle"
+        }
+    }
+
+    private var tint: Color {
+        switch item.kind {
+        case .creditCardPayment:
+            return .blue
+        case .goalContribution:
+            return MoneyMapDesign.calmGreen
+        case .flexibleCash:
+            return MoneyMapDesign.warningGold
+        }
+    }
+
+    private var paymentStatusText: String? {
+        guard item.kind == .creditCardPayment else { return nil }
+
+        if let matchedAt = item.matchedAt {
+            return "Confirmed \(matchedAt.formatted(date: .abbreviated, time: .shortened))"
+        }
+
+        if isAppliedPlan {
+            return "Waiting for a matching posted bank debit"
+        }
+
+        return nil
+    }
+
+    private var paymentStatusImage: String {
+        item.matchedTransactionIDText == nil ? "clock" : "checkmark.circle.fill"
+    }
+
+    private var paymentStatusTint: Color {
+        item.matchedTransactionIDText == nil ? MoneyMapDesign.warningGold : MoneyMapDesign.calmGreen
+    }
+}
+
+private struct SavedExtraMoneyPlanAccountingRow: View {
+    let title: String
+    let amount: Double
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 12)
+            MoneyMapMoneyText(
+                amount: amount,
+                font: .body,
+                foregroundStyle: .primary
+            )
         }
     }
 }
@@ -2013,6 +2587,7 @@ private struct RecommendationScenarioRow: View {
 
 private struct CardPaymentRecommendationRow: View {
     let recommendation: CreditCardPaymentRecommendation
+    @State private var isShowingReason = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -2030,7 +2605,7 @@ private struct CardPaymentRecommendationRow: View {
                     MoneyMapMoneyText(amount: recommendation.recommendedPayment, font: .headline)
                 }
 
-                Text(recommendation.rationale)
+                Text(recommendation.decisionSummary)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
@@ -2045,15 +2620,30 @@ private struct CardPaymentRecommendationRow: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                DisclosureGroup(isExpanded: $isShowingReason) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(recommendation.decisionDetails, id: \.self) { detail in
+                            Label(detail, systemImage: "checkmark.circle")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+                } label: {
+                    Label("Why this", systemImage: "info.circle")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.blue)
+                }
             }
         }
         .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
     }
 }
 
 private struct GoalContributionRecommendationRow: View {
     let insight: GoalSavingInsight
+    @State private var isShowingReason = false
 
     private var scheduleDetail: String {
         if insight.isBehindSchedule {
@@ -2090,10 +2680,103 @@ private struct GoalContributionRecommendationRow: View {
                 Text(scheduleDetail)
                     .font(.subheadline)
                     .foregroundStyle(insight.isBehindSchedule ? .orange : .secondary)
+
+                DisclosureGroup(isExpanded: $isShowingReason) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(insight.decisionDetails, id: \.self) { detail in
+                            Label(detail, systemImage: "checkmark.circle")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+                } label: {
+                    Label("Why this", systemImage: "info.circle")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(insight.isBehindSchedule ? .orange : MoneyMapDesign.calmGreen)
+                }
             }
         }
         .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
+    }
+}
+
+private extension CreditCardPaymentRecommendation {
+    var decisionSummary: String {
+        if recommendedPayment >= activeBalance - 0.01 {
+            return "Pays off the active balance."
+        }
+
+        if minimumPayment > 0, recommendedPayment >= minimumPayment {
+            return "Covers the minimum, then adds extra toward the active balance."
+        }
+
+        return rationale
+    }
+
+    var decisionExplanation: String {
+        decisionDetails.joined(separator: " ")
+    }
+
+    var decisionDetails: [String] {
+        var details: [String] = [
+            rationale,
+            "Active balance considered: \(MoneyMapFormatters.currencyString(for: activeBalance)).",
+            "Recommended payment: \(MoneyMapFormatters.currencyString(for: recommendedPayment))."
+        ]
+
+        if minimumPayment > 0 {
+            details.append("Minimum payment: \(MoneyMapFormatters.currencyString(for: minimumPayment)).")
+        }
+
+        if let dueDate {
+            details.append("Due date: \(MoneyMapFormatters.mediumDateString(for: dueDate)).")
+        }
+
+        if utilization > 0 {
+            details.append("Utilization: \(utilization.formatted(.percent.precision(.fractionLength(0)))).")
+        }
+
+        if let annualPercentageRate {
+            details.append("APR: \(annualPercentageRate.formatted(.percent.precision(.fractionLength(1)))).")
+        }
+
+        if recommendedPayment < activeBalance - 0.01 {
+            details.append("This is a partial payoff because the plan spreads available card cash across active cards by urgency, utilization, APR, and balance.")
+        }
+
+        return details
+    }
+}
+
+private extension GoalSavingInsight {
+    var decisionExplanation: String {
+        decisionDetails.joined(separator: " ")
+    }
+
+    var decisionDetails: [String] {
+        var details: [String] = [
+            "Recommended contribution: \(MoneyMapFormatters.currencyString(for: recommendedContribution)).",
+            "Target each cycle: \(MoneyMapFormatters.currencyString(for: targetPerPaycheck))."
+        ]
+
+        if isBehindSchedule {
+            details.insert("Included because this goal is behind schedule.", at: 0)
+            if shortfallAmount > 0 {
+                details.append("Estimated shortfall: \(MoneyMapFormatters.currencyString(for: shortfallAmount)).")
+            }
+        } else {
+            details.insert("Included because there was room for goal progress after higher-priority card needs.", at: 0)
+        }
+
+        return details
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

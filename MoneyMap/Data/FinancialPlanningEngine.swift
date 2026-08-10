@@ -20,6 +20,7 @@ struct CreditCardPaymentRecommendation: Equatable {
     let billID: UUID
     let billName: String
     let recommendedPayment: Double
+    let activeBalance: Double
     let rationale: String
     let dueDate: Date?
     let utilization: Double
@@ -54,6 +55,16 @@ struct RecommendationDigest: Equatable {
     let topGoalName: String?
 }
 
+struct CreditCardPlanningAccount: Equatable {
+    let accountID: String
+    let currentBalance: Double?
+    let availableBalance: Double?
+
+    var balanceAmount: Double {
+        abs(currentBalance ?? 0)
+    }
+}
+
 struct SavingsBalanceGoalAllocation: Equatable {
     let goalID: UUID
     let goalName: String
@@ -77,16 +88,30 @@ struct SavingsBalancePlan: Equatable {
 }
 
 enum FinancialPlanningEngine {
+    private struct CreditCardPaymentCandidate {
+        let bill: Bill
+        let balance: Double
+        let minimumPayment: Double
+        let utilization: Double
+        let annualPercentageRate: Double?
+        let protectedTarget: Double
+        let preferredTarget: Double
+        let priorityScore: Double
+        let protectionScore: Double
+    }
+
     static func recommendPaycheckPlan(
         availableCash: Double,
         goals: [Goal],
         bills: [Bill],
         nextPayday: Date?,
+        creditAccounts: [CreditCardPlanningAccount] = [],
         allocationStrategy: PaycheckAllocationStrategy = .balanced,
         payoffStrategy: CreditCardPayoffStrategy = .balanced
     ) -> PaycheckRecommendationPlan {
         let roundedAvailable = roundedToCents(max(availableCash, 0))
         let cards = bills.filter { $0.category == .creditCard }
+        let creditAccountsByID = Dictionary(uniqueKeysWithValues: creditAccounts.map { ($0.accountID, $0) })
 
         guard roundedAvailable > 0 else {
             return PaycheckRecommendationPlan(
@@ -104,26 +129,56 @@ enum FinancialPlanningEngine {
             )
         }
 
-        let minimumCardCoverage = roundedToCents(cards.reduce(0) { total, bill in
-            total + min(bill.creditCardDetails?.effectiveMinimumPayment ?? 0, bill.creditCardDetails?.cardBalance ?? 0)
+        let cardPayoffNeed = roundedToCents(cards.reduce(0) { total, bill in
+            total + effectiveCardBalance(for: bill, creditAccountsByID: creditAccountsByID)
         })
+        let minimumCardCoverage = roundedToCents(cards.reduce(0) { total, bill in
+            let balance = effectiveCardBalance(for: bill, creditAccountsByID: creditAccountsByID)
+            return total + min(effectiveMinimumPayment(for: bill), balance)
+        })
+        let protectedGoalBudget = protectedGoalBudget(
+            availableCash: roundedAvailable,
+            goals: goals,
+            nextPayday: nextPayday,
+            allocationStrategy: allocationStrategy,
+            hasCardDebt: cardPayoffNeed > 0
+        )
         let preferredCardBudget = roundedToCents(roundedAvailable * allocationRatio(for: allocationStrategy))
-        let cardBudget = roundedToCents(min(roundedAvailable, max(minimumCardCoverage, preferredCardBudget)))
+        let cardBudget: Double
+        if cardPayoffNeed <= 0 {
+            cardBudget = 0
+        } else {
+            switch allocationStrategy {
+            case .balanced:
+                cardBudget = roundedToCents(min(
+                    roundedAvailable,
+                    max(minimumCardCoverage, min(cardPayoffNeed, roundedAvailable - protectedGoalBudget))
+                ))
+            case .debtFirst:
+                cardBudget = roundedToCents(min(roundedAvailable, max(minimumCardCoverage, cardPayoffNeed)))
+            case .goalsFirst:
+                cardBudget = roundedToCents(min(roundedAvailable, max(minimumCardCoverage, preferredCardBudget)))
+            }
+        }
         let goalBudget = roundedToCents(max(0, roundedAvailable - cardBudget))
 
         let cardPayments = recommendCreditCardPayments(
             availableCash: cardBudget,
             cards: cards,
             nextPayday: nextPayday,
+            creditAccounts: creditAccounts,
             strategy: payoffStrategy
         )
         let spentOnCards = roundedToCents(cardPayments.reduce(0) { $0 + $1.recommendedPayment })
         let cardRemainder = roundedToCents(max(0, cardBudget - spentOnCards))
+        let hasRemainingCardDebt = roundedToCents(max(0, cardPayoffNeed - spentOnCards)) > 0
+        let includeOnTrackGoals = !hasRemainingCardDebt || allocationStrategy == .goalsFirst
 
         let goalContributions = recommendGoalContributions(
             availableCash: goalBudget + cardRemainder,
             goals: goals,
-            nextPayday: nextPayday
+            nextPayday: nextPayday,
+            includeOnTrackGoals: includeOnTrackGoals
         )
         let spentOnGoals = roundedToCents(goalContributions.reduce(0) { $0 + $1.recommendedContribution })
         let unallocatedCash = roundedToCents(max(0, roundedAvailable - spentOnCards - spentOnGoals))
@@ -148,6 +203,7 @@ enum FinancialPlanningEngine {
         availableCash: Double,
         cards: [Bill],
         nextPayday: Date? = nil,
+        creditAccounts: [CreditCardPlanningAccount] = [],
         strategy: CreditCardPayoffStrategy = .balanced
     ) -> [CreditCardPaymentRecommendation] {
         var remainingCash = roundedToCents(max(availableCash, 0))
@@ -156,30 +212,32 @@ enum FinancialPlanningEngine {
         let planningHorizon = Calendar.current.startOfDay(
             for: nextPayday ?? Calendar.current.date(byAdding: .day, value: 14, to: today) ?? today
         )
+        let creditAccountsByID = Dictionary(uniqueKeysWithValues: creditAccounts.map { ($0.accountID, $0) })
 
         let prioritizedCards = cards
-            .filter { ($0.creditCardDetails?.cardBalance ?? 0) > 0 }
+            .filter { effectiveCardBalance(for: $0, creditAccountsByID: creditAccountsByID) > 0 }
             .sorted { lhs, rhs in
-                let lhsScore = cardPriorityScore(for: lhs, nextPayday: nextPayday, strategy: strategy)
-                let rhsScore = cardPriorityScore(for: rhs, nextPayday: nextPayday, strategy: strategy)
+                let lhsScore = cardPriorityScore(for: lhs, nextPayday: nextPayday, creditAccountsByID: creditAccountsByID, strategy: strategy)
+                let rhsScore = cardPriorityScore(for: rhs, nextPayday: nextPayday, creditAccountsByID: creditAccountsByID, strategy: strategy)
                 if lhsScore == rhsScore {
                     return Bill.byDate(lhs: lhs, rhs: rhs)
                 }
                 return lhsScore > rhsScore
             }
 
-        var recommendations: [CreditCardPaymentRecommendation] = []
         var paymentsByID: [UUID: Double] = [:]
-        var targetsByID: [UUID: Double] = [:]
+        let candidates: [CreditCardPaymentCandidate] = prioritizedCards.compactMap { bill in
+            let details = bill.creditCardDetails
+            let linkedAccount = linkedCreditAccount(for: bill, creditAccountsByID: creditAccountsByID)
+            let balance = effectiveCardBalance(for: bill, creditAccountsByID: creditAccountsByID)
+            guard balance > 0 else { return nil }
 
-        // First, protect cards that matter before the next payday.
-        for bill in prioritizedCards where remainingCash > 0 {
-            guard let details = bill.creditCardDetails else { continue }
-
-            let balance = max(details.cardBalance, 0)
-            let minimumPayment = min(details.effectiveMinimumPayment, balance)
-            let utilizationTarget = max(0, balance - (details.creditLimit * 0.3))
-            let statementTarget = min(details.statementBalance ?? balance, balance)
+            let minimumPayment = min(effectiveMinimumPayment(for: bill), balance)
+            let creditLimit = effectiveCreditLimit(details: details, linkedAccount: linkedAccount, balance: balance)
+            let utilization = creditLimit > 0 ? balance / creditLimit : 0
+            let utilizationTarget = max(0, balance - (creditLimit * 0.3))
+            let statementTarget = statementTarget(for: bill, balance: balance)
+            let duePaymentTarget = duePaymentTarget(for: bill, balance: balance)
             let dueDay = bill.dueDate.map { Calendar.current.startOfDay(for: $0) }
             let isMarkedPaid = bill.datePaid != nil || bill.status == .paid
             let isOverdue = dueDay.map { $0 < today } ?? false
@@ -187,7 +245,7 @@ enum FinancialPlanningEngine {
             let protectedBase: Double
 
             if isOverdue && !isMarkedPaid {
-                protectedBase = max(minimumPayment, min(statementTarget, balance))
+                protectedBase = max(minimumPayment, duePaymentTarget)
             } else if isDueBeforeNextPayday && !isMarkedPaid {
                 protectedBase = minimumPayment
             } else {
@@ -198,79 +256,67 @@ enum FinancialPlanningEngine {
 
             switch strategy {
             case .balanced:
-                preferredTarget = max(protectedBase, minimumPayment, utilizationTarget, min(statementTarget, balance))
+                preferredTarget = balance
             case .avalanche:
-                preferredTarget = max(protectedBase, minimumPayment, min(statementTarget, balance), utilizationTarget)
+                preferredTarget = balance
             case .snowball:
                 preferredTarget = balance
             case .dueDate:
-                preferredTarget = isDueBeforeNextPayday ? balance : max(protectedBase, minimumPayment)
+                preferredTarget = balance
             case .utilization:
                 preferredTarget = max(protectedBase, minimumPayment, utilizationTarget)
             case .statementBalance:
                 preferredTarget = max(protectedBase, minimumPayment, statementTarget)
             }
 
-            let basePayment = roundedToCents(min(remainingCash, protectedBase))
-            paymentsByID[bill.id] = basePayment
-            targetsByID[bill.id] = roundedToCents(min(balance, preferredTarget))
-            remainingCash = roundedToCents(max(0, remainingCash - basePayment))
+            let priorityScore = max(cardPriorityScore(for: bill, nextPayday: nextPayday, creditAccountsByID: creditAccountsByID, strategy: strategy), 0.1)
+            return CreditCardPaymentCandidate(
+                bill: bill,
+                balance: balance,
+                minimumPayment: minimumPayment,
+                utilization: utilization,
+                annualPercentageRate: details?.annualPercentageRate,
+                protectedTarget: roundedToCents(min(balance, protectedBase)),
+                preferredTarget: roundedToCents(min(balance, preferredTarget)),
+                priorityScore: priorityScore,
+                protectionScore: max(priorityScore + largeBalanceScore(for: balance), 0.1)
+            )
         }
+
+        // First, protect every urgent card before allowing extra payoff to crowd out peers.
+        allocateCreditCardCash(
+            remainingCash: &remainingCash,
+            candidates: candidates.filter { $0.protectedTarget > 0 },
+            paymentsByID: &paymentsByID,
+            target: \.protectedTarget,
+            weight: \.protectionScore
+        )
 
         // Then spread any remaining cash across multiple cards based on priority and need.
-        while remainingCash > 0 {
-            let candidates = prioritizedCards.compactMap { bill -> (Bill, Double, Double)? in
-                let currentPayment = paymentsByID[bill.id] ?? 0
-                let target = targetsByID[bill.id] ?? 0
-                let additionalNeed = roundedToCents(max(0, target - currentPayment))
-                guard additionalNeed > 0 else { return nil }
-                let score = max(cardPriorityScore(for: bill, nextPayday: nextPayday, strategy: strategy), 0.1)
-                return (bill, score, additionalNeed)
-            }
+        allocateCreditCardCash(
+            remainingCash: &remainingCash,
+            candidates: candidates,
+            paymentsByID: &paymentsByID,
+            target: \.preferredTarget,
+            weight: \.priorityScore
+        )
 
-            guard !candidates.isEmpty else { break }
-
-            let totalWeight = candidates.reduce(0) { $0 + $1.1 }
-            var allocatedThisPass = 0.0
-
-            for (bill, score, additionalNeed) in candidates where remainingCash > 0 {
-                let weightedShare = roundedToCents(remainingCash * (score / totalWeight))
-                let proposed = max(weightedShare, min(remainingCash, 25))
-                let extraPayment = roundedToCents(min(remainingCash, additionalNeed, proposed))
-                guard extraPayment > 0 else { continue }
-                paymentsByID[bill.id, default: 0] += extraPayment
-                remainingCash = roundedToCents(max(0, remainingCash - extraPayment))
-                allocatedThisPass += extraPayment
-            }
-
-            if allocatedThisPass == 0 {
-                for (bill, _, additionalNeed) in candidates where remainingCash > 0 {
-                    let extraPayment = roundedToCents(min(remainingCash, additionalNeed))
-                    guard extraPayment > 0 else { continue }
-                    paymentsByID[bill.id, default: 0] += extraPayment
-                    remainingCash = roundedToCents(max(0, remainingCash - extraPayment))
-                }
-                break
-            }
-        }
-
-        for bill in prioritizedCards {
-            guard let details = bill.creditCardDetails else { continue }
-            let balance = max(details.cardBalance, 0)
-            let minimumPayment = min(details.effectiveMinimumPayment, balance)
-            let payment = roundedToCents(min(paymentsByID[bill.id] ?? 0, balance))
+        var recommendations: [CreditCardPaymentRecommendation] = []
+        for candidate in candidates {
+            let payment = roundedToCents(min(paymentsByID[candidate.bill.id] ?? 0, candidate.balance))
             guard payment > 0 else { continue }
 
             recommendations.append(
                 CreditCardPaymentRecommendation(
-                    billID: bill.id,
-                    billName: bill.name ?? "Card",
+                    billID: candidate.bill.id,
+                    billName: candidate.bill.name ?? "Card",
                     recommendedPayment: payment,
-                    rationale: rationale(for: bill, nextPayday: nextPayday, strategy: strategy),
-                    dueDate: bill.dueDate,
-                    utilization: details.utilization,
-                    annualPercentageRate: details.annualPercentageRate,
-                    minimumPayment: minimumPayment
+                    activeBalance: candidate.balance,
+                    rationale: rationale(for: candidate.bill, nextPayday: nextPayday, strategy: strategy),
+                    dueDate: candidate.bill.dueDate,
+                    utilization: candidate.utilization,
+                    annualPercentageRate: candidate.annualPercentageRate,
+                    minimumPayment: candidate.minimumPayment
                 )
             )
         }
@@ -281,13 +327,15 @@ enum FinancialPlanningEngine {
     static func recommendGoalContributions(
         availableCash: Double,
         goals: [Goal],
-        nextPayday: Date?
+        nextPayday: Date?,
+        includeOnTrackGoals: Bool = true
     ) -> [GoalSavingInsight] {
         let totalAvailable = roundedToCents(max(availableCash, 0))
         let progressInsights = goalProgressInsights(goals: goals, nextPayday: nextPayday)
+        let eligibleInsights = includeOnTrackGoals ? progressInsights : progressInsights.filter(\.isBehindSchedule)
 
         guard totalAvailable > 0 else {
-            return progressInsights.map { insight in
+            return eligibleInsights.map { insight in
                 GoalSavingInsight(
                     goalID: insight.goalID,
                     goalName: insight.goalName,
@@ -299,7 +347,7 @@ enum FinancialPlanningEngine {
             }
         }
 
-        let weightedGoals: [(GoalSavingInsight, Double)] = progressInsights.compactMap { insight in
+        let weightedGoals: [(GoalSavingInsight, Double)] = eligibleInsights.compactMap { insight in
             guard let goal = goals.first(where: { $0.id == insight.goalID }), goal.remainingAmount > 0 else { return nil }
             let urgency = goal.daysUntilDeadline > 0 ? 1.0 / Double(goal.daysUntilDeadline) : 1.0
             let behindWeight = insight.isBehindSchedule ? 1.5 : 0
@@ -444,6 +492,7 @@ enum FinancialPlanningEngine {
         goals: [Goal],
         bills: [Bill],
         nextPayday: Date?,
+        creditAccounts: [CreditCardPlanningAccount] = [],
         allocationStrategy: PaycheckAllocationStrategy = .balanced,
         payoffStrategy: CreditCardPayoffStrategy = .balanced
     ) -> [RecommendationScenario] {
@@ -464,6 +513,7 @@ enum FinancialPlanningEngine {
                     goals: goals,
                     bills: bills,
                     nextPayday: nextPayday,
+                    creditAccounts: creditAccounts,
                     allocationStrategy: allocationStrategy,
                     payoffStrategy: payoffStrategy
                 )
@@ -476,6 +526,7 @@ enum FinancialPlanningEngine {
         goals: [Goal],
         bills: [Bill],
         nextPayday: Date?,
+        creditAccounts: [CreditCardPlanningAccount] = [],
         allocationStrategy: PaycheckAllocationStrategy = .balanced,
         payoffStrategy: CreditCardPayoffStrategy = .balanced
     ) -> RecommendationDigest {
@@ -484,6 +535,7 @@ enum FinancialPlanningEngine {
             goals: goals,
             bills: bills,
             nextPayday: nextPayday,
+            creditAccounts: creditAccounts,
             allocationStrategy: allocationStrategy,
             payoffStrategy: payoffStrategy
         )
@@ -549,45 +601,191 @@ enum FinancialPlanningEngine {
         return max(0.1, goal.weight) + urgency + behindWeight
     }
 
-    private static func cardPriorityScore(for bill: Bill, nextPayday: Date?, strategy: CreditCardPayoffStrategy) -> Double {
-        guard let details = bill.creditCardDetails else { return 0 }
+    private static func protectedGoalBudget(
+        availableCash: Double,
+        goals: [Goal],
+        nextPayday: Date?,
+        allocationStrategy: PaycheckAllocationStrategy,
+        hasCardDebt: Bool
+    ) -> Double {
+        guard hasCardDebt else { return 0 }
+        let behindNeed = goalProgressInsights(goals: goals, nextPayday: nextPayday)
+            .filter(\.isBehindSchedule)
+            .reduce(0) { total, insight in
+                total + max(insight.shortfallAmount, insight.targetPerPaycheck)
+            }
+        guard behindNeed > 0 else { return 0 }
 
-        let utilizationScore = details.utilization * 100
-        let aprScore = (details.annualPercentageRate ?? 0) * 100
-        let balanceScore = details.cardBalance > 0 ? (10_000 / max(details.cardBalance, 1)) : 0
-        let statementScore = (details.statementBalance ?? 0) / 50
-        let minimumPaymentScore = min(details.effectiveMinimumPayment / 10, 20)
-        let isMarkedPaid = bill.datePaid != nil || bill.status == .paid
-        let dueSoonScore = dueSoonWeight(for: bill.dueDate, nextPayday: nextPayday, isMarkedPaid: isMarkedPaid)
-        let autopayPenalty = bill.autopayEnabled ? -3.0 : 0
-        let unpaidBonus = (bill.datePaid == nil && details.cardBalance > 0) ? 15.0 : 0
-
-        switch strategy {
+        let capRatio: Double
+        switch allocationStrategy {
         case .balanced:
-            return utilizationScore + aprScore + minimumPaymentScore + dueSoonScore + unpaidBonus + autopayPenalty
-        case .avalanche:
-            return (aprScore * 1.6) + minimumPaymentScore + dueSoonScore + (utilizationScore * 0.5) + unpaidBonus + autopayPenalty
-        case .snowball:
-            return balanceScore + minimumPaymentScore + dueSoonScore + unpaidBonus + autopayPenalty
-        case .dueDate:
-            return (dueSoonScore * 2) + minimumPaymentScore + (aprScore * 0.4) + unpaidBonus + autopayPenalty
-        case .utilization:
-            return (utilizationScore * 2) + dueSoonScore + minimumPaymentScore + unpaidBonus + autopayPenalty
-        case .statementBalance:
-            return statementScore + dueSoonScore + minimumPaymentScore + unpaidBonus + autopayPenalty
+            capRatio = 1 - allocationRatio(for: allocationStrategy)
+        case .debtFirst:
+            capRatio = 0.1
+        case .goalsFirst:
+            capRatio = 1 - allocationRatio(for: allocationStrategy)
+        }
+
+        return roundedToCents(min(behindNeed, availableCash * capRatio))
+    }
+
+    private static func allocateCreditCardCash(
+        remainingCash: inout Double,
+        candidates: [CreditCardPaymentCandidate],
+        paymentsByID: inout [UUID: Double],
+        target: KeyPath<CreditCardPaymentCandidate, Double>,
+        weight: KeyPath<CreditCardPaymentCandidate, Double>
+    ) {
+        while remainingCash > 0 {
+            let openCandidates = candidates.compactMap { candidate -> (CreditCardPaymentCandidate, Double, Double)? in
+                let currentPayment = paymentsByID[candidate.bill.id] ?? 0
+                let additionalNeed = roundedToCents(max(0, candidate[keyPath: target] - currentPayment))
+                guard additionalNeed > 0 else { return nil }
+                return (candidate, max(candidate[keyPath: weight], 0.1), additionalNeed)
+            }
+
+            guard !openCandidates.isEmpty else { break }
+
+            let passCash = remainingCash
+            let totalWeight = openCandidates.reduce(0) { $0 + $1.1 }
+            let minimumSlice = roundedToCents(min(passCash / Double(openCandidates.count), 25))
+            var allocatedThisPass = 0.0
+
+            for (candidate, score, additionalNeed) in openCandidates where remainingCash > 0 {
+                let weightedShare = roundedToCents(passCash * (score / totalWeight))
+                let proposed = max(weightedShare, minimumSlice)
+                let extraPayment = roundedToCents(min(remainingCash, additionalNeed, proposed))
+                guard extraPayment > 0 else { continue }
+                paymentsByID[candidate.bill.id, default: 0] = roundedToCents(
+                    (paymentsByID[candidate.bill.id] ?? 0) + extraPayment
+                )
+                remainingCash = roundedToCents(max(0, remainingCash - extraPayment))
+                allocatedThisPass = roundedToCents(allocatedThisPass + extraPayment)
+            }
+
+            if allocatedThisPass == 0 {
+                break
+            }
         }
     }
 
+    private static func cardPriorityScore(
+        for bill: Bill,
+        nextPayday: Date?,
+        creditAccountsByID: [String: CreditCardPlanningAccount] = [:],
+        strategy: CreditCardPayoffStrategy
+    ) -> Double {
+        let details = bill.creditCardDetails
+        let linkedAccount = linkedCreditAccount(for: bill, creditAccountsByID: creditAccountsByID)
+        let balance = effectiveCardBalance(for: bill, creditAccountsByID: creditAccountsByID)
+        let creditLimit = effectiveCreditLimit(details: details, linkedAccount: linkedAccount, balance: balance)
+        let utilization = creditLimit > 0 ? balance / creditLimit : 0
+        let utilizationScore = utilization * 100
+        let aprScore = (details?.annualPercentageRate ?? 0) * 100
+        let largeBalanceScore = largeBalanceScore(for: balance)
+        let smallBalanceScore = balance > 0 ? (10_000 / max(balance, 1)) : 0
+        let statementScore = statementTarget(for: bill, balance: balance) / 50
+        let minimumPaymentScore = min(effectiveMinimumPayment(for: bill) / 10, 20)
+        let isMarkedPaid = bill.datePaid != nil || bill.status == .paid
+        let dueSoonScore = dueSoonWeight(for: bill.dueDate, nextPayday: nextPayday, isMarkedPaid: isMarkedPaid)
+        let autopayPenalty = bill.autopayEnabled ? -3.0 : 0
+        let unpaidBonus = (bill.datePaid == nil && balance > 0) ? 15.0 : 0
+
+        switch strategy {
+        case .balanced:
+            return utilizationScore + aprScore + minimumPaymentScore + (dueSoonScore * 0.35) + (largeBalanceScore * 1.2) + unpaidBonus + autopayPenalty
+        case .avalanche:
+            return (aprScore * 1.6) + minimumPaymentScore + dueSoonScore + (utilizationScore * 0.5) + (largeBalanceScore * 0.25) + unpaidBonus + autopayPenalty
+        case .snowball:
+            return smallBalanceScore + minimumPaymentScore + dueSoonScore + unpaidBonus + autopayPenalty
+        case .dueDate:
+            return (dueSoonScore * 2) + minimumPaymentScore + (aprScore * 0.4) + (largeBalanceScore * 0.35) + unpaidBonus + autopayPenalty
+        case .utilization:
+            return (utilizationScore * 2) + dueSoonScore + minimumPaymentScore + unpaidBonus + autopayPenalty
+        case .statementBalance:
+            return statementScore + dueSoonScore + minimumPaymentScore + (largeBalanceScore * 0.2) + unpaidBonus + autopayPenalty
+        }
+    }
+
+    private static func largeBalanceScore(for balance: Double) -> Double {
+        min(max(balance, 0) / 100, 50)
+    }
+
+    private static func effectiveCardBalance(
+        for bill: Bill,
+        creditAccountsByID: [String: CreditCardPlanningAccount] = [:]
+    ) -> Double {
+        guard bill.category == .creditCard else { return 0 }
+        let details = bill.creditCardDetails
+        let linkedBalance = linkedCreditAccount(for: bill, creditAccountsByID: creditAccountsByID)?.balanceAmount ?? 0
+        return max(
+            linkedBalance,
+            abs(details?.cardBalance ?? 0),
+            abs(details?.statementBalance ?? 0),
+            details?.effectiveMinimumPayment ?? 0,
+            bill.amount ?? 0,
+            0
+        )
+    }
+
+    private static func effectiveMinimumPayment(for bill: Bill) -> Double {
+        let detailedMinimum = bill.creditCardDetails?.effectiveMinimumPayment ?? 0
+        if detailedMinimum > 0 {
+            return detailedMinimum
+        }
+        return max(bill.amount ?? 0, 0)
+    }
+
+    private static func linkedCreditAccount(
+        for bill: Bill,
+        creditAccountsByID: [String: CreditCardPlanningAccount]
+    ) -> CreditCardPlanningAccount? {
+        guard let plaidAccountID = bill.plaidAccountID, !plaidAccountID.isEmpty else { return nil }
+        return creditAccountsByID[plaidAccountID]
+    }
+
+    private static func effectiveCreditLimit(
+        details: CreditCardDetails?,
+        linkedAccount: CreditCardPlanningAccount?,
+        balance: Double
+    ) -> Double {
+        let linkedLimit = balance + max(linkedAccount?.availableBalance ?? 0, 0)
+        return max(details?.creditLimit ?? 0, linkedLimit, balance, 0)
+    }
+
+    private static func statementTarget(for bill: Bill, balance: Double) -> Double {
+        if let statementBalance = bill.creditCardDetails?.statementBalance {
+            return min(abs(statementBalance), balance)
+        }
+        if let amount = bill.amount, amount > 0 {
+            return min(amount, balance)
+        }
+        return balance
+    }
+
+    private static func duePaymentTarget(for bill: Bill, balance: Double) -> Double {
+        if let statementBalance = bill.creditCardDetails?.statementBalance {
+            return min(abs(statementBalance), balance)
+        }
+        if let minimumPayment = bill.creditCardDetails?.effectiveMinimumPayment, minimumPayment > 0 {
+            return min(minimumPayment, balance)
+        }
+        if let amount = bill.amount, amount > 0 {
+            return min(amount, balance)
+        }
+        return 0
+    }
+
     private static func rationale(for bill: Bill, nextPayday: Date?, strategy: CreditCardPayoffStrategy) -> String {
-        guard let details = bill.creditCardDetails else { return "Prioritized because it is active." }
+        let details = bill.creditCardDetails
         let isMarkedPaid = bill.datePaid != nil || bill.status == .paid
         let isDueBeforeNextPayday = isDueBefore(nextPayday: nextPayday, dueDate: bill.dueDate)
 
         switch strategy {
         case .balanced:
             if isDueBeforeNextPayday && !isMarkedPaid { return "Due before next payday and still unpaid" }
-            if details.utilization >= 0.3 { return "High utilization and active balance" }
-            if let apr = details.annualPercentageRate, apr >= 0.2 { return "High APR balance" }
+            if (details?.utilization ?? 0) >= 0.3 { return "High utilization and active balance" }
+            if let apr = details?.annualPercentageRate, apr >= 0.2 { return "High APR balance" }
             if dueSoonWeight(for: bill.dueDate, nextPayday: nextPayday, isMarkedPaid: isMarkedPaid) >= 20 { return "Payment due soon" }
             return "Balanced payoff priority"
         case .avalanche:
@@ -610,7 +808,7 @@ enum FinancialPlanningEngine {
             return isMarkedPaid ? 0 : 55
         }
         if isDueBefore(nextPayday: nextPayday, dueDate: dueDate) && !isMarkedPaid {
-            return 45
+            return 45 + max(0, Double(14 - min(days, 14)))
         }
         switch days {
         case 0...3:

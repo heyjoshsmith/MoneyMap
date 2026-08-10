@@ -34,6 +34,7 @@ struct PaydayView: View {
     
     @Query private var bills: [Bill]
     @Query(sort: \Goal.deadline, order: .forward) private var goals: [Goal]
+    @State private var notificationRefreshTask: Task<Void, Never>?
     private var timeString: String {
         notificationTime.formatted(.dateTime.hour().minute())
     }
@@ -169,22 +170,22 @@ struct PaydayView: View {
             .navigationTitle("Pay")
             .background(MoneyMapDesign.groupedBackground)
             .onAppear {
-                rescheduleNotifications()
+                scheduleNotificationRefresh()
             }
             .onChange(of: notifyDayBeforeEnabled) {
-                rescheduleNotifications()
+                scheduleNotificationRefresh()
             }
             .onChange(of: notifyDayOfEnabled) {
-                rescheduleNotifications()
+                scheduleNotificationRefresh()
             }
             .onChange(of: notifyGoalBehindEnabled) {
-                rescheduleNotifications()
+                scheduleNotificationRefresh()
             }
             .onChange(of: notificationTime) {
-                rescheduleNotifications()
+                scheduleNotificationRefresh()
             }
             .onChange(of: paydayManager.nextPayday) {
-                rescheduleNotifications()
+                scheduleNotificationRefresh()
             }
             .popover(isPresented: $showingTimePicker) {
                 ZStack {
@@ -251,6 +252,16 @@ private struct PaydayDateRow: View {
 }
 
 private extension PaydayView {
+    func scheduleNotificationRefresh() {
+        notificationRefreshTask?.cancel()
+        notificationRefreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            rescheduleNotifications()
+            notificationRefreshTask = nil
+        }
+    }
+
     func rescheduleNotifications() {
         schedulePaydayNotificationsIfAuthorized(paydayManager.upcomingPaydaysForNextYear())
         notificationManager.scheduleGoalProgressNotifications(

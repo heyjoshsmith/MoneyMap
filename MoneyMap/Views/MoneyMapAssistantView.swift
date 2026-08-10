@@ -20,6 +20,10 @@ struct MoneyMapAssistantView: View {
     @State private var answeredQuery = ""
     @State private var isAsking = false
     @State private var errorMessage: String?
+    @State private var resolvedPayAmount: Double = 0
+    @State private var payAmountRefreshTask: Task<Void, Never>?
+    @AppStorage("recommendation_paycheck_cash_source") private var paycheckCashSourceRaw = PaycheckCashSource.manual.rawValue
+    @AppStorage("recommendation_paycheck_cash_account_id") private var paycheckCashAccountID = ""
 
     private var availabilityMessage: String? {
         MoneyMapAssistant.availabilityMessage(for: MoneyMapAssistant.model.availability)
@@ -34,7 +38,15 @@ struct MoneyMapAssistantView: View {
     }
 
     private var amountPerPayday: Double {
-        MoneyMapPlanningStore.resolvedPaycheckAmount(manualAmount: paydayConfigs.first?.amountPerPayday ?? 0)
+        max(resolvedPayAmount, 0)
+    }
+
+    private var manualAmountPerPayday: Double {
+        paydayConfigs.first?.amountPerPayday ?? 0
+    }
+
+    private var payAmountRefreshSignature: String {
+        "\(manualAmountPerPayday)|\(paycheckCashSourceRaw)|\(paycheckCashAccountID)"
     }
 
     private var nextPayday: Date? {
@@ -155,6 +167,12 @@ struct MoneyMapAssistantView: View {
                 Task {
                     await ask()
                 }
+            }
+            .onAppear {
+                refreshResolvedPayAmount()
+            }
+            .onChange(of: payAmountRefreshSignature) { _, _ in
+                refreshResolvedPayAmount()
             }
         }
     }
@@ -345,6 +363,27 @@ struct MoneyMapAssistantView: View {
         }
 
         isAsking = false
+    }
+
+    private func refreshResolvedPayAmount() {
+        payAmountRefreshTask?.cancel()
+        let manualAmount = manualAmountPerPayday
+        resolvedPayAmount = manualAmount
+
+        payAmountRefreshTask = Task {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+
+            let resolvedAmount = await Task.detached(priority: .utility) {
+                MoneyMapPlanningStore.resolvedPaycheckAmount(manualAmount: manualAmount)
+            }.value
+
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                resolvedPayAmount = resolvedAmount
+                payAmountRefreshTask = nil
+            }
+        }
     }
 }
 

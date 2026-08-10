@@ -34,6 +34,11 @@ struct HomeView: View {
     @State private var showingBillReview = false
     @State private var billsRefreshToken = 0
     @State private var didScheduleInitialDonations = false
+    @State private var resolvedPayAmount: Double = 0
+    @State private var payAmountRefreshTask: Task<Void, Never>?
+    @State private var billStatusRefreshTask: Task<Void, Never>?
+    @AppStorage("recommendation_paycheck_cash_source") private var paycheckCashSourceRaw = PaycheckCashSource.manual.rawValue
+    @AppStorage("recommendation_paycheck_cash_account_id") private var paycheckCashAccountID = ""
 
     private var today: Date {
         Calendar.current.startOfDay(for: Date())
@@ -52,7 +57,15 @@ struct HomeView: View {
     }
 
     private var payAmount: Double {
-        MoneyMapPlanningStore.resolvedPaycheckAmount(manualAmount: paydayConfigs.first?.amountPerPayday ?? 0)
+        max(resolvedPayAmount, 0)
+    }
+
+    private var manualPayAmount: Double {
+        paydayConfigs.first?.amountPerPayday ?? 0
+    }
+
+    private var payAmountRefreshSignature: String {
+        "\(manualPayAmount)|\(paycheckCashSourceRaw)|\(paycheckCashAccountID)"
     }
 
     private var setupIsComplete: Bool {
@@ -279,11 +292,18 @@ struct HomeView: View {
             }
             .onAppear {
                 routeToRequestedDestinationIfNeeded()
-                refreshBillStatusesFromTransactions()
+                scheduleBillStatusRefresh()
+                refreshResolvedPayAmount()
                 scheduleInitialIntentDonations()
             }
-            .onChange(of: transactionPaymentSignature) { _, _ in
-                refreshBillStatusesFromTransactions()
+            .onChange(of: transactions.count) { _, _ in
+                scheduleBillStatusRefresh()
+            }
+            .onChange(of: bills.count) { _, _ in
+                scheduleBillStatusRefresh()
+            }
+            .onChange(of: payAmountRefreshSignature) { _, _ in
+                refreshResolvedPayAmount()
             }
             .onChange(of: deepLinkManager.requestedPayDestination) { _, _ in
                 routeToRequestedDestinationIfNeeded()
@@ -294,26 +314,51 @@ struct HomeView: View {
         }
     }
 
-    private var transactionPaymentSignature: String {
-        transactions
-            .sorted { BillPaymentMatcher.identityKey(for: $0) < BillPaymentMatcher.identityKey(for: $1) }
-            .map { transaction in
-                [
-                    BillPaymentMatcher.identityKey(for: transaction),
-                    "\((BillPaymentMatcher.transactionDate(for: transaction))?.timeIntervalSince1970 ?? 0)",
-                    "\(transaction.amountUSD ?? 0)",
-                    transaction.friendlyName ?? "",
-                    transaction.merchant ?? "",
-                    transaction.transactionDescription ?? ""
-                ].joined(separator: "|")
-            }
-            .joined(separator: ";")
+    private func scheduleBillStatusRefresh() {
+        billStatusRefreshTask?.cancel()
+        billStatusRefreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            refreshBillStatusesFromTransactions()
+            billStatusRefreshTask = nil
+        }
     }
 
     private func refreshBillStatusesFromTransactions() {
-        if BillPaymentMatcher.refreshStatuses(for: bills, transactions: transactions) {
+        let didChange = MoneyMapDiagnostics.measure(
+            "home.billStatusRefresh",
+            metadata: [
+                "bills": "\(bills.count)",
+                "transactions": "\(transactions.count)"
+            ]
+        ) {
+            BillPaymentMatcher.refreshStatuses(for: bills, transactions: transactions)
+        }
+
+        if didChange {
             try? modelContext.save()
             billsRefreshToken += 1
+        }
+    }
+
+    private func refreshResolvedPayAmount() {
+        payAmountRefreshTask?.cancel()
+        let manualAmount = manualPayAmount
+        resolvedPayAmount = manualAmount
+
+        payAmountRefreshTask = Task {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+
+            let resolvedAmount = await Task.detached(priority: .utility) {
+                MoneyMapPlanningStore.resolvedPaycheckAmount(manualAmount: manualAmount)
+            }.value
+
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                resolvedPayAmount = resolvedAmount
+                payAmountRefreshTask = nil
+            }
         }
     }
 

@@ -21,56 +21,12 @@ struct Settings: View {
         NavigationStack {
             List {
                 appearanceSection
-                NavigationLink("Activity") {
-                    ActivityFeedView(title: "Activity")
-                }
-                NavigationLink("Smart Features") {
-                    SmartFeaturesGuideView()
-                }
-                NavigationLink("Ask MoneyMap") {
-                    MoneyMapAssistantView()
-                }
-                NavigationLink("What's New") {
-                    WhatsNewView(releases: WhatsNewRepository.releases, onDone: nil)
-                }
-                NavigationLink("Notifications") {
-                    ScheduledNotificationsView()
-                }
-                NavigationLink("Payment Methods") {
-                    PaymentMethodsView()
-                }
-                NavigationLink("Bank Connections") {
-                    BankSyncStatusContainerView()
-                }
-                Section {
-                    Button(role: .destructive, action: { showResetGoalSavingsConfirmation = true }) {
-                        Label("Reset Goal Savings", systemImage: "target")
-                    }
-                    .disabled(!hasSavedGoalMoney)
-                    .confirmationDialog("Reset every goal's saved amount to zero?", isPresented: $showResetGoalSavingsConfirmation, titleVisibility: .visible) {
-                        Button("Reset Goal Savings", role: .destructive) {
-                            resetGoalSavings()
-                        }
-                        Button("Cancel", role: .cancel) {}
-                    } message: {
-                        Text("This keeps your goals and payment methods, but clears saved progress from every goal.")
-                    }
-
-                    Button(role: .destructive, action: { showDeleteAllDataConfirmation = true }) {
-                        Label("Remove All Data", systemImage: "trash")
-                    }
-                    .disabled(isDeletingAllData)
-                    .confirmationDialog("Are you sure you want to permanently remove ALL app data from this device and iCloud? This cannot be undone.", isPresented: $showDeleteAllDataConfirmation, titleVisibility: .visible) {
-                        Button("Remove All Data", role: .destructive) {
-                            Task { await removeAllAppData() }
-                        }
-                        Button("Cancel", role: .cancel) {}
-                    }
-                }
+                settingsNavigationSection
+                destructiveActionsSection
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("Settings")
-            .scrollContentBackground(.hidden)
-            .background(MoneyMapDesign.groupedBackground)
+            .moneyMapGroupedListBackground()
         }
     }
     
@@ -105,6 +61,63 @@ extension Settings {
         } header: {
             Text("Appearance")
         }
+        .moneyMapListSectionBackground()
+    }
+
+    private var settingsNavigationSection: some View {
+        Section {
+            NavigationLink("Activity") {
+                ActivityFeedView(title: "Activity")
+            }
+            NavigationLink("Smart Features") {
+                SmartFeaturesGuideView()
+            }
+            NavigationLink("Ask MoneyMap") {
+                MoneyMapAssistantView()
+            }
+            NavigationLink("What's New") {
+                WhatsNewView(releases: WhatsNewRepository.releases, onDone: nil)
+            }
+            NavigationLink("Notifications") {
+                ScheduledNotificationsView()
+            }
+            NavigationLink("Payment Methods") {
+                PaymentMethodsView()
+            }
+            NavigationLink("Bank Connections") {
+                BankSyncStatusContainerView()
+            }
+        }
+        .moneyMapListSectionBackground()
+    }
+
+    private var destructiveActionsSection: some View {
+        Section {
+            Button(role: .destructive, action: { showResetGoalSavingsConfirmation = true }) {
+                Label("Reset Goal Savings", systemImage: "target")
+            }
+            .disabled(!hasSavedGoalMoney)
+            .confirmationDialog("Reset every goal's saved amount to zero?", isPresented: $showResetGoalSavingsConfirmation, titleVisibility: .visible) {
+                Button("Reset Goal Savings", role: .destructive) {
+                    resetGoalSavings()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This keeps your goals and payment methods, but clears saved progress from every goal.")
+            }
+
+            Button(role: .destructive, action: { showDeleteAllDataConfirmation = true }) {
+                Label("Remove All Data", systemImage: "trash")
+            }
+            .disabled(isDeletingAllData)
+            .confirmationDialog("Are you sure you want to permanently remove ALL app data from this device and iCloud? This cannot be undone.", isPresented: $showDeleteAllDataConfirmation, titleVisibility: .visible) {
+                Button("Remove All Data", role: .destructive) {
+                    Task { await removeAllAppData() }
+                }
+                Button("Cancel", role: .cancel) {}
+            }
+        }
+        .moneyMapListSectionBackground()
     }
 
     func removeAllAppData() async {
@@ -326,6 +339,7 @@ struct PaymentMethodEditor: View {
                         Label("This card is managed from its bill.", systemImage: "creditcard")
                             .foregroundStyle(.secondary)
                     }
+                    .moneyMapListSectionBackground()
                 }
 
                 Section("Basics") {
@@ -338,6 +352,7 @@ struct PaymentMethodEditor: View {
                     }
                     TextField("Institution", text: $institutionName)
                 }
+                .moneyMapListSectionBackground()
 
                 Section {
                     TextField("Last 4 Digits", text: $lastFourDigits)
@@ -352,12 +367,15 @@ struct PaymentMethodEditor: View {
                 } footer: {
                     Text("MoneyMap stores labels and identifying digits only. No bank or card connection is set up yet.")
                 }
+                .moneyMapListSectionBackground()
 
                 Section("Notes") {
                     TextField("Optional notes", text: $notes, axis: .vertical)
                         .lineLimit(2...5)
                 }
+                .moneyMapListSectionBackground()
             }
+            .moneyMapGroupedListBackground()
             .navigationTitle(paymentMethod == nil ? "New Method" : "Edit Method")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

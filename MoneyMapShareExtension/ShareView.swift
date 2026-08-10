@@ -22,23 +22,6 @@ private enum ShareDesign {
     static let controlCornerRadius = MoneyMapSharedDesign.controlCornerRadius
 }
 
-@main
-struct ShareExtensionApp: App {
-    let container: ModelContainer
-
-    init() {
-        self.container = (try? MoneyMapSharedContainerFactory.make()) ?? MoneyMapSharedContainerFactory.makeInMemory()
-    }
-
-    var body: some Scene {
-        WindowGroup {
-            ShareView(context: .init())
-                .environment(\.modelContext, container.mainContext)
-                .modelContainer(container)
-        }
-    }
-}
-
 struct ShareView: View {
     // 1️⃣ Receive the context from the parent controller
     let context: NSExtensionContext

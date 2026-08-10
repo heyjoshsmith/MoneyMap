@@ -423,7 +423,12 @@ struct PlaidConnectionsView: View {
                 context: modelContext,
                 bills: bills
             )
-            statusMessage = "Imported \(summary.importedCount) transactions. Skipped \(summary.skippedCount)."
+            let settlementSummary = try ExtraMoneyPlanSettlementService.settlePendingPayments(context: modelContext)
+            var message = "Imported \(summary.importedCount) transactions. Skipped \(summary.skippedCount)."
+            if settlementSummary.paidCardCount > 0 {
+                message += " Confirmed \(settlementSummary.paidCardCount) pending card payment\(settlementSummary.paidCardCount == 1 ? "" : "s")."
+            }
+            statusMessage = message
             AppRefreshEvents.notifyBillsDidChange()
         }
     }

@@ -153,3 +153,21 @@ public struct BankSyncFreshness: Equatable {
         return "\(daysOld) days old"
     }
 }
+
+public struct PlaidMacRefreshRequestPolicy: Equatable {
+    public static let defaultStaleInterval: TimeInterval = 5 * 60
+
+    public let staleInterval: TimeInterval
+
+    public init(staleInterval: TimeInterval = Self.defaultStaleInterval) {
+        self.staleInterval = staleInterval
+    }
+
+    public func shouldRequestMacRefresh(lastSyncAt: Date?, now: Date = .now) -> Bool {
+        guard let lastSyncAt else {
+            return true
+        }
+
+        return now.timeIntervalSince(lastSyncAt) >= staleInterval
+    }
+}

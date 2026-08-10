@@ -77,6 +77,7 @@ public final class ExtraMoneyPlan {
     public var unallocatedAmount: Double = 0
     public var strategyRaw: String = "balanced"
     public var payoffStrategyRaw: String = "balanced"
+    public var appliedAt: Date?
     public var canceledAt: Date?
     public var completedAt: Date?
     public var undoneAt: Date?
@@ -95,7 +96,8 @@ public final class ExtraMoneyPlan {
         plannedGoalAmount: Double,
         unallocatedAmount: Double,
         strategyRaw: String,
-        payoffStrategyRaw: String
+        payoffStrategyRaw: String,
+        appliedAt: Date? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -112,6 +114,7 @@ public final class ExtraMoneyPlan {
         self.unallocatedAmount = max(unallocatedAmount, 0)
         self.strategyRaw = strategyRaw
         self.payoffStrategyRaw = payoffStrategyRaw
+        self.appliedAt = appliedAt
     }
 
     public var status: ExtraMoneyPlanStatus {
@@ -136,6 +139,7 @@ public final class ExtraMoneyPlanItem {
     public var targetIDString: String?
     public var targetNameText: String = ""
     public var amountValue: Double = 0
+    public var rationaleText: String?
     public var matchedTransactionIDText: String?
     public var matchedAt: Date?
 
@@ -146,6 +150,7 @@ public final class ExtraMoneyPlanItem {
         targetID: UUID? = nil,
         targetName: String,
         amount: Double,
+        rationale: String? = nil,
         matchedTransactionID: String? = nil,
         matchedAt: Date? = nil
     ) {
@@ -155,6 +160,7 @@ public final class ExtraMoneyPlanItem {
         self.targetIDString = targetID?.uuidString
         self.targetNameText = targetName
         self.amountValue = max(amount, 0)
+        self.rationaleText = rationale
         self.matchedTransactionIDText = matchedTransactionID
         self.matchedAt = matchedAt
     }
@@ -162,6 +168,11 @@ public final class ExtraMoneyPlanItem {
     public var planID: UUID? {
         get { UUID(uuidString: planIDString) }
         set { planIDString = newValue?.uuidString ?? "" }
+    }
+
+    public var targetID: UUID? {
+        get { targetIDString.flatMap(UUID.init(uuidString:)) }
+        set { targetIDString = newValue?.uuidString }
     }
 
     public var kind: ExtraMoneyPlanItemKind {

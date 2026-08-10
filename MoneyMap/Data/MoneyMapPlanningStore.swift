@@ -53,7 +53,16 @@ enum MoneyMapPlanningStore {
             .filter { account in
                 activeItemIDs.isEmpty || activeItemIDs.contains(account.itemID)
             }
+            .filter { account in
+                isEligiblePaycheckCashAccount(account)
+            }
             .map(PaycheckCashAccount.init)
+    }
+
+    static func isEligiblePaycheckCashAccount(_ account: PlaidAccountSnapshot) -> Bool {
+        let type = account.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let subtype = account.subtype?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return type == "depository" || subtype == "checking" || subtype == "savings"
     }
 
     static func resolvedPaycheckAmount(manualAmount: Double) -> Double {

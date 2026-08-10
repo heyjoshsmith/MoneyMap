@@ -31,6 +31,7 @@ struct ContentView: View {
     @State private var showingWhatsNew = false
     @State private var didScheduleInitialStartupWork = false
     @State private var didCompleteInitialStartupWork = false
+    @State private var indexAndNotificationRefreshTask: Task<Void, Never>?
     
     var body: some View {
         TabView(selection: $selection) {
@@ -97,10 +98,8 @@ struct ContentView: View {
         .onChange(of: goalNotificationSignature) { _, _ in
             syncGoalNotifications()
         }
-        .onChange(of: searchIndexSignature) { _, _ in
-            syncBillNotifications()
-            syncSearchIndex()
-            reloadWidgetTimelines()
+        .onChange(of: searchIndexRefreshSignature) { _, _ in
+            scheduleIndexAndNotificationRefresh()
         }
         .onChange(of: paymentMethodSyncSignature) { _, _ in
             syncPaymentMethods()
@@ -171,6 +170,18 @@ struct ContentView: View {
         }
     }
 
+    private func scheduleIndexAndNotificationRefresh() {
+        indexAndNotificationRefreshTask?.cancel()
+        indexAndNotificationRefreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 750_000_000)
+            guard !Task.isCancelled else { return }
+            syncBillNotifications()
+            syncSearchIndex()
+            reloadWidgetTimelines()
+            indexAndNotificationRefreshTask = nil
+        }
+    }
+
     private func consumePendingRouteIfNeeded() {
         guard let route = PendingRouteStore.consume() else { return }
         handle(route: route)
@@ -197,25 +208,9 @@ struct ContentView: View {
         notificationManager.scheduleBillDueNotifications(for: bills)
     }
 
-    private var searchIndexSignature: String {
-        let goalSignature = goals
-            .sorted { $0.id.uuidString < $1.id.uuidString }
-            .map { "\($0.id.uuidString)|\($0.amountSaved)|\($0.targetAmount ?? 0)" }
-            .joined(separator: ";")
-        let billSignature = bills
-            .sorted { $0.id.uuidString < $1.id.uuidString }
-            .map {
-                "\($0.id.uuidString)|\($0.amount ?? 0)|\($0.dueDate?.timeIntervalSince1970 ?? 0)|\($0.datePaid?.timeIntervalSince1970 ?? 0)|\($0.autopayEnabled)|\($0.gracePeriodDays ?? 0)"
-            }
-            .joined(separator: ";")
-        let transactionSignature = transactions
-            .sorted { MoneyMapTransactionStore.mostRecentFirst(lhs: $0, rhs: $1) }
-            .map { transaction in
-                "\(transactionEntityID(for: transaction))|\(transaction.amountUSD ?? 0)|\((transaction.transactionDate ?? transaction.clearingDate)?.timeIntervalSince1970 ?? 0)"
-            }
-            .joined(separator: ";")
-        let paydayAmount = resolvedPaycheckAmount
-        return "\(goalSignature)#\(billSignature)#\(transactionSignature)#\(paydayAmount)#\(paydayManager.nextPayday?.timeIntervalSince1970 ?? 0)"
+    private var searchIndexRefreshSignature: String {
+        let paydayAmount = paydayConfigs.first?.amountPerPayday ?? 0
+        return "\(goals.count)#\(bills.count)#\(transactions.count)#\(paydayAmount)#\(paydayManager.nextPayday?.timeIntervalSince1970 ?? 0)"
     }
 
     private var resolvedPaycheckAmount: Double {

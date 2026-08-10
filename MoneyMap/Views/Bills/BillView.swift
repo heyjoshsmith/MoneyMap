@@ -19,6 +19,7 @@ struct BillView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Query(sort: \PaymentMethod.name) private var paymentMethods: [PaymentMethod]
+    @Query private var allTransactions: [Transaction]
     
     var bill: Bill
     
@@ -62,6 +63,8 @@ struct BillView: View {
     @State private var showingDeleteBillConfirmation = false
     @State private var showingPaymentDateEditor = false
     @State private var showingClearPaymentConfirmation = false
+    @State private var pendingSetupAction: BillSetupAction?
+    @State private var billTransactions: [Transaction] = []
     
     enum TransactionSortField: String, CaseIterable, Identifiable {
         case date = "Date"
@@ -90,14 +93,23 @@ struct BillView: View {
     @State private var transactionSortField: TransactionSortField = .date
     @State private var transactionSortOrder: SortOrder = .descending
 
-    init(bill: Bill) {
+    init(bill: Bill, initialSetupAction: BillSetupAction? = nil) {
         self.bill = bill
+        let billID = bill.id
+        _allTransactions = Query(
+            filter: #Predicate<Transaction> { transaction in
+                transaction.linkedBillID == billID || transaction.creditCard?.id == billID
+            },
+            sort: \Transaction.transactionDate,
+            order: .reverse
+        )
         _paymentMode = State(initialValue: bill.paymentMode)
         _autopayEnabled = State(initialValue: bill.autopayEnabled)
         _autopaySource = State(initialValue: bill.autopaySource ?? "")
         _selectedPaymentMethodID = State(initialValue: bill.paymentMethodID)
         _gracePeriodDays = State(initialValue: bill.gracePeriodDays ?? 0)
         _plaidUnavailable = State(initialValue: bill.plaidUnavailable)
+        _pendingSetupAction = State(initialValue: initialSetupAction)
     }
     
     private var dueDateValue: Date? {
@@ -210,12 +222,17 @@ struct BillView: View {
                 }
                 Divider()
                 Button("Disconnect History", systemImage: "link.badge.minus") {
-                    (bill.transactions ?? []).forEach { transaction in
-                        transaction.creditCard = nil
+                    displayTransactions.forEach { transaction in
+                        if transaction.linkedBillID == bill.id {
+                            transaction.linkedBillID = nil
+                        }
+                        if transaction.creditCard?.id == bill.id {
+                            transaction.creditCard = nil
+                        }
                     }
                     saveLinkedTransactionChange()
                 }
-                .disabled((bill.transactions ?? []).isEmpty)
+                .disabled(displayTransactions.isEmpty)
             }
         }
     }
@@ -247,7 +264,12 @@ struct BillView: View {
         }
         .onAppear {
             MoneyMapIntentDonations.donateOpenBill(bill)
+            refreshDisplayTransactions()
             loadBillMeta()
+            presentPendingSetupActionIfNeeded()
+        }
+        .onChange(of: allTransactions.count) { _, _ in
+            refreshDisplayTransactions()
         }
         .onDisappear {
             saveBillMeta()
@@ -554,7 +576,19 @@ struct BillView: View {
     }
 
     private var displayTransactions: [Transaction] {
-        sortedDirectTransactions(bill.transactions ?? [])
+        billTransactions
+    }
+
+    private func refreshDisplayTransactions() {
+        billTransactions = MoneyMapDiagnostics.measure(
+            "bill.detail.transactions",
+            metadata: [
+                "bill": bill.id.uuidString,
+                "candidateTransactions": "\(allTransactions.count)"
+            ]
+        ) {
+            sortedDirectTransactions(BillPaymentMatcher.connectedTransactions(for: bill, in: allTransactions))
+        }
     }
 
     private func handleImportResult(_ result: Result<[URL], Error>) {
@@ -740,7 +774,7 @@ struct BillView: View {
 
     private func sortedDirectTransactions(_ values: [Transaction]) -> [Transaction] {
         values
-            .filter { $0.creditCard?.id == bill.id }
+            .filter { BillPaymentMatcher.isConnected($0, to: bill) }
             .sorted {
                 (BillPaymentMatcher.transactionDate(for: $0) ?? .distantPast) >
                     (BillPaymentMatcher.transactionDate(for: $1) ?? .distantPast)
@@ -1589,6 +1623,37 @@ struct BillView: View {
         plaidUnavailable = bill.plaidUnavailable
     }
 
+    private func presentPendingSetupActionIfNeeded() {
+        guard let action = pendingSetupAction else { return }
+        pendingSetupAction = nil
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            switch action {
+            case .editBill:
+                showingBillEditor = true
+            case .paymentSettings:
+                showingPaymentSettings = true
+            case .paymentLink:
+                showingPaymentLinkSetup = true
+            case .transactionLinking:
+                showingTransactionLinker = true
+            case .recordPayment:
+                if bill.category == .creditCard {
+                    paymentAmount = ""
+                    makingPayment = true
+                } else if canManuallyMarkPaid {
+                    showMarkPaidConfirmation = true
+                }
+            case .openPaymentLink:
+                if let paymentURL = bill.paymentURL {
+                    openURL(paymentURL)
+                } else {
+                    showingPaymentLinkSetup = true
+                }
+            }
+        }
+    }
+
     private func saveBillMeta() {
         let normalizedAutopaySource = autopaySource.trimmingCharacters(in: .whitespacesAndNewlines)
         bill.updatePaymentSettings(
@@ -1751,15 +1816,38 @@ struct BillView: View {
 
     private func linkTransactionToBill(_ transaction: Transaction) {
         let matchingTransactions = transactionsMatchingRawName(of: transaction, in: allTransactionsIncluding(transaction))
-            .filter { $0.creditCard == nil || $0.creditCard?.id == bill.id }
+            .filter { isAvailableForBillConnection($0) || BillPaymentMatcher.isConnected($0, to: bill) }
 
         if matchingTransactions.isEmpty {
-            transaction.creditCard = bill
+            connectTransactionToBill(transaction)
         } else {
-            matchingTransactions.forEach { $0.creditCard = bill }
+            matchingTransactions.forEach(connectTransactionToBill)
         }
 
         saveLinkedTransactionChange()
+    }
+
+    private func connectTransactionToBill(_ transaction: Transaction) {
+        if bill.category != .creditCard,
+           transaction.creditCard?.category == .creditCard,
+           transaction.creditCard?.id != bill.id {
+            transaction.linkedBillID = bill.id
+        } else {
+            transaction.creditCard = bill
+            transaction.linkedBillID = nil
+        }
+    }
+
+    private func isAvailableForBillConnection(_ transaction: Transaction) -> Bool {
+        if let linkedBillID = transaction.linkedBillID, linkedBillID != bill.id {
+            return false
+        }
+
+        guard let owner = transaction.creditCard else {
+            return true
+        }
+
+        return owner.id == bill.id || owner.category == .creditCard
     }
 
     private func allTransactionsIncluding(_ transaction: Transaction) -> [Transaction] {
@@ -1778,14 +1866,22 @@ struct BillView: View {
     }
 
     private func unlinkTransactionFromBill(_ transaction: Transaction) {
-        guard transaction.creditCard?.id == bill.id else { return }
-        transaction.creditCard = nil
+        guard BillPaymentMatcher.isConnected(transaction, to: bill) else { return }
+
+        if transaction.linkedBillID == bill.id {
+            transaction.linkedBillID = nil
+        }
+        if transaction.creditCard?.id == bill.id {
+            transaction.creditCard = nil
+        }
+
         saveLinkedTransactionChange()
     }
 
     private func saveLinkedTransactionChange() {
         do {
             try modelContext.save()
+            refreshDisplayTransactions()
             refreshBillStatusFromTransactions()
             AppRefreshEvents.notifyBillsDidChange()
         } catch {
@@ -2217,49 +2313,224 @@ private struct BillTransactionLinkingView: View {
     let bill: Bill
     let linkTransaction: (Transaction) -> Void
     let unlinkTransaction: (Transaction) -> Void
+    private let plaidContainer: ModelContainer
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Query(sort: \Transaction.transactionDate, order: .reverse) private var transactions: [Transaction]
+    @Query(sort: \PlaidAccountSnapshot.accountName) private var plaidAccounts: [PlaidAccountSnapshot]
+    @State private var plaidAccountSnapshots: [PlaidAccountValue] = []
     @State private var searchText = ""
+    @State private var selectedSourceFilterID: String?
+    @State private var dateFilter: BillTransactionDateFilter = .any
+    @State private var customStartDate = Calendar.current.date(byAdding: .month, value: -1, to: .now) ?? .now
+    @State private var customEndDate = Date()
+    @State private var amountFilter: BillTransactionAmountFilter = .any
+    @State private var minimumAmountText = ""
+    @State private var maximumAmountText = ""
+    @State private var sortField: BillTransactionLinkSortField = .date
+    @State private var sortOrder: BillTransactionLinkSortOrder = .descending
+    @State private var showingFilterSheet = false
     @State private var showingFriendlyNamePrompt = false
     @State private var pendingFriendlyName = ""
     @State private var transactionForFriendlyName: Transaction?
     @State private var matchPrefix = false
     @State private var prefixSearchText = ""
 
+    init(
+        bill: Bill,
+        linkTransaction: @escaping (Transaction) -> Void,
+        unlinkTransaction: @escaping (Transaction) -> Void
+    ) {
+        self.bill = bill
+        self.linkTransaction = linkTransaction
+        self.unlinkTransaction = unlinkTransaction
+
+        do {
+            plaidContainer = try PlaidSyncContainerFactory.make()
+        } catch {
+            plaidContainer = PlaidSyncContainerFactory.makeInMemory(fallbackReason: "Transaction filters could not open the Plaid sync store: \(error.localizedDescription)")
+        }
+    }
+
     private var linkedTransactions: [Transaction] {
-        sorted((bill.transactions ?? []).filter { $0.creditCard?.id == bill.id })
+        sorted(filtered(rawLinkedTransactions))
     }
 
     private var suggestedTransactions: [Transaction] {
-        let linkedKeys = Set(linkedTransactions.map(BillPaymentMatcher.identityKey(for:)))
+        let linkedKeys = Set(rawLinkedTransactions.map(BillPaymentMatcher.identityKey(for:)))
         return BillPaymentMatcher.matchedHistoryTransactions(for: bill, in: transactions)
-            .filter { $0.creditCard == nil }
+            .filter { isAvailableForBillConnection($0) }
+            .filter { !BillPaymentMatcher.isConnected($0, to: bill) }
             .filter { !linkedKeys.contains(BillPaymentMatcher.identityKey(for: $0)) }
     }
 
     private var availableTransactions: [Transaction] {
-        let excludedKeys = Set((linkedTransactions + suggestedTransactions).map(BillPaymentMatcher.identityKey(for:)))
+        let excludedKeys = Set((rawLinkedTransactions + suggestedTransactions).map(BillPaymentMatcher.identityKey(for:)))
         return sorted(transactions)
             .filter { transaction in
-                transaction.creditCard == nil &&
+                isAvailableForBillConnection(transaction) &&
+                    !BillPaymentMatcher.isConnected(transaction, to: bill) &&
                     !excludedKeys.contains(BillPaymentMatcher.identityKey(for: transaction))
             }
-            .filter(matchesSearch)
+            .filter(matchesFilters)
     }
 
     private var filteredSuggestedTransactions: [Transaction] {
-        suggestedTransactions.filter(matchesSearch)
+        sorted(filtered(suggestedTransactions))
+    }
+
+    private var rawLinkedTransactions: [Transaction] {
+        BillPaymentMatcher.connectedTransactions(for: bill, in: transactions)
+    }
+
+    private var allCandidateTransactions: [Transaction] {
+        var seenKeys = Set<String>()
+        return (rawLinkedTransactions + suggestedTransactions + rawAvailableTransactions)
+            .filter { seenKeys.insert(BillPaymentMatcher.identityKey(for: $0)).inserted }
+    }
+
+    private var rawAvailableTransactions: [Transaction] {
+        let excludedKeys = Set((rawLinkedTransactions + suggestedTransactions).map(BillPaymentMatcher.identityKey(for:)))
+        return transactions.filter { transaction in
+            isAvailableForBillConnection(transaction) &&
+                !BillPaymentMatcher.isConnected(transaction, to: bill) &&
+                !excludedKeys.contains(BillPaymentMatcher.identityKey(for: transaction))
+        }
+    }
+
+    private var hasActiveFilters: Bool {
+        selectedSourceFilterID != nil ||
+            dateFilter != .any ||
+            amountFilter != .any ||
+            !minimumAmountText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            !maximumAmountText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var activeFilterSummary: String {
+        let parts = [
+            sourceFilterSummary,
+            dateFilter.summary(
+                bill: bill,
+                customStartDate: customStartDate,
+                customEndDate: customEndDate
+            ),
+            amountFilter.summary(
+                bill: bill,
+                minimumAmount: parsedAmount(minimumAmountText),
+                maximumAmount: parsedAmount(maximumAmountText)
+            )
+        ]
+        .compactMap { $0 }
+
+        return parts.isEmpty ? "No filters" : parts.joined(separator: " - ")
+    }
+
+    private var sourceFilterSummary: String? {
+        guard let selectedSourceFilterID else { return nil }
+        return sourceFilterOptions.first { $0.id == selectedSourceFilterID }?.title ?? "Selected Source"
+    }
+
+    private var sourceFilterOptions: [BillTransactionSourceFilterOption] {
+        var options: [BillTransactionSourceFilterOption] = []
+        let candidates = allCandidateTransactions
+
+        let referencedAccountIDs = Set(candidates.compactMap { $0.plaidAccountID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty })
+        let knownPlaidAccounts = allKnownPlaidAccounts
+        options.append(contentsOf: knownPlaidAccounts.map { account in
+            BillTransactionSourceFilterOption(
+                id: "plaid:\(account.accountID)",
+                title: accountFilterTitle(for: account),
+                subtitle: accountFilterSubtitle(for: account),
+                groupTitle: accountFilterGroupTitle(for: account),
+                systemImage: accountSystemImage(for: account)
+            )
+        })
+
+        let knownAccountIDs = Set(knownPlaidAccounts.map(\.accountID))
+        let orphanAccountIDs = referencedAccountIDs.subtracting(knownAccountIDs)
+        options.append(contentsOf: orphanAccountIDs.sorted().map { accountID in
+            BillTransactionSourceFilterOption(
+                id: "plaid:\(accountID)",
+                title: orphanPlaidAccountTitle(for: accountID),
+                subtitle: nil,
+                groupTitle: "Bank Accounts",
+                systemImage: "building.columns"
+            )
+        })
+
+        let cardTransactions = transactions.compactMap { transaction -> Bill? in
+            guard let card = transaction.creditCard, card.category == .creditCard else { return nil }
+            return card
+        }
+        var seenCardIDs = Set<UUID>()
+        options.append(contentsOf: cardTransactions
+            .filter { seenCardIDs.insert($0.id).inserted }
+            .sorted {
+                ($0.name?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Card")
+                    .localizedCaseInsensitiveCompare($1.name?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Card") == .orderedAscending
+            }
+            .map { card in
+                BillTransactionSourceFilterOption(
+                    id: "card:\(card.id.uuidString)",
+                    title: card.name?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Card",
+                    subtitle: card.creditCardDetails?.issuerName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+                    groupTitle: "Cards",
+                    systemImage: "creditcard"
+                )
+            })
+
+        let purchasedByValues = Set(candidates.compactMap { $0.purchasedBy?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty })
+        options.append(contentsOf: purchasedByValues.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }.map { value in
+            BillTransactionSourceFilterOption(
+                id: "source:\(value.lowercased())",
+                title: value,
+                subtitle: "Imported source",
+                groupTitle: "Import Sources",
+                systemImage: "wallet.pass"
+            )
+        })
+
+        if candidates.contains(where: { $0.plaidAccountID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty == nil }) {
+            options.append(
+                BillTransactionSourceFilterOption(
+                    id: "no-plaid-account",
+                    title: "No Bank Account",
+                    subtitle: nil,
+                    groupTitle: "Other",
+                    systemImage: "building.columns"
+                )
+            )
+        }
+
+        var seenIDs = Set<String>()
+        return options.filter { seenIDs.insert($0.id).inserted }
     }
 
     var body: some View {
         NavigationStack {
             List {
+                if hasActiveFilters {
+                    Section {
+                        Label {
+                            Text(activeFilterSummary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } icon: {
+                            Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                                .foregroundStyle(MoneyMapDesign.calmGreen)
+                        }
+                    } header: {
+                        Text("Active Filters")
+                    }
+                    .listRowBackground(MoneyMapDesign.surfaceBackground)
+                }
+
                 if linkedTransactions.isEmpty && filteredSuggestedTransactions.isEmpty && availableTransactions.isEmpty {
                     MoneyMapEmptyState(
-                        title: "No Transactions",
-                        message: "Import or sync transactions first, then connect the payments that belong to this bill.",
+                        title: allCandidateTransactions.isEmpty ? "No Transactions" : "No Matches",
+                        message: allCandidateTransactions.isEmpty
+                            ? "Import or sync transactions first, then connect the payments that belong to this bill."
+                            : "No transactions match the selected filters.",
                         systemImage: "list.bullet.rectangle"
                     )
                     .listRowBackground(MoneyMapDesign.surfaceBackground)
@@ -2271,6 +2542,7 @@ private struct BillTransactionLinkingView: View {
                             BillTransactionCandidateRow(
                                 transaction: transaction,
                                 state: .connected,
+                                sourceDetail: sourceDetail(for: transaction),
                                 action: {
                                     unlinkTransaction(transaction)
                                 },
@@ -2289,6 +2561,7 @@ private struct BillTransactionLinkingView: View {
                             BillTransactionCandidateRow(
                                 transaction: transaction,
                                 state: .suggested,
+                                sourceDetail: sourceDetail(for: transaction),
                                 action: {
                                     linkTransaction(transaction)
                                 },
@@ -2307,6 +2580,7 @@ private struct BillTransactionLinkingView: View {
                             BillTransactionCandidateRow(
                                 transaction: transaction,
                                 state: .available,
+                                sourceDetail: sourceDetail(for: transaction),
                                 action: {
                                     linkTransaction(transaction)
                                 },
@@ -2326,6 +2600,30 @@ private struct BillTransactionLinkingView: View {
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchText, prompt: "Search transactions")
             .toolbar {
+                ToolbarItemGroup(placement: .topBarLeading) {
+                    Menu {
+                        Picker("Sort by", selection: $sortField) {
+                            ForEach(BillTransactionLinkSortField.allCases) { field in
+                                Label(field.title, systemImage: field.systemImage).tag(field)
+                            }
+                        }
+
+                        Picker("Order", selection: $sortOrder) {
+                            ForEach(BillTransactionLinkSortOrder.allCases) { order in
+                                Label(order.title, systemImage: order.systemImage).tag(order)
+                            }
+                        }
+                    } label: {
+                        Label("Sort", systemImage: "arrow.up.arrow.down")
+                    }
+
+                    Button {
+                        showingFilterSheet = true
+                    } label: {
+                        Label("Filters", systemImage: hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                    }
+                }
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
                         dismiss()
@@ -2342,14 +2640,72 @@ private struct BillTransactionLinkingView: View {
                     handleFriendlyNameResult(saved: saved)
                 }
             }
+            .sheet(isPresented: $showingFilterSheet) {
+                BillTransactionLinkFilterSheet(
+                    selectedSourceFilterID: $selectedSourceFilterID,
+                    dateFilter: $dateFilter,
+                    customStartDate: $customStartDate,
+                    customEndDate: $customEndDate,
+                    amountFilter: $amountFilter,
+                    minimumAmountText: $minimumAmountText,
+                    maximumAmountText: $maximumAmountText,
+                    sourceOptions: sourceFilterOptions,
+                    bill: bill,
+                    hasActiveFilters: hasActiveFilters,
+                    activeFilterSummary: activeFilterSummary,
+                    clearFilters: clearFilters
+                )
+            }
+            .task {
+                loadPlaidAccountSnapshots()
+            }
+            .onChange(of: plaidAccounts.map(\.accountID)) { _, _ in
+                loadPlaidAccountSnapshots()
+            }
         }
     }
 
     private func sorted(_ values: [Transaction]) -> [Transaction] {
-        values.sorted {
-            (BillPaymentMatcher.transactionDate(for: $0) ?? .distantPast) >
-                (BillPaymentMatcher.transactionDate(for: $1) ?? .distantPast)
+        values.sorted { lhs, rhs in
+            let isAscending = sortOrder == .ascending
+
+            switch sortField {
+            case .date:
+                let lhsDate = BillPaymentMatcher.transactionDate(for: lhs) ?? .distantPast
+                let rhsDate = BillPaymentMatcher.transactionDate(for: rhs) ?? .distantPast
+                return isAscending ? lhsDate < rhsDate : lhsDate > rhsDate
+            case .amount:
+                let lhsAmount = abs(lhs.amountUSD ?? 0)
+                let rhsAmount = abs(rhs.amountUSD ?? 0)
+                if lhsAmount == rhsAmount {
+                    return tieBreak(lhs: lhs, rhs: rhs, ascending: isAscending)
+                }
+                return isAscending ? lhsAmount < rhsAmount : lhsAmount > rhsAmount
+            case .merchant:
+                let result = transactionTitle(for: lhs).localizedCaseInsensitiveCompare(transactionTitle(for: rhs))
+                if result == .orderedSame {
+                    return tieBreak(lhs: lhs, rhs: rhs, ascending: isAscending)
+                }
+                return isAscending ? result == .orderedAscending : result == .orderedDescending
+            case .source:
+                let result = (sourceDetail(for: lhs) ?? "").localizedCaseInsensitiveCompare(sourceDetail(for: rhs) ?? "")
+                if result == .orderedSame {
+                    return tieBreak(lhs: lhs, rhs: rhs, ascending: isAscending)
+                }
+                return isAscending ? result == .orderedAscending : result == .orderedDescending
+            }
         }
+    }
+
+    private func filtered(_ values: [Transaction]) -> [Transaction] {
+        values.filter(matchesFilters)
+    }
+
+    private func matchesFilters(_ transaction: Transaction) -> Bool {
+        matchesSearch(transaction) &&
+            matchesSource(transaction) &&
+            matchesDate(transaction) &&
+            matchesAmount(transaction)
     }
 
     private func matchesSearch(_ transaction: Transaction) -> Bool {
@@ -2359,6 +2715,96 @@ private struct BillTransactionLinkingView: View {
             .localizedCaseInsensitiveContains(trimmedSearch)
     }
 
+    private func isAvailableForBillConnection(_ transaction: Transaction) -> Bool {
+        if let linkedBillID = transaction.linkedBillID, linkedBillID != bill.id {
+            return false
+        }
+
+        guard let owner = transaction.creditCard else {
+            return true
+        }
+
+        return owner.id == bill.id || owner.category == .creditCard
+    }
+
+    private func matchesSource(_ transaction: Transaction) -> Bool {
+        guard let selectedSourceFilterID else { return true }
+
+        if selectedSourceFilterID == "no-plaid-account" {
+            return transaction.plaidAccountID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty == nil
+        }
+
+        if selectedSourceFilterID.hasPrefix("plaid:") {
+            let accountID = String(selectedSourceFilterID.dropFirst("plaid:".count))
+            return transaction.plaidAccountID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty == accountID
+        }
+
+        if selectedSourceFilterID.hasPrefix("card:") {
+            let cardID = String(selectedSourceFilterID.dropFirst("card:".count))
+            return transaction.creditCard?.id.uuidString == cardID
+        }
+
+        if selectedSourceFilterID.hasPrefix("source:") {
+            let source = String(selectedSourceFilterID.dropFirst("source:".count))
+            return transaction.purchasedBy?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == source
+        }
+
+        return true
+    }
+
+    private func matchesDate(_ transaction: Transaction) -> Bool {
+        guard let date = BillPaymentMatcher.transactionDate(for: transaction) else {
+            return dateFilter == .any
+        }
+
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: date)
+        switch dateFilter {
+        case .any:
+            return true
+        case .last30Days:
+            let start = calendar.date(byAdding: .day, value: -30, to: calendar.startOfDay(for: .now)) ?? .distantPast
+            return day >= start
+        case .last90Days:
+            let start = calendar.date(byAdding: .day, value: -90, to: calendar.startOfDay(for: .now)) ?? .distantPast
+            return day >= start
+        case .dueWindow:
+            guard let dueDate = bill.dueDate else { return true }
+            let dueDay = calendar.startOfDay(for: dueDate)
+            let start = calendar.date(byAdding: .day, value: -7, to: dueDay) ?? dueDay
+            let end = calendar.date(byAdding: .day, value: max(bill.gracePeriodDays ?? 0, 7), to: dueDay) ?? dueDay
+            return day >= start && day <= end
+        case .custom:
+            let start = min(calendar.startOfDay(for: customStartDate), calendar.startOfDay(for: customEndDate))
+            let endBase = max(calendar.startOfDay(for: customStartDate), calendar.startOfDay(for: customEndDate))
+            let end = calendar.date(byAdding: .day, value: 1, to: endBase) ?? endBase
+            return day >= start && day < end
+        }
+    }
+
+    private func matchesAmount(_ transaction: Transaction) -> Bool {
+        guard let amount = transaction.amountUSD.map(abs) else {
+            return amountFilter == .any
+        }
+
+        switch amountFilter {
+        case .any:
+            return true
+        case .nearBillAmount:
+            guard let billAmount = bill.amount.map(abs), billAmount > 0 else { return true }
+            let tolerance = max(1.0, billAmount * 0.08)
+            return abs(amount - billAmount) <= tolerance
+        case .custom:
+            if let minimumAmount = parsedAmount(minimumAmountText), amount < minimumAmount {
+                return false
+            }
+            if let maximumAmount = parsedAmount(maximumAmountText), amount > maximumAmount {
+                return false
+            }
+            return true
+        }
+    }
+
     private func transactionSearchText(_ transaction: Transaction) -> String {
         [
             transaction.friendlyName,
@@ -2366,11 +2812,130 @@ private struct BillTransactionLinkingView: View {
             transaction.transactionDescription,
             transaction.category,
             transaction.type,
+            sourceDetail(for: transaction),
             transaction.amountUSD.map(MoneyMapFormatters.currencyString(for:)),
             BillPaymentMatcher.transactionDate(for: transaction).map(MoneyMapFormatters.mediumDateString(for:))
         ]
         .compactMap { $0 }
         .joined(separator: " ")
+    }
+
+    private func transactionTitle(for transaction: Transaction) -> String {
+        transaction.friendlyName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ??
+            transaction.merchant?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ??
+            transaction.transactionDescription?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ??
+            "Transaction"
+    }
+
+    private func sourceDetail(for transaction: Transaction) -> String? {
+        plaidAccountDisplayName(for: transaction) ??
+            transaction.creditCard?.name?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ??
+            transaction.purchasedBy?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+
+    private func plaidAccountDisplayName(for transaction: Transaction) -> String? {
+        guard let plaidAccountID = transaction.plaidAccountID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else {
+            return nil
+        }
+
+        return plaidAccountValue(for: plaidAccountID).map(accountFilterLabel(for:)) ?? orphanPlaidAccountTitle(for: plaidAccountID)
+    }
+
+    private func plaidAccountValue(for accountID: String) -> PlaidAccountValue? {
+        allKnownPlaidAccounts.first { $0.accountID == accountID }
+    }
+
+    private var allKnownPlaidAccounts: [PlaidAccountValue] {
+        let localAccounts = plaidAccounts.map(PlaidAccountValue.init)
+        var seenAccountIDs = Set<String>()
+        return (plaidAccountSnapshots + localAccounts)
+            .filter { seenAccountIDs.insert($0.accountID).inserted }
+    }
+
+    private func loadPlaidAccountSnapshots() {
+        let context = ModelContext(plaidContainer)
+        let syncAccounts = (try? context.fetch(FetchDescriptor<PlaidAccountSnapshot>())) ?? []
+        let localAccounts = plaidAccounts.map(PlaidAccountValue.init)
+        var seenAccountIDs = Set<String>()
+        plaidAccountSnapshots = (syncAccounts.map(PlaidAccountValue.init) + localAccounts)
+            .filter { seenAccountIDs.insert($0.accountID).inserted }
+    }
+
+    private func accountFilterLabel(for account: PlaidAccountValue) -> String {
+        [
+            account.institutionName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            accountFilterTitle(for: account),
+            account.lastFourLabel
+        ]
+        .compactMap { $0 }
+        .joined(separator: " - ")
+    }
+
+    private func accountFilterTitle(for account: PlaidAccountValue) -> String {
+        let title = [
+            account.displayName
+                .billViewReplacingLeadingPhrase(account.institutionName)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .nilIfEmpty,
+            account.lastFourLabel
+        ]
+        .compactMap { $0 }
+        .joined(separator: " - ")
+        return title.nilIfEmpty ?? account.displayName
+    }
+
+    private func accountFilterGroupTitle(for account: PlaidAccountValue) -> String {
+        account.institutionName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Bank Accounts"
+    }
+
+    private func orphanPlaidAccountTitle(for accountID: String) -> String {
+        "Account \(String(accountID.suffix(6)))"
+    }
+
+    private func accountFilterSubtitle(for account: PlaidAccountValue) -> String? {
+        [
+            account.subtype?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            account.type.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        ]
+        .compactMap { $0 }
+        .joined(separator: " - ")
+        .nilIfEmpty
+    }
+
+    private func accountSystemImage(for account: PlaidAccountValue) -> String {
+        switch account.subtype ?? account.type {
+        case "credit card", "credit":
+            return "creditcard"
+        case "checking":
+            return "building.columns"
+        case "savings", "money market":
+            return "banknote"
+        default:
+            return "wallet.pass"
+        }
+    }
+
+    private func tieBreak(lhs: Transaction, rhs: Transaction, ascending: Bool) -> Bool {
+        let lhsDate = BillPaymentMatcher.transactionDate(for: lhs) ?? .distantPast
+        let rhsDate = BillPaymentMatcher.transactionDate(for: rhs) ?? .distantPast
+        return ascending ? lhsDate < rhsDate : lhsDate > rhsDate
+    }
+
+    private func parsedAmount(_ text: String) -> Double? {
+        let cleaned = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "$", with: "")
+            .replacingOccurrences(of: ",", with: "")
+        guard !cleaned.isEmpty else { return nil }
+        return Double(cleaned).map(abs)
+    }
+
+    private func clearFilters() {
+        selectedSourceFilterID = nil
+        dateFilter = .any
+        amountFilter = .any
+        minimumAmountText = ""
+        maximumAmountText = ""
     }
 
     private func beginFriendlyNameEdit(for transaction: Transaction) {
@@ -2410,6 +2975,330 @@ private struct BillTransactionLinkingView: View {
     }
 }
 
+private enum BillTransactionLinkSortField: String, CaseIterable, Identifiable {
+    case date
+    case amount
+    case merchant
+    case source
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .date: return "Date"
+        case .amount: return "Amount"
+        case .merchant: return "Merchant"
+        case .source: return "Source"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .date: return "calendar"
+        case .amount: return "dollarsign.circle"
+        case .merchant: return "building.2"
+        case .source: return "wallet.pass"
+        }
+    }
+}
+
+private enum BillTransactionLinkSortOrder: String, CaseIterable, Identifiable {
+    case ascending
+    case descending
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .ascending: return "Ascending"
+        case .descending: return "Descending"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .ascending: return "arrow.up"
+        case .descending: return "arrow.down"
+        }
+    }
+}
+
+private enum BillTransactionDateFilter: String, CaseIterable, Identifiable {
+    case any
+    case last30Days
+    case last90Days
+    case dueWindow
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .any: return "Any Date"
+        case .last30Days: return "Last 30 Days"
+        case .last90Days: return "Last 90 Days"
+        case .dueWindow: return "Due Window"
+        case .custom: return "Custom Range"
+        }
+    }
+
+    func summary(bill: Bill, customStartDate: Date, customEndDate: Date) -> String? {
+        switch self {
+        case .any:
+            return nil
+        case .last30Days, .last90Days:
+            return title
+        case .dueWindow:
+            if let dueDate = bill.dueDate {
+                return "Around \(MoneyMapFormatters.mediumDateString(for: dueDate))"
+            }
+            return title
+        case .custom:
+            let start = min(customStartDate, customEndDate)
+            let end = max(customStartDate, customEndDate)
+            return "\(MoneyMapFormatters.mediumDateString(for: start)) to \(MoneyMapFormatters.mediumDateString(for: end))"
+        }
+    }
+}
+
+private enum BillTransactionAmountFilter: String, CaseIterable, Identifiable {
+    case any
+    case nearBillAmount
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .any: return "Any Amount"
+        case .nearBillAmount: return "Near Bill Amount"
+        case .custom: return "Custom Range"
+        }
+    }
+
+    func summary(bill: Bill, minimumAmount: Double?, maximumAmount: Double?) -> String? {
+        switch self {
+        case .any:
+            return nil
+        case .nearBillAmount:
+            if let amount = bill.amount {
+                return "Near \(MoneyMapFormatters.currencyString(for: abs(amount)))"
+            }
+            return title
+        case .custom:
+            if let minimumAmount, let maximumAmount {
+                return "\(MoneyMapFormatters.currencyString(for: minimumAmount)) to \(MoneyMapFormatters.currencyString(for: maximumAmount))"
+            }
+            if let minimumAmount {
+                return "\(MoneyMapFormatters.currencyString(for: minimumAmount))+"
+            }
+            if let maximumAmount {
+                return "Up to \(MoneyMapFormatters.currencyString(for: maximumAmount))"
+            }
+            return title
+        }
+    }
+}
+
+private struct BillTransactionSourceFilterOption: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let subtitle: String?
+    let groupTitle: String
+    let systemImage: String
+}
+
+private struct BillTransactionLinkFilterSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @Binding var selectedSourceFilterID: String?
+    @Binding var dateFilter: BillTransactionDateFilter
+    @Binding var customStartDate: Date
+    @Binding var customEndDate: Date
+    @Binding var amountFilter: BillTransactionAmountFilter
+    @Binding var minimumAmountText: String
+    @Binding var maximumAmountText: String
+
+    let sourceOptions: [BillTransactionSourceFilterOption]
+    let bill: Bill
+    let hasActiveFilters: Bool
+    let activeFilterSummary: String
+    let clearFilters: () -> Void
+
+    private var groupedSourceOptions: [(title: String, options: [BillTransactionSourceFilterOption])] {
+        let grouped = Dictionary(grouping: sourceOptions, by: \.groupTitle)
+        return grouped
+            .map { title, options in
+                (
+                    title,
+                    options.sorted {
+                        let result = $0.title.localizedCaseInsensitiveCompare($1.title)
+                        if result == .orderedSame {
+                            return ($0.subtitle ?? "").localizedCaseInsensitiveCompare($1.subtitle ?? "") == .orderedAscending
+                        }
+                        return result == .orderedAscending
+                    }
+                )
+            }
+            .sorted { lhs, rhs in
+                sourceGroupSortOrder(lhs.title) < sourceGroupSortOrder(rhs.title)
+            }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if hasActiveFilters {
+                    Section {
+                        Label {
+                            Text(activeFilterSummary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } icon: {
+                            Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                                .foregroundStyle(MoneyMapDesign.calmGreen)
+                        }
+                    } header: {
+                        Text("Active Filters")
+                    }
+                    .listRowBackground(MoneyMapDesign.surfaceBackground)
+                }
+
+                Section("Source") {
+                    sourceFilterRow(
+                        title: "All Sources",
+                        subtitle: nil,
+                        systemImage: "tray.full",
+                        id: nil
+                    )
+                }
+                .listRowBackground(MoneyMapDesign.surfaceBackground)
+
+                ForEach(groupedSourceOptions, id: \.title) { group in
+                    Section(group.title) {
+                        ForEach(group.options) { option in
+                            sourceFilterRow(
+                                title: option.title,
+                                subtitle: option.subtitle,
+                                systemImage: option.systemImage,
+                                id: option.id
+                            )
+                        }
+                    }
+                    .listRowBackground(MoneyMapDesign.surfaceBackground)
+                }
+
+                Section("Date") {
+                    Picker("Date", selection: $dateFilter) {
+                        ForEach(BillTransactionDateFilter.allCases) { filter in
+                            Text(filter.title).tag(filter)
+                        }
+                    }
+
+                    if dateFilter == .custom {
+                        DatePicker("Start", selection: $customStartDate, displayedComponents: .date)
+                        DatePicker("End", selection: $customEndDate, displayedComponents: .date)
+                    }
+                }
+                .listRowBackground(MoneyMapDesign.surfaceBackground)
+
+                Section {
+                    Picker("Amount", selection: $amountFilter) {
+                        ForEach(BillTransactionAmountFilter.allCases) { filter in
+                            Text(filter.title).tag(filter)
+                        }
+                    }
+
+                    if amountFilter == .custom {
+                        TextField("Minimum", text: $minimumAmountText)
+                            .keyboardType(.decimalPad)
+                        TextField("Maximum", text: $maximumAmountText)
+                            .keyboardType(.decimalPad)
+                    }
+                } header: {
+                    Text("Amount")
+                } footer: {
+                    if amountFilter == .nearBillAmount, let amount = bill.amount {
+                        Text("Matches roughly \(MoneyMapFormatters.currencyString(for: abs(amount))).")
+                    }
+                }
+                .listRowBackground(MoneyMapDesign.surfaceBackground)
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(MoneyMapDesign.groupedBackground)
+            .navigationTitle("Filters")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Clear") {
+                        clearFilters()
+                    }
+                    .disabled(!hasActiveFilters)
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sourceFilterRow(
+        title: String,
+        subtitle: String?,
+        systemImage: String,
+        id: String?
+    ) -> some View {
+        Button {
+            selectedSourceFilterID = id
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: systemImage)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .foregroundStyle(.primary)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer(minLength: 12)
+
+                if selectedSourceFilterID == id {
+                    Image(systemName: "checkmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(MoneyMapDesign.calmGreen)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func sourceGroupSortOrder(_ title: String) -> String {
+        switch title {
+        case "Bank Accounts":
+            return "000-\(title)"
+        case "Cards":
+            return "998-\(title)"
+        case "Import Sources":
+            return "999-\(title)"
+        case "Other":
+            return "zzzz-\(title)"
+        default:
+            return "100-\(title)"
+        }
+    }
+}
+
 private struct BillTransactionCandidateRow: View {
     enum State {
         case connected
@@ -2419,6 +3308,7 @@ private struct BillTransactionCandidateRow: View {
 
     let transaction: Transaction
     let state: State
+    let sourceDetail: String?
     let action: () -> Void
     var renameAction: (() -> Void)?
 
@@ -2509,7 +3399,7 @@ private struct BillTransactionCandidateRow: View {
         [
             BillPaymentMatcher.transactionDate(for: transaction).map(MoneyMapFormatters.mediumDateString(for:)),
             transaction.category?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
-            transaction.purchasedBy?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            sourceDetail?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         ]
         .compactMap { $0 }
         .joined(separator: " - ")
@@ -2587,7 +3477,9 @@ struct FriendlyNameSheet: View {
                         TextField("Prefix to match", text: $prefixSearchText)
                     }
                 }
+                .moneyMapListSectionBackground()
             }
+            .moneyMapGroupedListBackground()
             .navigationTitle("Set Friendly Name")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -2639,6 +3531,30 @@ enum ImagePickerSource: Int, Identifiable, CaseIterable {
 private extension String {
     var nilIfEmpty: String? {
         isEmpty ? nil : self
+    }
+
+    func billViewReplacingLeadingPhrase(_ phrase: String?) -> String {
+        guard let phrase = phrase?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else {
+            return self
+        }
+
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.localizedCaseInsensitiveCompare(phrase) != .orderedSame else {
+            return trimmed
+        }
+
+        let lowercasedTrimmed = trimmed.lowercased()
+        let lowercasedPhrase = phrase.lowercased()
+        guard lowercasedTrimmed.hasPrefix(lowercasedPhrase) else {
+            return trimmed
+        }
+
+        let startIndex = trimmed.index(trimmed.startIndex, offsetBy: phrase.count)
+        let remainder = trimmed[startIndex...]
+            .trimmingCharacters(in: CharacterSet(charactersIn: " -:/"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return remainder.isEmpty ? trimmed : remainder
     }
 }
 

@@ -196,6 +196,17 @@ enum MoneyMapDesign {
     }
 }
 
+extension View {
+    func moneyMapGroupedListBackground() -> some View {
+        scrollContentBackground(.hidden)
+            .background(MoneyMapDesign.groupedBackground)
+    }
+
+    func moneyMapListSectionBackground() -> some View {
+        listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+}
+
 struct MoneyMapMoneyText: View {
     let amount: Double
     var font: Font = .headline

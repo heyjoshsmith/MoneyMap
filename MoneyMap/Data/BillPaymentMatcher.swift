@@ -48,11 +48,12 @@ enum BillPaymentMatcher {
         in transactions: [Transaction],
         calendar: Calendar = .current
     ) -> [Transaction] {
+        let directTransactions = connectedTransactions(for: bill, in: transactions)
+
         guard bill.category != .creditCard else {
-            return bill.transactions ?? []
+            return directTransactions
         }
 
-        let directTransactions = bill.transactions ?? []
         var matched = transactions.filter { transaction in
             isPaymentCandidate(transaction) &&
                 amountMatches(bill: bill, transaction: transaction) &&
@@ -89,6 +90,22 @@ enum BillPaymentMatcher {
         let graceDays = max(bill.gracePeriodDays ?? 0, 3)
         let windowEnd = calendar.date(byAdding: .day, value: graceDays, to: dueDay) ?? dueDay
 
+        if let directlyLinkedPayment = connectedTransactions(for: bill, in: transactions)
+            .filter({ transaction in
+                guard isPaymentCandidate(transaction),
+                      let date = transactionDate(for: transaction) else {
+                    return false
+                }
+
+                let transactionDay = calendar.startOfDay(for: date)
+                return transactionDay >= windowStart &&
+                    transactionDay <= min(windowEnd, todayDay)
+            })
+            .sorted(by: mostRecentFirst)
+            .first {
+            return directlyLinkedPayment
+        }
+
         return transactions
             .filter { transaction in
                 guard isPaymentCandidate(transaction),
@@ -108,6 +125,18 @@ enum BillPaymentMatcher {
             .first
     }
 
+    static func connectedTransactions(for bill: Bill, in transactions: [Transaction]) -> [Transaction] {
+        var seenKeys = Set<String>()
+        return ((bill.transactions ?? []) + transactions)
+            .filter { isConnected($0, to: bill) }
+            .filter { seenKeys.insert(identityKey(for: $0)).inserted }
+            .sorted(by: mostRecentFirst)
+    }
+
+    static func isConnected(_ transaction: Transaction, to bill: Bill) -> Bool {
+        transaction.linkedBillID == bill.id || transaction.creditCard?.id == bill.id
+    }
+
     static func identityKey(for transaction: Transaction) -> String {
         if let plaidTransactionID = transaction.plaidTransactionID?.nilIfBlank {
             return "plaid:\(plaidTransactionID)"
@@ -121,6 +150,10 @@ enum BillPaymentMatcher {
 
     static func transactionDate(for transaction: Transaction) -> Date? {
         transaction.transactionDate ?? transaction.clearingDate ?? transaction.plaidImportedAt
+    }
+
+    private static func mostRecentFirst(lhs: Transaction, rhs: Transaction) -> Bool {
+        (transactionDate(for: lhs) ?? .distantPast) > (transactionDate(for: rhs) ?? .distantPast)
     }
 
     private static func isPaymentCandidate(_ transaction: Transaction) -> Bool {

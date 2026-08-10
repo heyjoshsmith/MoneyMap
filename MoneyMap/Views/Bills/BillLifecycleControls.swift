@@ -513,7 +513,9 @@ struct BillDateActionSheet: View {
                 } footer: {
                     Text("This changes the next due date without deleting the bill.")
                 }
+                .moneyMapListSectionBackground()
             }
+            .moneyMapGroupedListBackground()
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -594,7 +596,9 @@ struct BillPaymentDateSheet: View {
                 } footer: {
                     Text("This changes when the bill was marked paid. It does not change the bill amount.")
                 }
+                .moneyMapListSectionBackground()
             }
+            .moneyMapGroupedListBackground()
             .navigationTitle(bill.name ?? "Payment Date")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

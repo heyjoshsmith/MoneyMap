@@ -121,6 +121,15 @@ struct BankSyncStatusView: View {
     @State private var isRequestingMacRefresh = false
     @State private var macRefreshStatusMessage: String?
     @State private var macRefreshErrorMessage: String?
+    @State private var isScanningForMacUpdate = false
+    @State private var macRefreshMonitorTask: Task<Void, Never>?
+    @State private var lastImportSummary: PlaidTransactionImportSummary?
+    @State private var lastImportMacSyncAt: Date?
+    @State private var lastBankSyncRefreshAt: Date?
+
+    private let macRefreshRequestPolicy = PlaidMacRefreshRequestPolicy()
+    private let macRefreshMonitorPollInterval: Duration = .seconds(8)
+    private let macRefreshMonitorTimeout: TimeInterval = 3 * 60
 
     var body: some View {
         Group {
@@ -139,12 +148,15 @@ struct BankSyncStatusView: View {
             loadSnapshotValues()
             await loadMacRefreshCommand()
         }
+        .onDisappear {
+            macRefreshMonitorTask?.cancel()
+            macRefreshMonitorTask = nil
+        }
     }
 
     private var settingsContent: some View {
         List {
             bankSyncHeroSection
-            bankSyncActionSection
 
             Section {
                 NavigationLink {
@@ -184,18 +196,8 @@ struct BankSyncStatusView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(MoneyMapDesign.groupedBackground)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                if isRefreshingCloud || isImporting {
-                    ProgressView()
-                } else {
-                    Button {
-                        Task { await refreshFromCloud() }
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise.circle")
-                    }
-                }
-            }
+        .refreshable {
+            await refreshAndImportBankSync()
         }
     }
 
@@ -206,99 +208,15 @@ struct BankSyncStatusView: View {
                 detail: statusDetail,
                 systemImage: syncStatusIcon,
                 showsError: activeConnectionSnapshots.contains(where: { $0.errorMessage != nil }) || syncFreshness.level.isStale,
+                isWorking: isRefreshingCloud || isImporting || isRequestingMacRefresh || isScanningForMacUpdate,
                 banks: activeConnectionSnapshots.count,
                 accounts: activeAccountSnapshots.count,
-                ready: readyReviewItems.count
+                imported: importedReviewItems.count,
+                statusMessages: bankSyncHeroStatusMessages
             )
         }
         .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
         .listRowBackground(Color.clear)
-    }
-
-    private var bankSyncActionSection: some View {
-        Section {
-            VStack(spacing: 10) {
-                Button {
-                    Task { await refreshFromCloud() }
-                } label: {
-                    MoneyMapActionCardLabel(
-                        title: isRefreshingCloud ? "Refreshing" : "Refresh from Mac",
-                        detail: syncFreshness.level.isStale ? "Download the latest Mac snapshot now." : "Download the latest Mac bank snapshot.",
-                        systemImage: "icloud.and.arrow.down",
-                        tint: .blue,
-                        isProminent: syncFreshness.level.isStale
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(isRefreshingCloud)
-
-                Button {
-                    Task { await requestMacRefresh() }
-                } label: {
-                    MoneyMapActionCardLabel(
-                        title: isRequestingMacRefresh ? "Requesting Mac Refresh" : "Tell Mac to Refresh",
-                        detail: macRefreshCommandDetail,
-                        systemImage: "arrow.triangle.2.circlepath",
-                        tint: MoneyMapDesign.calmGreen
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(isRequestingMacRefresh)
-
-                if readyReviewItems.isEmpty {
-                    MoneyMapStatusBanner(
-                        message: "Transactions are current. No reviewed transactions are waiting.",
-                        systemImage: "checkmark.circle.fill",
-                        tint: MoneyMapDesign.calmGreen
-                    )
-                } else {
-                    Button {
-                        Task { await importReadyTransactions() }
-                    } label: {
-                        MoneyMapActionCardLabel(
-                            title: isImporting ? "Importing Transactions" : "Import Transactions",
-                            detail: "\(readyReviewItems.count) waiting for Wallet.",
-                            systemImage: "square.and.arrow.down",
-                            tint: MoneyMapDesign.warningGold,
-                            isProminent: true
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isImporting)
-                }
-
-                bankSyncStatusMessages
-            }
-        } header: {
-            Text("Sync")
-        }
-        .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
-        .listRowBackground(Color.clear)
-    }
-
-    @ViewBuilder
-    private var bankSyncStatusMessages: some View {
-        if let cloudStatusMessage {
-            MoneyMapStatusBanner(message: cloudStatusMessage, systemImage: "icloud.and.arrow.down")
-        }
-        if let cloudErrorMessage {
-            MoneyMapStatusBanner(message: cloudErrorMessage, systemImage: "exclamationmark.icloud", tint: MoneyMapDesign.attentionRed)
-                .textSelection(.enabled)
-        }
-        if let macRefreshStatusMessage {
-            MoneyMapStatusBanner(message: macRefreshStatusMessage, systemImage: "desktopcomputer")
-        }
-        if let macRefreshErrorMessage {
-            MoneyMapStatusBanner(message: macRefreshErrorMessage, systemImage: "exclamationmark.triangle", tint: MoneyMapDesign.attentionRed)
-                .textSelection(.enabled)
-        }
-        if let importStatusMessage {
-            MoneyMapStatusBanner(message: importStatusMessage, systemImage: "checkmark.circle")
-        }
-        if let importErrorMessage {
-            MoneyMapStatusBanner(message: importErrorMessage, systemImage: "exclamationmark.triangle", tint: MoneyMapDesign.attentionRed)
-                .textSelection(.enabled)
-        }
     }
 
     private var storageSection: some View {
@@ -376,6 +294,15 @@ struct BankSyncStatusView: View {
     }
 
     private var syncStatusTitle: String {
+        if isRefreshingCloud {
+            return "Checking Mac snapshot"
+        }
+        if isImporting {
+            return "Importing transactions"
+        }
+        if isRequestingMacRefresh || isScanningForMacUpdate {
+            return "Scanning for Mac update"
+        }
         if activeConnectionSnapshots.contains(where: { $0.errorMessage != nil }) {
             return "Mac sync needs attention"
         }
@@ -392,6 +319,15 @@ struct BankSyncStatusView: View {
     }
 
     private var syncStatusIcon: String {
+        if isRefreshingCloud {
+            return "icloud.and.arrow.down"
+        }
+        if isImporting {
+            return "square.and.arrow.down"
+        }
+        if isRequestingMacRefresh || isScanningForMacUpdate {
+            return "desktopcomputer"
+        }
         if activeConnectionSnapshots.contains(where: { $0.errorMessage != nil }) || syncFreshness.level.isStale {
             return "exclamationmark.triangle"
         }
@@ -405,17 +341,79 @@ struct BankSyncStatusView: View {
 
         if let lastSyncAt {
             let synced = lastSyncAt.formatted(date: .abbreviated, time: .shortened)
-            if syncFreshness.level.isStale {
-                return "Last Mac sync was \(synced) (\(syncFreshness.ageLabel ?? "old")). Ask the Mac to refresh, then download the new snapshot."
+            if isImporting {
+                return "Importing reviewed transactions from the Mac snapshot synced \(synced)."
             }
-            return "Last synced from the Mac on \(synced)."
+            if isRequestingMacRefresh || isScanningForMacUpdate {
+                return "Transactions are imported through the Mac sync from \(synced). MoneyMap is still scanning for a newer Mac update."
+            }
+            if syncFreshness.level.isStale {
+                return "Transactions are imported through the Mac sync from \(synced). Pull to refresh to check for new imports and ask the Mac for a newer scan."
+            }
+            return "Transactions are imported through the Mac sync from \(synced). Pull to refresh to import anything new."
         }
 
         if activeConnectionSnapshots.isEmpty {
-            return "Set up bank connections in MoneyMap for Mac. They will appear here after the Mac syncs to iCloud."
+            return "Set up bank connections in MoneyMap for Mac. Pull to refresh after the Mac syncs to iCloud."
         }
 
         return "Waiting for the Mac to send the first bank sync snapshot."
+    }
+
+    private var bankSyncHeroStatusMessages: [BankSyncHeroStatusMessage] {
+        var messages: [BankSyncHeroStatusMessage] = []
+
+        if let importStatusMessage {
+            messages.append(BankSyncHeroStatusMessage(message: importStatusMessage, systemImage: "checkmark.circle"))
+        } else if let lastImportSummary, let lastImportMacSyncAt {
+            let synced = lastImportMacSyncAt.formatted(date: .abbreviated, time: .shortened)
+            messages.append(BankSyncHeroStatusMessage(
+                message: "\(lastImportSummary.importedCount) imported, \(lastImportSummary.skippedCount) skipped from Mac sync \(synced).",
+                systemImage: "square.and.arrow.down"
+            ))
+        } else if readyReviewItems.isEmpty {
+            messages.append(BankSyncHeroStatusMessage(
+                message: "No reviewed transactions are waiting to import.",
+                systemImage: "checkmark.circle"
+            ))
+        } else {
+            messages.append(BankSyncHeroStatusMessage(
+                message: "\(readyReviewItems.count) reviewed transaction\(readyReviewItems.count == 1 ? "" : "s") will import on refresh.",
+                systemImage: "square.and.arrow.down"
+            ))
+        }
+
+        if isRefreshingCloud {
+            messages.append(BankSyncHeroStatusMessage(message: "Checking iCloud for the newest Mac snapshot.", systemImage: "icloud.and.arrow.down"))
+        }
+        if isImporting {
+            messages.append(BankSyncHeroStatusMessage(message: "Adding ready transactions to MoneyMap automatically.", systemImage: "arrow.down.doc"))
+        }
+        if isRequestingMacRefresh || isScanningForMacUpdate {
+            messages.append(BankSyncHeroStatusMessage(message: macRefreshStatusMessage ?? macRefreshCommandDetail, systemImage: "desktopcomputer"))
+        } else if let macRefreshStatusMessage {
+            messages.append(BankSyncHeroStatusMessage(message: macRefreshStatusMessage, systemImage: "desktopcomputer"))
+        }
+        if let cloudStatusMessage {
+            messages.append(BankSyncHeroStatusMessage(message: cloudStatusMessage, systemImage: "icloud"))
+        }
+        if let cloudErrorMessage {
+            messages.append(BankSyncHeroStatusMessage(message: cloudErrorMessage, systemImage: "exclamationmark.icloud", tint: MoneyMapDesign.attentionRed))
+        }
+        if let macRefreshErrorMessage {
+            messages.append(BankSyncHeroStatusMessage(message: macRefreshErrorMessage, systemImage: "exclamationmark.triangle", tint: MoneyMapDesign.attentionRed))
+        }
+        if let importErrorMessage {
+            messages.append(BankSyncHeroStatusMessage(message: importErrorMessage, systemImage: "exclamationmark.triangle", tint: MoneyMapDesign.attentionRed))
+        }
+        if let lastBankSyncRefreshAt {
+            messages.append(BankSyncHeroStatusMessage(
+                message: "Last checked \(lastBankSyncRefreshAt.formatted(date: .omitted, time: .shortened)).",
+                systemImage: "clock"
+            ))
+        }
+
+        return messages
     }
 
     private var macRefreshCommandDetail: String {
@@ -468,32 +466,67 @@ struct BankSyncStatusView: View {
     }
 
     @MainActor
-    private func refreshFromCloud() async {
+    private func refreshAndImportBankSync() async {
+        macRefreshMonitorTask?.cancel()
+        macRefreshMonitorTask = nil
         isRefreshingCloud = true
+        isImporting = false
+        isRequestingMacRefresh = false
+        isScanningForMacUpdate = false
         cloudStatusMessage = nil
         cloudErrorMessage = nil
-        defer { isRefreshingCloud = false }
+        importStatusMessage = nil
+        importErrorMessage = nil
+        macRefreshStatusMessage = nil
+        macRefreshErrorMessage = nil
 
         do {
             try await PlaidCloudSyncService.pull(context: plaidModelContext)
             loadSnapshotValues()
             await loadMacRefreshCommand()
-            cloudStatusMessage = "Downloaded latest Plaid sync data."
+            cloudStatusMessage = "Checked the latest Mac snapshot in iCloud."
+            isRefreshingCloud = false
+
+            let importedThrough = lastSyncAt
+            await importReadyTransactions(importedThrough: importedThrough)
+            await requestMacRefreshIfNeeded(lastSyncAt: importedThrough)
+            lastBankSyncRefreshAt = .now
         } catch {
+            isRefreshingCloud = false
             cloudErrorMessage = error.localizedDescription
         }
     }
 
     @MainActor
-    private func requestMacRefresh() async {
+    private func requestMacRefreshIfNeeded(lastSyncAt: Date?) async {
+        guard macRefreshRequestPolicy.shouldRequestMacRefresh(lastSyncAt: lastSyncAt) else {
+            macRefreshStatusMessage = "The Mac snapshot is less than five minutes old, so no Mac refresh was requested."
+            return
+        }
+
         isRequestingMacRefresh = true
         macRefreshStatusMessage = nil
         macRefreshErrorMessage = nil
         defer { isRequestingMacRefresh = false }
 
         do {
+            if let latestCommand = try await PlaidCloudSyncService.latestMacRefreshCommand() {
+                switch latestCommand.state {
+                case .pending, .running:
+                    macRefreshCommand = latestCommand
+                    macRefreshStatusMessage = "\(macSyncAgeLabel(since: lastSyncAt)). Waiting for MoneyMap for Mac to finish a newer scan."
+                    startMacRefreshMonitor(requestID: latestCommand.requestID)
+                    return
+                case .completed, .failed:
+                    break
+                }
+            }
+
             macRefreshCommand = try await PlaidCloudSyncService.requestMacRefresh(source: "iPhone")
-            macRefreshStatusMessage = "MoneyMap for Mac will refresh when it sees this request."
+            macRefreshStatusMessage = "\(macSyncAgeLabel(since: lastSyncAt)). MoneyMap is scanning for a newer Mac update."
+            if let requestID = macRefreshCommand?.requestID {
+                startMacRefreshMonitor(requestID: requestID)
+            }
         } catch {
             macRefreshErrorMessage = error.localizedDescription
         }
@@ -509,33 +542,138 @@ struct BankSyncStatusView: View {
     }
 
     @MainActor
-    private func importReadyTransactions() async {
+    private func importReadyTransactions(importedThrough: Date?) async {
         isImporting = true
         importStatusMessage = nil
         importErrorMessage = nil
         defer { isImporting = false }
 
         do {
+            let readyItems = try plaidModelContext.fetch(FetchDescriptor<PlaidTransactionReviewItem>())
+                .filter { $0.status == .ready }
             let bills = try mainModelContext.fetch(FetchDescriptor<Bill>())
             let summary = try PlaidLocalSyncImporter.importReviewedItems(
-                readyReviewItems,
+                readyItems,
                 context: mainModelContext,
                 bills: bills
             )
+            let settlementSummary = try ExtraMoneyPlanSettlementService.settlePendingPayments(context: mainModelContext)
             try plaidModelContext.save()
             try await PlaidCloudSyncService.push(context: plaidModelContext)
             loadSnapshotValues()
+            lastImportSummary = summary
+            lastImportMacSyncAt = importedThrough
 
-            if summary.importedCount == 0 {
-                importStatusMessage = "No new transactions were imported. \(summary.skippedCount) were already in MoneyMap."
+            if summary.importedCount == 0 && summary.skippedCount == 0 {
+                importStatusMessage = "No new reviewed transactions were waiting in the Mac snapshot\(macSyncTimestampSuffix(importedThrough))."
+            } else if summary.importedCount == 0 {
+                importStatusMessage = "No new transactions were imported from the Mac snapshot\(macSyncTimestampSuffix(importedThrough)). \(summary.skippedCount) were already in MoneyMap."
             } else if summary.skippedCount == 0 {
-                importStatusMessage = "Imported \(summary.importedCount) transactions."
+                importStatusMessage = "Imported \(summary.importedCount) transaction\(summary.importedCount == 1 ? "" : "s") from the Mac snapshot\(macSyncTimestampSuffix(importedThrough))."
             } else {
-                importStatusMessage = "Imported \(summary.importedCount) transactions. Skipped \(summary.skippedCount) duplicates."
+                importStatusMessage = "Imported \(summary.importedCount) transaction\(summary.importedCount == 1 ? "" : "s") from the Mac snapshot\(macSyncTimestampSuffix(importedThrough)). Skipped \(summary.skippedCount) duplicate\(summary.skippedCount == 1 ? "" : "s")."
+            }
+
+            if settlementSummary.paidCardCount > 0 {
+                importStatusMessage = "\(importStatusMessage ?? "") Confirmed \(settlementSummary.paidCardCount) pending card payment\(settlementSummary.paidCardCount == 1 ? "" : "s")."
+                AppRefreshEvents.notifyBillsDidChange()
             }
         } catch {
             importErrorMessage = error.localizedDescription
         }
+    }
+
+    @MainActor
+    private func startMacRefreshMonitor(requestID: String) {
+        macRefreshMonitorTask?.cancel()
+        isScanningForMacUpdate = true
+        macRefreshMonitorTask = Task { @MainActor in
+            let deadline = Date().addingTimeInterval(macRefreshMonitorTimeout)
+
+            while !Task.isCancelled && Date() < deadline {
+                do {
+                    try await Task.sleep(for: macRefreshMonitorPollInterval)
+                    guard !Task.isCancelled else { return }
+                    let isTerminal = try await updateMacRefreshMonitorStatus(requestID: requestID)
+                    if isTerminal {
+                        isScanningForMacUpdate = false
+                        macRefreshMonitorTask = nil
+                        return
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    macRefreshErrorMessage = error.localizedDescription
+                    isScanningForMacUpdate = false
+                    macRefreshMonitorTask = nil
+                    return
+                }
+            }
+
+            guard !Task.isCancelled else { return }
+            macRefreshStatusMessage = "Still waiting for MoneyMap for Mac. Transactions remain imported through \(lastSyncText(lastSyncAt))."
+            isScanningForMacUpdate = false
+            macRefreshMonitorTask = nil
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func updateMacRefreshMonitorStatus(requestID: String) async throws -> Bool {
+        guard let command = try await PlaidCloudSyncService.latestMacRefreshCommand(),
+              command.requestID == requestID else {
+            return false
+        }
+
+        macRefreshCommand = command
+        switch command.state {
+        case .pending:
+            macRefreshStatusMessage = "Waiting for MoneyMap for Mac to pick up the refresh. Transactions remain imported through \(lastSyncText(lastSyncAt))."
+            return false
+        case .running:
+            macRefreshStatusMessage = "MoneyMap for Mac is refreshing now. Transactions remain imported through \(lastSyncText(lastSyncAt))."
+            return false
+        case .completed:
+            try await PlaidCloudSyncService.pull(context: plaidModelContext)
+            loadSnapshotValues()
+            let importedThrough = lastSyncAt
+            await importReadyTransactions(importedThrough: importedThrough)
+            macRefreshStatusMessage = "Mac update finished. Transactions are imported through \(lastSyncText(importedThrough))."
+            lastBankSyncRefreshAt = .now
+            return true
+        case .failed:
+            macRefreshErrorMessage = command.message ?? "MoneyMap for Mac could not complete the refresh."
+            macRefreshStatusMessage = "Transactions remain imported through \(lastSyncText(lastSyncAt))."
+            return true
+        }
+    }
+
+    private func macSyncTimestampSuffix(_ date: Date?) -> String {
+        guard let date else { return "" }
+        return " synced \(date.formatted(date: .abbreviated, time: .shortened))"
+    }
+
+    private func lastSyncText(_ date: Date?) -> String {
+        guard let date else { return "the last available Mac snapshot" }
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private func macSyncAgeLabel(since lastSyncAt: Date?, now: Date = .now) -> String {
+        guard let lastSyncAt else {
+            return "No Mac sync has reached this iPhone yet"
+        }
+
+        let totalMinutes = max(Int(now.timeIntervalSince(lastSyncAt) / 60), 0)
+        if totalMinutes < 60 {
+            return "Last Mac sync is \(totalMinutes) min old"
+        }
+
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        if minutes == 0 {
+            return "Last Mac sync is \(hours) hr old"
+        }
+        return "Last Mac sync is \(hours) hr \(minutes) min old"
     }
 }
 
@@ -544,9 +682,11 @@ private struct BankSyncHeroCard: View {
     let detail: String
     let systemImage: String
     let showsError: Bool
+    let isWorking: Bool
     let banks: Int
     let accounts: Int
-    let ready: Int
+    let imported: Int
+    let statusMessages: [BankSyncHeroStatusMessage]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -554,9 +694,14 @@ private struct BankSyncHeroCard: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .fill(.white.opacity(0.16))
-                    Image(systemName: systemImage)
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(.white)
+                    if isWorking {
+                        ProgressView()
+                            .tint(.white)
+                    } else {
+                        Image(systemName: systemImage)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.white)
+                    }
                 }
                 .frame(width: 48, height: 42)
 
@@ -574,13 +719,46 @@ private struct BankSyncHeroCard: View {
             HStack(spacing: 10) {
                 BankSyncHeroMetric(value: banks, title: "Banks")
                 BankSyncHeroMetric(value: accounts, title: "Accounts")
-                BankSyncHeroMetric(value: ready, title: "Ready")
+                BankSyncHeroMetric(value: imported, title: "Imported")
+            }
+
+            if !statusMessages.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(statusMessages.prefix(4))) { statusMessage in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: statusMessage.systemImage)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(statusMessage.tint ?? .white.opacity(0.86))
+                                .frame(width: 16)
+
+                            Text(statusMessage.message)
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.82))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .padding(10)
+                .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         }
         .padding(16)
         .background(showsError ? AnyShapeStyle(MoneyMapDesign.attentionRed.gradient) : AnyShapeStyle(MoneyMapDesign.moneyGradient))
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct BankSyncHeroStatusMessage: Identifiable {
+    let id = UUID()
+    let message: String
+    let systemImage: String
+    let tint: Color?
+
+    init(message: String, systemImage: String, tint: Color? = nil) {
+        self.message = message
+        self.systemImage = systemImage
+        self.tint = tint
     }
 }
 

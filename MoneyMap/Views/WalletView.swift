@@ -15,6 +15,7 @@ struct WalletView: View {
     @Query(sort: \Transaction.transactionDate, order: .reverse) private var transactions: [Transaction]
     @Query(sort: \PaymentMethod.name) private var paymentMethods: [PaymentMethod]
     @AppStorage(RecurringBillDetector.ignoredSuggestionIDsKey) private var ignoredRecurringBillSuggestionIDs = ""
+    @AppStorage(WalletAccountPreferences.appStorageKey) private var accountPreferencesData = WalletAccountPreferences.emptyJSON
 
     private let plaidContainer: ModelContainer
 
@@ -24,10 +25,19 @@ struct WalletView: View {
     @State private var refreshSummary: WalletRefreshSummary?
     @State private var refreshErrorMessage: String?
     @State private var refreshDismissTask: Task<Void, Never>?
+    @State private var macRefreshMonitorTask: Task<Void, Never>?
     @State private var plaidConnectionSnapshots: [PlaidConnectionValue] = []
     @State private var plaidAccountSnapshots: [PlaidAccountValue] = []
     @State private var recurringReviewSuggestions: [RecurringBillSuggestion] = []
     @State private var recurringReviewRefreshTask: Task<Void, Never>?
+    @State private var transactionCountsByPlaidAccountID: [String: Int] = [:]
+    @State private var plaidImportedTransactionCount = 0
+    @State private var recentActivityTransactionCount = 0
+    @State private var recentActivitySpend = 0.0
+
+    private let macRefreshRequestPolicy = PlaidMacRefreshRequestPolicy()
+    private let macRefreshMonitorPollInterval: Duration = .seconds(8)
+    private let macRefreshMonitorTimeout: TimeInterval = 3 * 60
 
     init() {
         do {
@@ -66,6 +76,7 @@ struct WalletView: View {
                 )
                 consumeDeepLinks()
                 loadPlaidSnapshots()
+                refreshTransactionSummaryCache()
                 scheduleRecurringReviewRefresh()
             }
             .onChange(of: deepLinkManager.requestedBillID) { _, _ in
@@ -79,6 +90,7 @@ struct WalletView: View {
                 scheduleRecurringReviewRefresh()
             }
             .onChange(of: transactions.count) { _, _ in
+                refreshTransactionSummaryCache()
                 scheduleRecurringReviewRefresh()
             }
             .onChange(of: ignoredRecurringBillSuggestionIDs) { _, _ in
@@ -92,8 +104,8 @@ struct WalletView: View {
             WalletOverviewCard(
                 cards: creditCards.count,
                 linkedCards: linkedCards.count,
-                accounts: nonCreditPlaidAccounts.count,
-                transactions: plaidImportedTransactions.count,
+                accounts: visibleNonCreditPlaidAccounts.count,
+                transactions: plaidImportedTransactionCount,
                 balance: bills.totalBalance,
                 limit: bills.totalCreditLimit
             )
@@ -274,7 +286,7 @@ struct WalletView: View {
 
     @ViewBuilder
     private var accountsSection: some View {
-        if !nonCreditPlaidAccounts.isEmpty {
+        if !visibleNonCreditPlaidAccounts.isEmpty {
             ForEach(accountInstitutionGroups) { group in
                 Section {
                     ForEach(group.accounts) { account in
@@ -286,7 +298,8 @@ struct WalletView: View {
                         } label: {
                             WalletAccountRow(
                                 account: account,
-                                transactionCount: transactionCount(for: account)
+                                transactionCount: transactionCount(for: account),
+                                preferences: accountPreferences
                             )
                         }
                     }
@@ -460,8 +473,12 @@ struct WalletView: View {
             }
     }
 
+    private var visibleNonCreditPlaidAccounts: [PlaidAccountValue] {
+        nonCreditPlaidAccounts.filter { !accountPreferences.isHidden($0) }
+    }
+
     private var accountInstitutionGroups: [WalletAccountInstitutionGroup] {
-        WalletAccountGrouping.groups(for: nonCreditPlaidAccounts)
+        WalletAccountGrouping.groups(for: visibleNonCreditPlaidAccounts, preferences: accountPreferences)
     }
 
     private var unlinkedPlaidCreditAccounts: [PlaidAccountValue] {
@@ -487,19 +504,8 @@ struct WalletView: View {
         Array(transactions.prefix(8))
     }
 
-    private var recentActivityTransactions: [Transaction] {
-        let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: .now) ?? .distantFuture
-        return transactions.filter { transactionDate(for: $0) >= cutoff }
-    }
-
-    private var recentActivitySpend: Double {
-        recentActivityTransactions.reduce(0) { total, transaction in
-            total + max(transaction.amountUSD ?? 0, 0)
-        }
-    }
-
-    private var plaidImportedTransactions: [Transaction] {
-        transactions.filter { $0.plaidTransactionID?.isEmpty == false }
+    private var accountPreferences: WalletAccountPreferences {
+        WalletAccountPreferences.decode(from: accountPreferencesData)
     }
 
     private var cardUtilizationText: String {
@@ -535,12 +541,12 @@ struct WalletView: View {
     }
 
     private var bankSyncSummary: String {
-        if linkedCards.isEmpty && plaidImportedTransactions.isEmpty {
+        if linkedCards.isEmpty && plaidImportedTransactionCount == 0 {
             return "Connect banks and upgrade cards"
         }
 
         let cardText = "\(linkedCards.count) linked card\(linkedCards.count == 1 ? "" : "s")"
-        let transactionText = "\(plaidImportedTransactions.count) imported transaction\(plaidImportedTransactions.count == 1 ? "" : "s")"
+        let transactionText = "\(plaidImportedTransactionCount) imported transaction\(plaidImportedTransactionCount == 1 ? "" : "s")"
         return "\(cardText) - \(transactionText)"
     }
 
@@ -558,14 +564,14 @@ struct WalletView: View {
     }
 
     private var accountSummary: String {
-        if nonCreditPlaidAccounts.isEmpty {
+        if visibleNonCreditPlaidAccounts.isEmpty {
             return "Synced checking, debit, savings, and investment accounts"
         }
 
-        let importedTransactionCount = nonCreditPlaidAccounts.reduce(0) { count, account in
-            count + transactionCount(for: account)
+        let importedTransactionCount = visibleNonCreditPlaidAccounts.reduce(0) { count, account in
+            count + transactionCountsByPlaidAccountID[account.accountID, default: 0]
         }
-        return "\(nonCreditPlaidAccounts.count) synced - \(importedTransactionCount) transaction\(importedTransactionCount == 1 ? "" : "s")"
+        return "\(visibleNonCreditPlaidAccounts.count) synced - \(importedTransactionCount) transaction\(importedTransactionCount == 1 ? "" : "s")"
     }
 
     private var transactionSummary: String {
@@ -573,7 +579,7 @@ struct WalletView: View {
             return "No imported history yet"
         }
 
-        return "\(transactions.count) total - \(plaidImportedTransactions.count) from Plaid"
+        return "\(transactions.count) total - \(plaidImportedTransactionCount) from Plaid"
     }
 
     private var recurringReviewSummary: String {
@@ -602,18 +608,23 @@ struct WalletView: View {
     }
 
     private var accountsDestinationDetail: String {
-        if nonCreditPlaidAccounts.isEmpty {
+        if visibleNonCreditPlaidAccounts.isEmpty {
             return "Add banks"
         }
 
-        let institutionCount = Set(nonCreditPlaidAccounts.compactMap { $0.institutionName?.nilIfBlank }).count
+        if accountPreferences.showsAvailableMoneyOnWalletTile {
+            let availableMoney = accountPreferences.availableMoneyTotal(in: nonCreditPlaidAccounts)
+            return "Available \(compactCurrencyString(for: availableMoney))"
+        }
+
+        let institutionCount = Set(visibleNonCreditPlaidAccounts.compactMap { $0.institutionName?.nilIfBlank }).count
         let bankText = institutionCount == 1 ? "1 bank" : "\(institutionCount) banks"
-        return "\(bankText) • \(nonCreditPlaidAccounts.count)"
+        return "\(bankText) • \(visibleNonCreditPlaidAccounts.count)"
     }
 
     private var transactionsDestinationDetail: String {
-        if !recentActivityTransactions.isEmpty {
-            return "30d \(recentActivityTransactions.count) • \(compactCurrencyString(for: recentActivitySpend))"
+        if recentActivityTransactionCount > 0 {
+            return "30d \(recentActivityTransactionCount) • \(compactCurrencyString(for: recentActivitySpend))"
         }
 
         if transactions.isEmpty {
@@ -771,7 +782,35 @@ struct WalletView: View {
     }
 
     private func transactionCount(for account: PlaidAccountValue) -> Int {
-        transactions.filter { $0.plaidAccountID == account.accountID }.count
+        transactionCountsByPlaidAccountID[account.accountID, default: 0]
+    }
+
+    private func refreshTransactionSummaryCache() {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: .now) ?? .distantFuture
+        var countsByAccountID: [String: Int] = [:]
+        var importedCount = 0
+        var recentCount = 0
+        var recentSpend = 0.0
+
+        for transaction in transactions {
+            if let accountID = transaction.plaidAccountID?.nilIfBlank {
+                countsByAccountID[accountID, default: 0] += 1
+            }
+
+            if transaction.plaidTransactionID?.isEmpty == false {
+                importedCount += 1
+            }
+
+            if transactionDate(for: transaction) >= cutoff {
+                recentCount += 1
+                recentSpend += max(transaction.amountUSD ?? 0, 0)
+            }
+        }
+
+        transactionCountsByPlaidAccountID = countsByAccountID
+        plaidImportedTransactionCount = importedCount
+        recentActivityTransactionCount = recentCount
+        recentActivitySpend = recentSpend
     }
 
     private func recurringDetectionDate(for transaction: Transaction) -> Date? {
@@ -851,6 +890,8 @@ struct WalletView: View {
     private func refreshBankData() async {
         refreshDismissTask?.cancel()
         refreshDismissTask = nil
+        macRefreshMonitorTask?.cancel()
+        macRefreshMonitorTask = nil
         withAnimation(.snappy(duration: 0.2)) {
             isRefreshingBankData = true
             refreshSummary = nil
@@ -861,11 +902,16 @@ struct WalletView: View {
             let context = ModelContext(plaidContainer)
             try await PlaidCloudSyncService.pull(context: context)
             loadPlaidSnapshots(context: context)
-            let summary = makeRefreshSummary(context: context)
+            let macRefreshOutcome = await requestMacRefreshIfNeeded(context: context)
+            let summary = makeRefreshSummary(context: context, macRefreshOutcome: macRefreshOutcome)
             withAnimation(.snappy(duration: 0.25)) {
                 refreshSummary = summary
             }
-            scheduleRefreshFeedbackDismissal()
+            if let requestID = macRefreshOutcome?.requestIDForMonitoring {
+                startMacRefreshMonitor(requestID: requestID)
+            } else {
+                scheduleRefreshFeedbackDismissal()
+            }
         } catch {
             withAnimation(.snappy(duration: 0.25)) {
                 refreshErrorMessage = error.localizedDescription
@@ -881,6 +927,8 @@ struct WalletView: View {
     private func dismissRefreshFeedback() {
         refreshDismissTask?.cancel()
         refreshDismissTask = nil
+        macRefreshMonitorTask?.cancel()
+        macRefreshMonitorTask = nil
         withAnimation(.snappy(duration: 0.2)) {
             refreshSummary = nil
             refreshErrorMessage = nil
@@ -888,10 +936,10 @@ struct WalletView: View {
     }
 
     @MainActor
-    private func scheduleRefreshFeedbackDismissal() {
+    private func scheduleRefreshFeedbackDismissal(after delay: Duration = .seconds(6)) {
         refreshDismissTask?.cancel()
         refreshDismissTask = Task {
-            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 withAnimation(.snappy(duration: 0.25)) {
@@ -912,7 +960,144 @@ struct WalletView: View {
     }
 
     @MainActor
-    private func makeRefreshSummary(context: ModelContext) -> WalletRefreshSummary {
+    private func requestMacRefreshIfNeeded(context: ModelContext) async -> WalletMacRefreshOutcome? {
+        let lastSyncAt = latestActiveMacSyncDate(context: context)
+        guard macRefreshRequestPolicy.shouldRequestMacRefresh(lastSyncAt: lastSyncAt) else {
+            return nil
+        }
+
+        let ageLabel = macSyncAgeLabel(since: lastSyncAt)
+
+        do {
+            if let latestCommand = try await PlaidCloudSyncService.latestMacRefreshCommand() {
+                switch latestCommand.state {
+                case .pending:
+                    return .alreadyQueued(requestID: latestCommand.requestID, ageLabel: ageLabel)
+                case .running:
+                    return .alreadyRunning(requestID: latestCommand.requestID, ageLabel: ageLabel)
+                case .completed, .failed:
+                    break
+                }
+            }
+
+            let command = try await PlaidCloudSyncService.requestMacRefresh(source: "iPhone Wallet")
+            return .requested(requestID: command.requestID, ageLabel: ageLabel)
+        } catch {
+            return .failed(ageLabel: ageLabel, message: error.localizedDescription)
+        }
+    }
+
+    @MainActor
+    private func latestActiveMacSyncDate(context: ModelContext) -> Date? {
+        let connections = ((try? context.fetch(FetchDescriptor<PlaidConnection>())) ?? [])
+            .filter { !PlaidConnectionValue($0).isDisconnected }
+        return connections.compactMap(\.lastSyncAt).max()
+    }
+
+    private func macSyncAgeLabel(since lastSyncAt: Date?, now: Date = .now) -> String {
+        guard let lastSyncAt else {
+            return "No Mac sync has reached this iPhone yet"
+        }
+
+        let totalMinutes = max(Int(now.timeIntervalSince(lastSyncAt) / 60), 0)
+        if totalMinutes < 60 {
+            return "\(totalMinutes) min old"
+        }
+
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        if minutes == 0 {
+            return "\(hours) hr old"
+        }
+        return "\(hours) hr \(minutes) min old"
+    }
+
+    @MainActor
+    private func startMacRefreshMonitor(requestID: String) {
+        refreshDismissTask?.cancel()
+        refreshDismissTask = nil
+        macRefreshMonitorTask?.cancel()
+        macRefreshMonitorTask = Task { @MainActor in
+            let deadline = Date().addingTimeInterval(macRefreshMonitorTimeout)
+
+            while !Task.isCancelled && Date() < deadline {
+                do {
+                    try await Task.sleep(for: macRefreshMonitorPollInterval)
+                    guard !Task.isCancelled else { return }
+                    try await updateMacRefreshMonitorStatus(requestID: requestID)
+
+                    if refreshSummary?.macRefreshOutcome?.isTerminal == true {
+                        macRefreshMonitorTask = nil
+                        scheduleRefreshFeedbackDismissal(after: .seconds(10))
+                        return
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    applyMacRefreshOutcome(.failed(ageLabel: currentMacSyncAgeLabel(), message: error.localizedDescription))
+                    macRefreshMonitorTask = nil
+                    scheduleRefreshFeedbackDismissal(after: .seconds(10))
+                    return
+                }
+            }
+
+            guard !Task.isCancelled else { return }
+            applyMacRefreshOutcome(.timedOut(ageLabel: currentMacSyncAgeLabel()))
+            macRefreshMonitorTask = nil
+            scheduleRefreshFeedbackDismissal(after: .seconds(10))
+        }
+    }
+
+    @MainActor
+    private func updateMacRefreshMonitorStatus(requestID: String) async throws {
+        guard let command = try await PlaidCloudSyncService.latestMacRefreshCommand(),
+              command.requestID == requestID else {
+            return
+        }
+
+        switch command.state {
+        case .pending:
+            applyMacRefreshOutcome(.alreadyQueued(requestID: requestID, ageLabel: currentMacSyncAgeLabel()))
+        case .running:
+            applyMacRefreshOutcome(.alreadyRunning(requestID: requestID, ageLabel: currentMacSyncAgeLabel()))
+        case .completed:
+            let context = ModelContext(plaidContainer)
+            try await PlaidCloudSyncService.pull(context: context)
+            loadPlaidSnapshots(context: context)
+            let outcome = WalletMacRefreshOutcome.completed(
+                ageLabel: currentMacSyncAgeLabel(context: context),
+                message: command.message
+            )
+            let summary = makeRefreshSummary(context: context, macRefreshOutcome: outcome)
+            withAnimation(.snappy(duration: 0.25)) {
+                refreshSummary = summary
+            }
+        case .failed:
+            applyMacRefreshOutcome(.failed(
+                ageLabel: currentMacSyncAgeLabel(),
+                message: command.message ?? "MoneyMap for Mac could not complete the refresh."
+            ))
+        }
+    }
+
+    @MainActor
+    private func applyMacRefreshOutcome(_ outcome: WalletMacRefreshOutcome) {
+        guard let refreshSummary else { return }
+        withAnimation(.snappy(duration: 0.25)) {
+            self.refreshSummary = refreshSummary.replacingMacRefreshOutcome(outcome)
+        }
+    }
+
+    @MainActor
+    private func currentMacSyncAgeLabel(context: ModelContext? = nil) -> String {
+        macSyncAgeLabel(since: latestActiveMacSyncDate(context: context ?? ModelContext(plaidContainer)))
+    }
+
+    @MainActor
+    private func makeRefreshSummary(
+        context: ModelContext,
+        macRefreshOutcome: WalletMacRefreshOutcome?
+    ) -> WalletRefreshSummary {
         let connections = ((try? context.fetch(FetchDescriptor<PlaidConnection>())) ?? [])
             .filter { !PlaidConnectionValue($0).isDisconnected }
         let accounts = (try? context.fetch(FetchDescriptor<PlaidAccountSnapshot>())) ?? []
@@ -927,7 +1112,8 @@ struct WalletView: View {
             accountCount: accounts.count,
             readyTransactionCount: reviewItems.count,
             readySuggestionCount: suggestions.count,
-            unlinkedPlaidCardCount: unlinkedPlaidCreditAccounts.count
+            unlinkedPlaidCardCount: unlinkedPlaidCreditAccounts.count,
+            macRefreshOutcome: macRefreshOutcome
         )
     }
 }
@@ -953,12 +1139,17 @@ private struct WalletRefreshSummary: Equatable {
     let readyTransactionCount: Int
     let readySuggestionCount: Int
     let unlinkedPlaidCardCount: Int
+    let macRefreshOutcome: WalletMacRefreshOutcome?
 
     var reviewItemCount: Int {
         readyTransactionCount + readySuggestionCount
     }
 
     var compactStatusText: String {
+        if let macRefreshOutcome {
+            return macRefreshOutcome.title
+        }
+
         if reviewItemCount == 0 && unlinkedPlaidCardCount == 0 {
             return "Up to date at \(refreshedAtText)"
         }
@@ -966,6 +1157,10 @@ private struct WalletRefreshSummary: Equatable {
     }
 
     var secondaryDetail: String? {
+        if let macRefreshOutcome {
+            return macRefreshOutcome.detail
+        }
+
         if reviewItemCount == 0 && unlinkedPlaidCardCount == 0 {
             return "\(connectionCount) bank\(connectionCount == 1 ? "" : "s") - \(accountCount) account\(accountCount == 1 ? "" : "s")"
         }
@@ -981,6 +1176,98 @@ private struct WalletRefreshSummary: Equatable {
 
     var refreshedAtText: String {
         refreshedAt.formatted(date: .omitted, time: .shortened)
+    }
+
+    func replacingMacRefreshOutcome(_ macRefreshOutcome: WalletMacRefreshOutcome) -> WalletRefreshSummary {
+        WalletRefreshSummary(
+            refreshedAt: refreshedAt,
+            connectionCount: connectionCount,
+            accountCount: accountCount,
+            readyTransactionCount: readyTransactionCount,
+            readySuggestionCount: readySuggestionCount,
+            unlinkedPlaidCardCount: unlinkedPlaidCardCount,
+            macRefreshOutcome: macRefreshOutcome
+        )
+    }
+}
+
+private enum WalletMacRefreshOutcome: Equatable {
+    case requested(requestID: String, ageLabel: String)
+    case alreadyQueued(requestID: String, ageLabel: String)
+    case alreadyRunning(requestID: String, ageLabel: String)
+    case completed(ageLabel: String, message: String?)
+    case failed(ageLabel: String, message: String)
+    case timedOut(ageLabel: String)
+
+    var title: String {
+        switch self {
+        case .requested:
+            return "Mac refresh requested"
+        case .alreadyQueued:
+            return "Mac refresh already queued"
+        case .alreadyRunning:
+            return "Mac refresh in progress"
+        case .completed:
+            return "Mac refresh completed"
+        case .failed:
+            return "Mac refresh request failed"
+        case .timedOut:
+            return "Still waiting on the Mac"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .requested(_, let ageLabel):
+            return "Last Mac sync is \(ageLabel). Waiting for MoneyMap for Mac to pick up the request."
+        case .alreadyQueued(_, let ageLabel):
+            return "Last Mac sync is \(ageLabel). Waiting for MoneyMap for Mac to pick up the request."
+        case .alreadyRunning(_, let ageLabel):
+            return "Last Mac sync is \(ageLabel). MoneyMap for Mac is refreshing now."
+        case .completed(let ageLabel, let message):
+            let completionMessage = message?.nilIfBlank ?? "The latest snapshot has been downloaded."
+            return "\(completionMessage) Mac sync is now \(ageLabel)."
+        case .failed(let ageLabel, let message):
+            return "Last Mac sync is \(ageLabel), but the iPhone could not ask the Mac to refresh: \(message)"
+        case .timedOut(let ageLabel):
+            return "Last Mac sync is \(ageLabel). Keep MoneyMap for Mac open, then pull to refresh again."
+        }
+    }
+
+    var isFailure: Bool {
+        if case .failed = self {
+            return true
+        }
+        return false
+    }
+
+    var isProcessing: Bool {
+        switch self {
+        case .requested, .alreadyQueued, .alreadyRunning:
+            return true
+        case .completed, .failed, .timedOut:
+            return false
+        }
+    }
+
+    var isTerminal: Bool {
+        switch self {
+        case .completed, .failed, .timedOut:
+            return true
+        case .requested, .alreadyQueued, .alreadyRunning:
+            return false
+        }
+    }
+
+    var requestIDForMonitoring: String? {
+        switch self {
+        case .requested(let requestID, _),
+             .alreadyQueued(let requestID, _),
+             .alreadyRunning(let requestID, _):
+            return requestID
+        case .completed, .failed, .timedOut:
+            return nil
+        }
     }
 }
 
@@ -1033,6 +1320,12 @@ private struct WalletRefreshStatusNotice: View {
         } else if errorMessage != nil {
             Image(systemName: "exclamationmark.icloud")
                 .foregroundStyle(MoneyMapDesign.attentionRed)
+        } else if summary?.macRefreshOutcome?.isProcessing == true {
+            ProgressView()
+                .controlSize(.small)
+        } else if summary?.macRefreshOutcome != nil {
+            Image(systemName: macRefreshIconName)
+                .foregroundStyle(macRefreshIconColor)
         } else {
             Image(systemName: summary == nil ? "icloud.and.arrow.down" : "checkmark.icloud")
                 .foregroundStyle(summary == nil ? .secondary : MoneyMapDesign.calmGreen)
@@ -1060,7 +1353,19 @@ private struct WalletRefreshStatusNotice: View {
     }
 
     private var titleColor: Color {
-        errorMessage == nil ? .primary : MoneyMapDesign.attentionRed
+        errorMessage == nil && !macRefreshFailed ? .primary : MoneyMapDesign.attentionRed
+    }
+
+    private var macRefreshFailed: Bool {
+        summary?.macRefreshOutcome?.isFailure == true
+    }
+
+    private var macRefreshIconName: String {
+        macRefreshFailed ? "exclamationmark.icloud" : "arrow.triangle.2.circlepath.icloud"
+    }
+
+    private var macRefreshIconColor: Color {
+        macRefreshFailed ? MoneyMapDesign.attentionRed : MoneyMapDesign.brandGreen
     }
 }
 

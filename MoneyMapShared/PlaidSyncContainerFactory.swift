@@ -14,8 +14,17 @@ public enum PlaidSyncContainerFactory {
         storeURL: nil,
         fallbackReason: "The Plaid sync container has not been opened yet."
     )
+    private static let cacheLock = NSLock()
+    private static var cachedPersistentContainer: ModelContainer?
 
     public static func make() throws -> ModelContainer {
+        cacheLock.lock()
+        if let cachedPersistentContainer {
+            cacheLock.unlock()
+            return cachedPersistentContainer
+        }
+        cacheLock.unlock()
+
         let schema = Schema([
             PlaidConnection.self,
             PlaidAccountSnapshot.self,
@@ -38,6 +47,9 @@ public enum PlaidSyncContainerFactory {
             configurations: [ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: .none)]
         )
         lastReport = MoneyMapSharedContainerReport(mode: .cloudKit, storeURL: storeURL, fallbackReason: "Plaid data uses a local cache with direct iCloud upload/download.")
+        cacheLock.lock()
+        cachedPersistentContainer = container
+        cacheLock.unlock()
         return container
     }
 

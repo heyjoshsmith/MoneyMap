@@ -27,10 +27,11 @@ import SwiftUI
     public var plaidPendingTransactionID: String?
     public var plaidImportedAt: Date?
     public var plaidIsPending: Bool?
+    public var linkedBillID: UUID?
     
     @Relationship public var creditCard: Bill?
     
-    public init(transactionDate: String?, clearingDate: String?, transactionDescription: String?, merchant: String?, category: String?, type: String?, amountUSD: Double?, purchasedBy: String?, creditCard: Bill? = nil, friendlyName: String? = nil, plaidTransactionID: String? = nil, plaidAccountID: String? = nil, plaidPendingTransactionID: String? = nil, plaidImportedAt: Date? = nil, plaidIsPending: Bool? = nil) {
+    public init(transactionDate: String?, clearingDate: String?, transactionDescription: String?, merchant: String?, category: String?, type: String?, amountUSD: Double?, purchasedBy: String?, creditCard: Bill? = nil, friendlyName: String? = nil, plaidTransactionID: String? = nil, plaidAccountID: String? = nil, plaidPendingTransactionID: String? = nil, plaidImportedAt: Date? = nil, plaidIsPending: Bool? = nil, linkedBillID: UUID? = nil) {
         if let transactionDate = transactionDate { self.transactionDate = Transaction.dateFormatter.date(from: transactionDate) } else { self.transactionDate = nil }
         if let clearingDate = clearingDate { self.clearingDate = Transaction.dateFormatter.date(from: clearingDate) } else { self.clearingDate = nil }
         self.transactionDescription = transactionDescription
@@ -46,9 +47,10 @@ import SwiftUI
         self.plaidPendingTransactionID = plaidPendingTransactionID
         self.plaidImportedAt = plaidImportedAt
         self.plaidIsPending = plaidIsPending
+        self.linkedBillID = linkedBillID
     }
 
-    public init(transactionDate: Date?, clearingDate: Date?, transactionDescription: String?, merchant: String?, category: String?, type: String?, amountUSD: Double?, purchasedBy: String?, creditCard: Bill? = nil, friendlyName: String? = nil, plaidTransactionID: String? = nil, plaidAccountID: String? = nil, plaidPendingTransactionID: String? = nil, plaidImportedAt: Date? = nil, plaidIsPending: Bool? = nil) {
+    public init(transactionDate: Date?, clearingDate: Date?, transactionDescription: String?, merchant: String?, category: String?, type: String?, amountUSD: Double?, purchasedBy: String?, creditCard: Bill? = nil, friendlyName: String? = nil, plaidTransactionID: String? = nil, plaidAccountID: String? = nil, plaidPendingTransactionID: String? = nil, plaidImportedAt: Date? = nil, plaidIsPending: Bool? = nil, linkedBillID: UUID? = nil) {
         self.transactionDate = transactionDate
         self.clearingDate = clearingDate
         self.transactionDescription = transactionDescription
@@ -64,6 +66,7 @@ import SwiftUI
         self.plaidPendingTransactionID = plaidPendingTransactionID
         self.plaidImportedAt = plaidImportedAt
         self.plaidIsPending = plaidIsPending
+        self.linkedBillID = linkedBillID
     }
     
     public static let dateFormatter: DateFormatter = {

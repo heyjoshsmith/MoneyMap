@@ -35,6 +35,8 @@ struct BillsHome: View {
     @State private var showingDeleteConfirmation = false
     @State private var showingCancelConfirmation = false
     @State private var recurringBillSuggestions: [RecurringBillSuggestion] = []
+    @State private var systemIntegrationRefreshTask: Task<Void, Never>?
+    @State private var recurringBillRefreshTask: Task<Void, Never>?
     
     var body: some View {
         NavigationStack {
@@ -195,8 +197,8 @@ struct BillsHome: View {
             .onAppear {
                 routeToRequestedBillIfNeeded()
                 routeToRequestedDestinationIfNeeded()
-                syncSystemIntegrations()
-                refreshRecurringBillSuggestions()
+                scheduleSystemIntegrationRefresh()
+                scheduleRecurringBillSuggestionsRefresh()
             }
             .onChange(of: deepLinkManager.requestedBillID) { _, _ in
                 routeToRequestedBillIfNeeded()
@@ -206,16 +208,19 @@ struct BillsHome: View {
             }
             .onChange(of: bills.count) { _, _ in
                 routeToRequestedBillIfNeeded()
-            }
-            .onChange(of: billsIntegrationSignature) { _, _ in
-                syncSystemIntegrations()
-                refreshRecurringBillSuggestions()
+                scheduleSystemIntegrationRefresh()
+                scheduleRecurringBillSuggestionsRefresh()
             }
             .onChange(of: transactions.count) { _, _ in
-                refreshRecurringBillSuggestions()
+                scheduleSystemIntegrationRefresh()
+                scheduleRecurringBillSuggestionsRefresh()
             }
             .onChange(of: ignoredRecurringBillSuggestionIDs) { _, _ in
-                refreshRecurringBillSuggestions()
+                scheduleRecurringBillSuggestionsRefresh()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: AppRefreshEvents.billsDidChange)) { _ in
+                scheduleSystemIntegrationRefresh()
+                scheduleRecurringBillSuggestionsRefresh()
             }
         }
     }
@@ -286,6 +291,15 @@ struct BillsHome: View {
             )
 
             NavigationLink {
+                BillSetupStatusView()
+            } label: {
+                BillsSetupLinkRow(
+                    setupItemCount: billSetupItemCount,
+                    readyBillCount: readyBillCount
+                )
+            }
+
+            NavigationLink {
                 RecurringBillReviewView(initialSuggestions: recurringBillSuggestions)
             } label: {
                 BillsCalendarLinkRow(
@@ -352,24 +366,28 @@ struct BillsHome: View {
         }
     }
 
-    private var billsIntegrationSignature: String {
-        bills
-            .sorted { $0.id.uuidString < $1.id.uuidString }
-            .map { bill in
-                let name = bill.name ?? ""
-                let amount = bill.amount ?? 0
-                let due = bill.dueDate?.timeIntervalSince1970 ?? 0
-                let paid = bill.datePaid?.timeIntervalSince1970 ?? 0
-                let lifecycle = bill.lifecycleState.rawValue
-                return "\(bill.id.uuidString)|\(name)|\(amount)|\(due)|\(paid)|\(lifecycle)"
-            }
-            .joined(separator: ";")
-    }
-
     private var nextActiveDueDate: Date? {
         unpaidActiveBills
             .compactMap(\.dueDate)
             .min()
+    }
+
+    private var billSetupItemCount: Int {
+        BillSetupAnalyzer.pendingItemCount(
+            for: activeBills,
+            paymentMethods: paymentMethods,
+            transactions: transactions
+        )
+    }
+
+    private var readyBillCount: Int {
+        activeBills.count - activeBills.filter { bill in
+            BillSetupAnalyzer.pendingItemCount(
+                for: [bill],
+                paymentMethods: paymentMethods,
+                transactions: transactions
+            ) > 0
+        }.count
     }
 
     private func lifecycleBills(_ state: BillLifecycleState) -> [Bill] {
@@ -379,10 +397,18 @@ struct BillsHome: View {
     }
 
     private func syncSystemIntegrations() {
-        refreshBillStatuses()
-        SpotlightIndexer.reindexBills(bills)
-        SpotlightIndexer.reindexTransactions(bills.flatMap { $0.transactions ?? [] })
-        notificationManager.scheduleBillDueNotifications(for: bills)
+        MoneyMapDiagnostics.measure(
+            "bills.systemIntegrations",
+            metadata: [
+                "bills": "\(bills.count)",
+                "transactions": "\(transactions.count)"
+            ]
+        ) {
+            refreshBillStatuses()
+            SpotlightIndexer.reindexBills(bills)
+            SpotlightIndexer.reindexTransactions(bills.flatMap { $0.transactions ?? [] })
+            notificationManager.scheduleBillDueNotifications(for: bills)
+        }
     }
 
     private func refreshBillStatuses() {
@@ -410,9 +436,44 @@ struct BillsHome: View {
 
     private func refreshRecurringBillSuggestions() {
         let ignoredIDs = Set(ignoredRecurringBillSuggestionIDs.split(separator: "|").map(String.init))
-        recurringBillSuggestions = RecurringBillDetector
-            .detect(transactions: transactions, existingBills: bills)
+        let cutoff = Calendar.current.date(byAdding: .month, value: -18, to: .now) ?? .distantPast
+        let detectionTransactions = Array(transactions.lazy
+            .filter { transaction in
+                guard let date = transaction.transactionDate ?? transaction.clearingDate else { return false }
+                return date >= cutoff
+            }
+            .prefix(5_000))
+
+        recurringBillSuggestions = MoneyMapDiagnostics.measure(
+            "bills.recurringDetect",
+            metadata: [
+                "bills": "\(bills.count)",
+                "transactions": "\(detectionTransactions.count)"
+            ]
+        ) {
+            RecurringBillDetector.detect(transactions: detectionTransactions, existingBills: bills)
+        }
             .filter { !ignoredIDs.contains($0.id) }
+    }
+
+    private func scheduleSystemIntegrationRefresh() {
+        systemIntegrationRefreshTask?.cancel()
+        systemIntegrationRefreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            syncSystemIntegrations()
+            systemIntegrationRefreshTask = nil
+        }
+    }
+
+    private func scheduleRecurringBillSuggestionsRefresh() {
+        recurringBillRefreshTask?.cancel()
+        recurringBillRefreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            refreshRecurringBillSuggestions()
+            recurringBillRefreshTask = nil
+        }
     }
 
     private func requestDelete(_ bill: Bill) {
@@ -630,6 +691,59 @@ private struct BillsOverviewRow: View {
         needsAttentionCount == 1 ? "1 bill needs review today." :
             needsAttentionCount > 1 ? "\(needsAttentionCount) bills need review today." :
             "Nothing is due or overdue right now."
+    }
+}
+
+private struct BillsSetupLinkRow: View {
+    let setupItemCount: Int
+    let readyBillCount: Int
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius)
+                    .fill(statusColor.opacity(0.14))
+
+                Image(systemName: statusIcon)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(statusColor)
+                    .accessibilityHidden(true)
+            }
+            .frame(width: 40, height: 40)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Bill Setup")
+                    .font(.headline)
+                Text(statusText)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 12)
+
+            Text("\(setupItemCount)")
+                .font(.headline.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(statusColor)
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var statusColor: Color {
+        setupItemCount > 0 ? MoneyMapDesign.warningGold : MoneyMapDesign.calmGreen
+    }
+
+    private var statusIcon: String {
+        setupItemCount > 0 ? "checklist" : "checkmark.circle.fill"
+    }
+
+    private var statusText: String {
+        if setupItemCount == 0 {
+            return "\(readyBillCount) active bill\(readyBillCount == 1 ? "" : "s") ready."
+        }
+        return "\(setupItemCount) item\(setupItemCount == 1 ? "" : "s") left to finish."
     }
 }
 

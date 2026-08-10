@@ -36,6 +36,7 @@ struct PaymentLinkSetupView: View {
                 } footer: {
                     Text("Web links are best. If the biller's app supports the same link, iOS opens the app.")
                 }
+                .moneyMapListSectionBackground()
 
                 Section {
                     if let paymentURL {
@@ -84,7 +85,9 @@ struct PaymentLinkSetupView: View {
                         .buttonStyle(.plain)
                     }
                 }
+                .moneyMapListSectionBackground()
             }
+            .moneyMapGroupedListBackground()
             .navigationTitle(bill.name ?? "Payment Link")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
