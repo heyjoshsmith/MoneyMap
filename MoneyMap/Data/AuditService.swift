@@ -29,10 +29,10 @@ enum AuditService {
 
     static func logBillCreated(_ bill: Bill, context: ModelContext, source: AuditSource = .app) {
         let entityType: AuditEntityType = bill.category == .creditCard ? .creditCard : .bill
-        let amount = bill.category == .creditCard ? bill.creditCardDetails?.cardBalance : bill.amount
+        let amount = bill.category == .creditCard ? bill.currentCreditCardDetails?.cardBalance : bill.amount
         let title = "Created \(bill.name ?? "Bill")"
         let summary = bill.category == .creditCard
-            ? "Starting balance \(MoneyMapFormatters.currencyString(for: bill.creditCardDetails?.cardBalance ?? 0))."
+            ? "Starting balance \(MoneyMapFormatters.currencyString(for: bill.currentCreditCardDetails?.cardBalance ?? 0))."
             : "Due amount \(MoneyMapFormatters.currencyString(for: bill.amount ?? 0))."
         insert(
             AuditEvent(
@@ -196,12 +196,12 @@ enum AuditService {
             guard let goalID = event.entityID,
                   let goal = try fetchGoal(id: goalID, context: context),
                   let previousAmountSaved = event.oldDoubleValue else { return }
-            goal.amountSaved = previousAmountSaved
+            goal.totalSavedAmount = previousAmountSaved
         case .revertBillPayment:
             guard let billID = event.entityID,
                   let bill = try fetchBill(id: billID, context: context) else { return }
             if let previousBalance = event.oldDoubleValue, bill.category == .creditCard {
-                bill.creditCardDetails?.cardBalance = previousBalance
+                bill.currentCreditCardDetails?.cardBalance = previousBalance
             }
             bill.datePaid = event.oldDateValue
             bill.dueDate = event.oldAuxDateValue

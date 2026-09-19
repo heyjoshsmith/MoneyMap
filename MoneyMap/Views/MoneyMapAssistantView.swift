@@ -143,6 +143,7 @@ struct MoneyMapAssistantView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
+            .moneyMapReadableContent()
             .background(MoneyMapDesign.groupedBackground)
             .navigationTitle("Ask MoneyMap")
             .searchable(text: $query, prompt: "Search or ask MoneyMap")
@@ -264,7 +265,7 @@ struct MoneyMapAssistantView: View {
             SearchMetricGrid(
                 metrics: [
                     SearchMetric(title: "Upcoming Bills", value: "\(dueBeforePayday.count)", detail: MoneyMapFormatters.currencyString(for: dueBeforePayday.totalAmount), systemImage: "calendar.badge.exclamationmark", color: .orange),
-                    SearchMetric(title: "Goal Progress", value: averageGoalProgressText, detail: MoneyMapFormatters.currencyString(for: goals.reduce(0) { $0 + $1.amountSaved }), systemImage: "target", color: .green),
+                    SearchMetric(title: "Goal Progress", value: averageGoalProgressText, detail: MoneyMapFormatters.currencyString(for: goals.reduce(0) { $0 + $1.totalSavedAmount }), systemImage: "target", color: .green),
                     SearchMetric(title: "Matched Spend", value: MoneyMapFormatters.currencyString(for: matchedTransactionTotal), detail: "\(matchingTransactions.count) transactions", systemImage: "creditcard", color: .blue),
                     SearchMetric(title: "Unallocated", value: MoneyMapFormatters.currencyString(for: recommendationUnallocatedCash), detail: "After recommended moves", systemImage: "tray", color: .purple)
                 ]
@@ -474,7 +475,7 @@ private struct SearchGoalRow: View {
                 ProgressView(value: min(max(goal.progress(), 0), 1))
                     .tint(.green)
 
-                Text("\(MoneyMapFormatters.currencyString(for: goal.amountSaved)) saved • \(MoneyMapFormatters.currencyString(for: goal.remainingAmount)) left")
+                Text("\(MoneyMapFormatters.currencyString(for: goal.totalSavedAmount)) saved • \(MoneyMapFormatters.currencyString(for: goal.remainingAmount)) left")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

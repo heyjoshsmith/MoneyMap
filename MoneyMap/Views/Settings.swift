@@ -34,7 +34,7 @@ struct Settings: View {
 
 extension Settings {
     private var hasSavedGoalMoney: Bool {
-        goals.contains { $0.amountSaved > 0 }
+        goals.contains { $0.totalSavedAmount > 0 }
     }
 
     private var appearanceStyle: Binding<MoneyMapAppearanceStyle> {
@@ -133,7 +133,7 @@ extension Settings {
     func resetGoalSavings() {
         withAnimation {
             goals.forEach { goal in
-                goal.amountSaved = 0
+                goal.totalSavedAmount = 0
             }
         }
 
@@ -264,7 +264,7 @@ struct PaymentMethodsView: View {
             .filter { $0.category == .creditCard }
             .sorted { $0.id.uuidString < $1.id.uuidString }
             .map { bill in
-                "\(bill.id.uuidString)|\(bill.name ?? "")|\(bill.creditCardDetails?.issuerName ?? "")|\(bill.creditCardDetails?.lastFourDigits ?? "")"
+                "\(bill.id.uuidString)|\(bill.name ?? "")|\(bill.currentCreditCardDetails?.issuerName ?? "")|\(bill.currentCreditCardDetails?.lastFourDigits ?? "")"
             }
             .joined(separator: ";")
         let cardMethods = paymentMethods
@@ -379,14 +379,14 @@ struct PaymentMethodEditor: View {
             .navigationTitle(paymentMethod == nil ? "New Method" : "Edit Method")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save", systemImage: "checkmark") {
                         save()
                     }
                     .disabled(!canSave || paymentMethod?.isCreditCardMirror == true)
@@ -467,44 +467,51 @@ private struct PaymentMethodListRow: View {
 }
 
 struct ScheduledNotificationsView: View {
+    @EnvironmentObject private var notificationManager: NotificationManager
+    @EnvironmentObject private var paydayManager: PaydayManager
+    @Query private var bills: [Bill]
+    @Query(sort: \Goal.deadline, order: .forward) private var goals: [Goal]
+    @AppStorage(NotificationManager.notifyPaydayBeforeEnabledKey) private var notifyDayBeforeEnabled = true
+    @AppStorage(NotificationManager.notifyPaydayDayOfEnabledKey) private var notifyDayOfEnabled = true
+    @AppStorage(NotificationManager.notifyBillDueEnabledKey) private var notifyBillDueEnabled = true
+    @AppStorage(NotificationManager.notifyGoalBehindEnabledKey) private var notifyGoalBehindEnabled = true
+    @AppStorage(BackgroundTransactionSyncManager.backgroundSyncEnabledKey) private var backgroundSyncEnabled = true
+    @AppStorage(NotificationManager.notificationTimeKey) private var notificationTime: Date = {
+        var components = DateComponents()
+        components.hour = 9
+        components.minute = 0
+        return Calendar.current.date(from: components) ?? Date()
+    }()
+
     @State private var notifications: [UNNotificationRequest] = []
+    @State private var authorizationStatus: UNAuthorizationStatus = .notDetermined
     @State private var showDeleteConfirmation = false
     @State private var isDeleting = false
 
     var body: some View {
         List {
-            Section {
-                if notifications.isEmpty {
-                    MoneyMapEmptyState(
-                        title: "No Scheduled Notifications",
-                        message: "Payday, bill, and goal alerts will appear here after they are scheduled.",
-                        systemImage: "bell"
-                    )
-                } else {
-                    ForEach(notifications, id: \.identifier) { request in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(request.content.title)
-                                .font(.headline)
-                            Text(request.content.body)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            if let trigger = request.trigger as? UNCalendarNotificationTrigger,
-                               let nextTriggerDate = trigger.nextTriggerDate() {
-                                Text("Scheduled for \(nextTriggerDate.formatted(date: .abbreviated, time: .shortened))")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-            }
-            .listRowBackground(MoneyMapDesign.surfaceBackground)
+            permissionSection
+            reminderSection
+            backgroundSyncSection
+            scheduledSection
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(MoneyMapDesign.groupedBackground)
-        .onAppear(perform: fetchNotifications)
-        .navigationTitle("Scheduled Notifications")
+        .onAppear {
+            refreshAuthorizationStatus()
+            rescheduleNotifications()
+            fetchNotifications()
+        }
+        .onChange(of: notifyDayBeforeEnabled) { _, _ in settingsDidChange() }
+        .onChange(of: notifyDayOfEnabled) { _, _ in settingsDidChange() }
+        .onChange(of: notifyBillDueEnabled) { _, _ in settingsDidChange() }
+        .onChange(of: notifyGoalBehindEnabled) { _, _ in settingsDidChange() }
+        .onChange(of: notificationTime) { _, _ in settingsDidChange() }
+        .onChange(of: backgroundSyncEnabled) { _, enabled in
+            BackgroundTransactionSyncManager.setBackgroundSyncEnabled(enabled)
+        }
+        .navigationTitle("Notifications")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(role: .destructive, action: { showDeleteConfirmation = true }) {
@@ -521,12 +528,142 @@ struct ScheduledNotificationsView: View {
         }
     }
 
+    private var permissionSection: some View {
+        Section {
+            LabeledContent("Permission", value: authorizationStatusText)
+
+            if authorizationStatus == .notDetermined {
+                Button {
+                    requestNotificationAccess()
+                } label: {
+                    Label("Allow Notifications", systemImage: "bell.badge")
+                }
+            }
+        } footer: {
+            if authorizationStatus == .denied {
+                Text("Turn on notifications for MoneyMap in Settings to receive reminders.")
+            }
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var reminderSection: some View {
+        Section("Reminders") {
+            Toggle("Payday Tomorrow", isOn: $notifyDayBeforeEnabled)
+            Toggle("Payday Morning", isOn: $notifyDayOfEnabled)
+            Toggle("Bill Due", isOn: $notifyBillDueEnabled)
+            Toggle("Goal Catch-Up", isOn: $notifyGoalBehindEnabled)
+
+            DatePicker("Reminder Time", selection: $notificationTime, displayedComponents: .hourAndMinute)
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var backgroundSyncSection: some View {
+        Section {
+            Toggle("Check for New Transactions", isOn: $backgroundSyncEnabled)
+            LabeledContent("Frequency", value: "System managed")
+        } header: {
+            Text("Background Sync")
+        } footer: {
+            Text("MoneyMap asks iOS for periodic refresh time to pull the latest Mac bank snapshot and import reviewed transactions when available.")
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var scheduledSection: some View {
+        Section {
+            if notifications.isEmpty {
+                MoneyMapEmptyState(
+                    title: "No Scheduled Notifications",
+                    message: "Payday, bill, and goal alerts will appear here after they are scheduled.",
+                    systemImage: "bell"
+                )
+            } else {
+                ForEach(notifications, id: \.identifier) { request in
+                    scheduledNotificationRow(request)
+                }
+            }
+        }
+        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private func scheduledNotificationRow(_ request: UNNotificationRequest) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(request.content.title)
+                .font(.headline)
+            Text(request.content.body)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            if let trigger = request.trigger as? UNCalendarNotificationTrigger,
+               let nextTriggerDate = trigger.nextTriggerDate() {
+                Text("Scheduled for \(nextTriggerDate.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var authorizationStatusText: String {
+        switch authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            return "Allowed"
+        case .denied:
+            return "Off"
+        case .notDetermined:
+            return "Not Asked"
+        @unknown default:
+            return "Unknown"
+        }
+    }
+
     func fetchNotifications() {
         UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
             DispatchQueue.main.async {
-                self.notifications = requests
+                self.notifications = requests.sorted { lhs, rhs in
+                    let leftDate = (lhs.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate() ?? .distantFuture
+                    let rightDate = (rhs.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate() ?? .distantFuture
+                    return leftDate < rightDate
+                }
             }
         }
+    }
+
+    private func refreshAuthorizationStatus() {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            DispatchQueue.main.async {
+                authorizationStatus = settings.authorizationStatus
+            }
+        }
+    }
+
+    private func requestNotificationAccess() {
+        notificationManager.requestAuthorizationIfNeeded { _ in
+            refreshAuthorizationStatus()
+            rescheduleNotifications()
+            fetchNotifications()
+        }
+    }
+
+    private func settingsDidChange() {
+        notificationManager.requestAuthorizationIfNeeded { _ in
+            rescheduleNotifications()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                fetchNotifications()
+            }
+        }
+    }
+
+    private func rescheduleNotifications() {
+        notificationManager.schedulePaydayNotifications(
+            for: paydayManager.upcomingPaydaysForNextYear(),
+            bills: bills
+        )
+        notificationManager.scheduleBillDueNotifications(for: bills)
+        notificationManager.scheduleGoalProgressNotifications(
+            for: goals,
+            nextPayday: paydayManager.nextPayday
+        )
     }
 
     func removeAllNotifications() {

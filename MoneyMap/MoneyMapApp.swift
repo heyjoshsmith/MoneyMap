@@ -13,40 +13,41 @@ import TipKit
 
 @main
 struct MoneyMapApp: App {
-    @StateObject private var deepLinkManager = DeepLinkManager()
     @StateObject private var notificationManager = NotificationManager()
-    
-    var modelContainer: ModelContainer = {
-        (try? SharedModelContainerFactory.make()) ?? SharedModelContainerFactory.makeInMemory()
-    }()
-    
+    @StateObject private var paydayManager: PaydayManager
+    @State private var sceneRouter = MoneyMapSceneRouter()
+    private let modelContainer: ModelContainer
+    @State private var didConfigureServices = false
+
+    init() {
+        let container = (try? SharedModelContainerFactory.make()) ?? SharedModelContainerFactory.makeInMemory()
+        modelContainer = container
+        _paydayManager = StateObject(wrappedValue: PaydayManager(context: container.mainContext))
+        BackgroundTransactionSyncManager.register(modelContainer: container)
+    }
+
     var body: some Scene {
-        WindowGroup {
-            let context = modelContainer.mainContext
-            ContentView()
-                .environmentObject(PaydayManager(context: context))
-                .environmentObject(deepLinkManager)
+        WindowGroup("MoneyMap", for: MoneyMapWindowContent.self) { $content in
+            MoneyMapWindowRoot(sceneRouter: sceneRouter, initialContent: content)
+                .environmentObject(paydayManager)
                 .environmentObject(notificationManager)
                 .modelContainer(modelContainer)
-                .onOpenURL { url in
-                    deepLinkManager.handle(url: url)
-                }
-                .onContinueUserActivity(CSSearchableItemActionType) { userActivity in
-                    if let route = SpotlightIndexer.routeFromSearchableItemActivity(userActivity) {
-                        deepLinkManager.pendingRoute = route
-                    }
-                }
                 .task {
+                    guard !didConfigureServices else { return }
+                    didConfigureServices = true
                     syncSharedAppearanceSetting()
-                    notificationManager.attach(deepLinkManager: deepLinkManager)
+                    WatchThemeSync.shared.start()
+                    notificationManager.attach(sceneRouter: sceneRouter)
+                    BackgroundTransactionSyncManager.scheduleAppRefresh()
                     try? await Task.sleep(nanoseconds: 4_000_000_000)
                     try? Tips.configure([
                         .displayFrequency(.daily)
                     ])
                 }
         }
+        .commands { InspectorCommands() }
     }
-    
+
     private func syncSharedAppearanceSetting() {
         let rawValue = UserDefaults.standard.string(forKey: MoneyMapDesign.appearanceStyleKey)
             ?? MoneyMapAppearanceStyle.warm.rawValue

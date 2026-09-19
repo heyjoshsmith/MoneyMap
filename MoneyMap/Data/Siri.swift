@@ -522,8 +522,8 @@ extension BillEntity {
         autopaySource = bill.autopaySource
         isPaid = bill.datePaid != nil || bill.status == .paid
         autopayEnabled = bill.autopayEnabled
-        currentBalance = makeCurrencyAmount(bill.creditCardDetails?.cardBalance)
-        creditLimit = makeCurrencyAmount(bill.creditCardDetails?.creditLimit)
+        currentBalance = makeCurrencyAmount(bill.currentCreditCardDetails?.cardBalance)
+        creditLimit = makeCurrencyAmount(bill.currentCreditCardDetails?.creditLimit)
     }
 }
 
@@ -531,7 +531,7 @@ extension GoalEntity {
     init(_ goal: Goal) {
         id = goal.id
         name = goal.name ?? "Untitled"
-        amountSaved = makeCurrencyAmount(goal.amountSaved) ?? IntentCurrencyAmount(amount: 0, currencyCode: moneyMapCurrencyCode)
+        amountSaved = makeCurrencyAmount(goal.totalSavedAmount) ?? IntentCurrencyAmount(amount: 0, currencyCode: moneyMapCurrencyCode)
         targetAmount = makeCurrencyAmount(goal.targetAmount)
         remainingAmount = makeCurrencyAmount(goal.remainingAmount) ?? IntentCurrencyAmount(amount: 0, currencyCode: moneyMapCurrencyCode)
         deadline = goal.deadline
@@ -773,8 +773,8 @@ struct ShowCardUtilizationIntent: AppIntent {
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let cards = try MoneyMapBillStore.fetchBills().filter { $0.category == .creditCard }
-        let totalBalance = cards.reduce(0) { $0 + ($1.creditCardDetails?.cardBalance ?? 0) }
-        let totalLimit = cards.reduce(0) { $0 + ($1.creditCardDetails?.creditLimit ?? 0) }
+        let totalBalance = cards.reduce(0) { $0 + ($1.currentCreditCardDetails?.cardBalance ?? 0) }
+        let totalLimit = cards.reduce(0) { $0 + ($1.currentCreditCardDetails?.creditLimit ?? 0) }
         let utilization = totalLimit > 0 ? totalBalance / totalLimit : 0
 
         let utilizationText = utilization.formatted(.percent.precision(.fractionLength(0)))
@@ -942,7 +942,7 @@ struct GetSavingsSummaryIntent: AppIntent {
         }
 
         let goals = try MoneyMapPlanningStore.fetchGoals()
-        let totalSaved = goals.reduce(0) { $0 + $1.amountSaved }
+        let totalSaved = goals.reduce(0) { $0 + $1.totalSavedAmount }
         let totalRemaining = goals.reduce(0) { $0 + $1.remainingAmount }
         let savedText = MoneyMapFormatters.currencyString(for: totalSaved)
         let remainingText = MoneyMapFormatters.currencyString(for: totalRemaining)

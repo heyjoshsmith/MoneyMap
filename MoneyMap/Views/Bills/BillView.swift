@@ -12,6 +12,19 @@ import UniformTypeIdentifiers
 import ImagePlayground
 import AppIntents
 
+private struct LinkedCardPullToRefresh: ViewModifier {
+    let enabled: Bool
+    let refresh: @MainActor () async -> Void
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.refreshable { await refresh() }
+        } else {
+            content
+        }
+    }
+}
+
 struct BillView: View {
     
     @Environment(\.supportsImagePlayground) private var supportsImagePlayground
@@ -53,6 +66,7 @@ struct BillView: View {
     @State private var plaidUnavailable = false
     @State private var showingPaymentLinkSetup = false
     @State private var showingPaymentSettings = false
+    @State private var showingNotificationSettings = false
     @State private var showingPaymentMethodEditor = false
     @State private var showingPlaidPaymentMethodSelector = false
     @State private var showingScheduleManager = false
@@ -65,6 +79,11 @@ struct BillView: View {
     @State private var showingClearPaymentConfirmation = false
     @State private var pendingSetupAction: BillSetupAction?
     @State private var billTransactions: [Transaction] = []
+    @State private var reminderNotificationsEnabled = true
+    @State private var isRefreshingCard = false
+    @State private var cardRefreshMessage: String?
+    @State private var cardRefreshError: String?
+    @State private var showingCardRefreshError = false
     
     enum TransactionSortField: String, CaseIterable, Identifiable {
         case date = "Date"
@@ -237,10 +256,77 @@ struct BillView: View {
         }
     }
     
+    private var isLinkedCard: Bool {
+        bill.category == .creditCard && bill.plaidAccountID?.isEmpty == false && !bill.plaidUnavailable
+    }
+
+    private var linkedCardRefreshStatus: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .foregroundStyle(.blue)
+                    .frame(width: 26)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Bank Sync")
+                        .font(.headline)
+                    if let updatedAt = bill.plaidUpdatedAt {
+                        Text("Updated \(updatedAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Not updated yet")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+                if isRefreshingCard {
+                    ProgressView().accessibilityLabel("Updating card")
+                }
+            }
+            Text(isRefreshingCard ? "Updating card…" : (cardRefreshMessage ?? "Pull to refresh from the latest Mac bank sync."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(MoneyMapDesign.surfaceBackground)
+        .clipShape(.rect(cornerRadius: MoneyMapDesign.sectionCornerRadius))
+        .accessibilityElement(children: .combine)
+    }
+
+    @MainActor
+    private func refreshLinkedCard() async {
+        guard isLinkedCard, !isRefreshingCard else { return }
+        isRefreshingCard = true
+        cardRefreshMessage = nil
+        cardRefreshError = nil
+        defer { isRefreshingCard = false }
+        do {
+            let previousUpdate = bill.plaidUpdatedAt
+            let updatedAt = try await LinkedCardRefreshService.refresh(bill, context: modelContext)
+            if Date().timeIntervalSince(updatedAt) > 2 * 60 * 60 {
+                cardRefreshMessage = "Latest saved details loaded. Open MoneyMap on your Mac for newer bank data."
+            } else {
+                cardRefreshMessage = previousUpdate == updatedAt ? "Already using the latest synced details." : "Card details updated."
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled else { return }
+            cardRefreshError = error.localizedDescription
+            showingCardRefreshError = true
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: MoneyMapDesign.sectionSpacing) {
                 billHeaderSection
+
+                if isLinkedCard {
+                    linkedCardRefreshStatus
+                }
 
                 if shouldShowNextStep {
                     billActionSection
@@ -249,12 +335,20 @@ struct BillView: View {
                 creditCardDetailsSection
                 paymentSummarySection
                 scheduleSummarySection
+                notificationSummarySection
                 transactionSummarySection
             }
             .padding(.horizontal)
             .padding(.bottom, 24)
         }
         .navigationTitle(bill.name ?? "Bill")
+        .modifier(LinkedCardPullToRefresh(enabled: isLinkedCard, refresh: refreshLinkedCard))
+        .alert("Couldn’t Update Card", isPresented: $showingCardRefreshError) {
+            Button("Try Again") { Task { await refreshLinkedCard() } }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(cardRefreshError ?? "Please try again.")
+        }
         .navigationBarTitleDisplayMode(.inline)
         .background(MoneyMapDesign.groupedBackground)
         .userActivity("com.heyjoshsmith.MoneyMap.viewingBill") { activity in
@@ -281,6 +375,7 @@ struct BillView: View {
                 }
 
                 Menu {
+                    MoneyMapOpenWindowButton(content: .wallet(.bill(bill.id)))
                     NavigationLink {
                         ActivityFeedView(
                             title: bill.category == .creditCard ? "Card History" : "Bill History",
@@ -326,7 +421,7 @@ struct BillView: View {
                     if bill.category == .creditCard {
                         Section {
                             Button(MoneyMapAction.editCardLimit.title, systemImage: MoneyMapAction.editCardLimit.systemImage) {
-                                cardLimit = bill.creditCardDetails?.creditLimit.formatted(.number) ?? ""
+                                cardLimit = bill.currentCreditCardDetails?.creditLimit.formatted(.number) ?? ""
                                 editingLimit = true
                             }
                         }
@@ -348,7 +443,7 @@ struct BillView: View {
             Button("Save") {
                 let normalized = cardLimit.replacingOccurrences(of: ",", with: "")
                 if let newLimit = Double(normalized), newLimit >= 0 {
-                    bill.creditCardDetails?.creditLimit = newLimit
+                    bill.currentCreditCardDetails?.creditLimit = newLimit
                     do {
                         try modelContext.save()
                     } catch {
@@ -358,7 +453,7 @@ struct BillView: View {
                 }
             }
         } message: {
-            if let details = bill.creditCardDetails {
+            if let details = bill.currentCreditCardDetails {
                 Text("What is your new card limit? Your current limit is \(details.creditLimit, format: .currency(code: "USD"))")
             }
         }
@@ -422,6 +517,15 @@ struct BillView: View {
                 paymentSettingsContent: {
                     billMetaSection
                 }
+            )
+        }
+        .sheet(isPresented: $showingNotificationSettings) {
+            BillNotificationSettingsSheet(
+                billTitle: billTitle,
+                reminderNotificationsEnabled: $reminderNotificationsEnabled,
+                notificationStatusText: billNotificationStatusText,
+                paymentStateText: billNotificationPaymentStateText,
+                onSave: saveBillMeta
             )
         }
         .sheet(isPresented: $showingPaymentMethodEditor) {
@@ -661,7 +765,7 @@ struct BillView: View {
     }
 
     private var amountMetricValue: String {
-        if bill.category == .creditCard, let details = bill.creditCardDetails {
+        if bill.category == .creditCard, let details = bill.currentCreditCardDetails {
             return MoneyMapFormatters.currencyString(for: details.cardBalance)
         }
         return MoneyMapFormatters.currencyString(for: bill.amount ?? 0)
@@ -696,13 +800,11 @@ struct BillView: View {
     }
 
     private var shouldShowNextStep: Bool {
-        if bill.lifecycleState == .active,
-           bill.category != .creditCard,
-           (bill.paymentMode == .autopay || bill.paymentMode == .inPerson) {
-            return false
-        }
+        bill.lifecycleState != .active || nextStepPolicy.hasActions || bill.datePaid != nil
+    }
 
-        return true
+    private var nextStepPolicy: BillNextStepPolicy {
+        BillNextStepPolicy(bill: bill)
     }
 
     private var primaryActionIcon: String {
@@ -729,10 +831,19 @@ struct BillView: View {
         }
 
         if bill.category == .creditCard {
+            if !nextStepPolicy.recordCardPayment {
+                return "No payment is needed for the current balance."
+            }
             if aboveMax {
                 return "Balance is above the 30% target. Record a payment when you make one."
             }
-            return "Keep the balance, payment date, and payment link current."
+            if nextStepPolicy.setUpPaymentLink {
+                return "Add a payment link, then record payments when you make them."
+            }
+            if nextStepPolicy.openPaymentLink {
+                return "Open your payment link, then record the payment."
+            }
+            return "Record a payment when you make one to keep the balance current."
         }
 
         if bill.status == .paid {
@@ -743,8 +854,12 @@ struct BillView: View {
             return "MoneyMap will mark this paid when a matching synced transaction arrives."
         }
 
-        if bill.paymentURL == nil {
+        if nextStepPolicy.setUpPaymentLink {
             return "No payment link is saved for this bill."
+        }
+
+        if !nextStepPolicy.openPaymentLink {
+            return "Mark this bill paid after you make the payment."
         }
 
         if bill.status == .overdue {
@@ -957,7 +1072,7 @@ struct BillView: View {
     private var primaryActions: [BillDetailAction] {
         var actions: [BillDetailAction] = []
 
-        if let paymentURL = bill.paymentURL, bill.paymentMode == .payLink {
+        if let paymentURL = bill.paymentURL, nextStepPolicy.openPaymentLink {
             actions.append(
                 BillDetailAction(
                     title: "Open Pay Link",
@@ -969,7 +1084,7 @@ struct BillView: View {
                     openURL(paymentURL)
                 }
             )
-        } else if bill.paymentMode == .payLink || bill.paymentMode == .manual {
+        } else if nextStepPolicy.setUpPaymentLink {
             actions.append(
                 BillDetailAction(
                     title: "Set Up Link",
@@ -982,27 +1097,27 @@ struct BillView: View {
             )
         }
 
-        if bill.category == .creditCard {
+        if nextStepPolicy.recordCardPayment {
             actions.append(
                 BillDetailAction(
                     title: MoneyMapAction.makePayment.title,
                     detail: paymentActionDetail,
                     systemImage: MoneyMapAction.makePayment.systemImage,
                     tint: .green,
-                    style: bill.paymentURL == nil ? .prominent : .secondary
+                    style: nextStepPolicy.openPaymentLink ? .secondary : .prominent
                 ) {
                     paymentAmount = ""
                     makingPayment = true
                 }
             )
-        } else if canManuallyMarkPaid {
+        } else if nextStepPolicy.markPaid {
             actions.append(
                 BillDetailAction(
                     title: "Mark Paid",
                     detail: MoneyMapFormatters.currencyString(for: bill.amount ?? 0),
                     systemImage: "checkmark.circle",
                     tint: .green,
-                    style: bill.paymentURL == nil ? .prominent : .secondary
+                    style: nextStepPolicy.openPaymentLink ? .secondary : .prominent
                 ) {
                     showMarkPaidConfirmation = true
                 }
@@ -1035,10 +1150,10 @@ struct BillView: View {
     }
 
     private var paymentActionDetail: String {
-        if let payment = bill.creditCardDetails?.recommendedPayment, payment > 0 {
+        if let payment = bill.currentCreditCardDetails?.recommendedPayment, payment > 0 {
             return "Recommended \(MoneyMapFormatters.currencyString(for: payment))"
         }
-        if let minimum = bill.creditCardDetails?.effectiveMinimumPayment, minimum > 0 {
+        if let minimum = bill.currentCreditCardDetails?.effectiveMinimumPayment, minimum > 0 {
             return "Minimum \(MoneyMapFormatters.currencyString(for: minimum))"
         }
         return "Record an amount"
@@ -1046,7 +1161,7 @@ struct BillView: View {
     
     private var creditCardDetailsSection: some View {
         Group {
-            if bill.category == .creditCard, let details = bill.creditCardDetails {
+            if bill.category == .creditCard, let details = bill.currentCreditCardDetails {
                 let gaugeMaximum = max(details.creditLimit, details.cardBalance, 1)
 
                 VStack(alignment: .leading, spacing: 12) {
@@ -1294,6 +1409,36 @@ struct BillView: View {
         .clipShape(.rect(cornerRadius: MoneyMapDesign.sectionCornerRadius))
     }
 
+    private var notificationSummarySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            BillSectionHeader(
+                title: "Notifications",
+                systemImage: "bell",
+                actionTitle: "Change",
+                action: { showingNotificationSettings = true }
+            )
+
+            Divider()
+
+            BillSummaryLine(
+                title: "Bill Reminder",
+                value: billNotificationStatusText,
+                systemImage: reminderNotificationsEnabled ? "bell.badge" : "bell.slash",
+                tint: reminderNotificationsEnabled ? MoneyMapDesign.calmGreen : .secondary
+            )
+
+            BillSummaryLine(
+                title: "Notification Copy",
+                value: billNotificationPaymentStateText,
+                systemImage: bill.autopayEnabled ? "arrow.triangle.2.circlepath" : "hand.tap",
+                tint: bill.autopayEnabled ? MoneyMapDesign.calmGreen : MoneyMapDesign.warningGold
+            )
+        }
+        .padding()
+        .background(MoneyMapDesign.surfaceBackground)
+        .clipShape(.rect(cornerRadius: MoneyMapDesign.sectionCornerRadius))
+    }
+
     private var transactionSummarySection: some View {
         VStack(alignment: .leading, spacing: 12) {
             BillSectionHeader(
@@ -1462,7 +1607,7 @@ struct BillView: View {
     }
 
     private var paymentPlaceholder: String {
-        if let payment = bill.creditCardDetails?.recommendedPayment {
+        if let payment = bill.currentCreditCardDetails?.recommendedPayment {
             return "Recommended: \(payment.currency)"
         }
         return "Enter Payment"
@@ -1488,7 +1633,7 @@ struct BillView: View {
             return
         }
 
-        let previousBalance = bill.creditCardDetails?.cardBalance
+        let previousBalance = bill.currentCreditCardDetails?.cardBalance
         let previousDatePaid = bill.datePaid
         let previousDueDate = bill.dueDate
         let previousStatus = bill.status
@@ -1509,7 +1654,7 @@ struct BillView: View {
     }
 
     private func markPaid() {
-        let previousBalance = bill.creditCardDetails?.cardBalance
+        let previousBalance = bill.currentCreditCardDetails?.cardBalance
         let previousDatePaid = bill.datePaid
         let previousDueDate = bill.dueDate
         let previousStatus = bill.status
@@ -1621,6 +1766,7 @@ struct BillView: View {
         selectedPaymentMethodID = bill.paymentMethodID
         gracePeriodDays = bill.gracePeriodDays ?? 0
         plaidUnavailable = bill.plaidUnavailable
+        reminderNotificationsEnabled = bill.reminderNotificationsEnabled
     }
 
     private func presentPendingSetupActionIfNeeded() {
@@ -1664,6 +1810,7 @@ struct BillView: View {
             paymentMode: paymentMode
         )
         bill.plaidUnavailable = shouldShowPlaidUnavailableToggle && plaidUnavailable
+        bill.reminderNotificationsEnabled = reminderNotificationsEnabled
         bill.checkStatus()
         do {
             try modelContext.save()
@@ -1763,6 +1910,17 @@ struct BillView: View {
         }
 
         return "Not set"
+    }
+
+    private var billNotificationStatusText: String {
+        guard reminderNotificationsEnabled else { return "Off for this bill" }
+        guard bill.lifecycleState == .active else { return bill.lifecycleState.title }
+        guard bill.dueDate != nil else { return "Needs due date" }
+        return "One day before due"
+    }
+
+    private var billNotificationPaymentStateText: String {
+        bill.autopayEnabled ? "Auto pay is enabled" : "Manual payment required"
     }
 
     private var paymentMethodActionGrid: some View {
@@ -1924,7 +2082,7 @@ struct BillView: View {
 
     var recommendedPayment: Double? {
         
-        guard let details = bill.creditCardDetails else {
+        guard let details = bill.currentCreditCardDetails else {
             return nil
         }
         
@@ -1938,7 +2096,7 @@ struct BillView: View {
     }
     
     var aboveMax: Bool {
-        if let creditCardDetails = bill.creditCardDetails {
+        if let creditCardDetails = bill.currentCreditCardDetails {
             return creditCardDetails.utilization >= 0.3
         }
         
@@ -1947,7 +2105,7 @@ struct BillView: View {
     
     var utilizationIcon: some View {
         HStack {
-            if let creditCardDetails = bill.creditCardDetails {
+            if let creditCardDetails = bill.currentCreditCardDetails {
                 
                 let above = creditCardDetails.utilization >= 0.3
                 
@@ -2237,8 +2395,61 @@ private struct BillPaymentSettingsSheet<PaymentSettingsContent: View>: View {
             .navigationTitle("Payment")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", systemImage: "checkmark") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct BillNotificationSettingsSheet: View {
+    let billTitle: String
+    @Binding var reminderNotificationsEnabled: Bool
+    let notificationStatusText: String
+    let paymentStateText: String
+    let onSave: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Toggle("Bill Reminder", isOn: $reminderNotificationsEnabled)
+                        .onChange(of: reminderNotificationsEnabled) { _, _ in
+                            onSave()
+                        }
+
+                    BillSummaryLine(
+                        title: "Timing",
+                        value: notificationStatusText,
+                        systemImage: "calendar.badge.clock",
+                        tint: reminderNotificationsEnabled ? MoneyMapDesign.calmGreen : .secondary
+                    )
+
+                    BillSummaryLine(
+                        title: "Copy",
+                        value: paymentStateText,
+                        systemImage: paymentStateText == "Auto pay is enabled" ? "arrow.triangle.2.circlepath" : "hand.tap",
+                        tint: paymentStateText == "Auto pay is enabled" ? MoneyMapDesign.calmGreen : MoneyMapDesign.warningGold
+                    )
+                } footer: {
+                    Text("Global notification choices still apply. This switch only controls reminders for \(billTitle).")
+                }
+                .listRowBackground(MoneyMapDesign.surfaceBackground)
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(MoneyMapDesign.groupedBackground)
+            .navigationTitle("Notifications")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", systemImage: "checkmark") {
+                        onSave()
                         dismiss()
                     }
                 }
@@ -2299,8 +2510,8 @@ private struct BillScheduleManagerSheet<RecurrenceContent: View>: View {
             .navigationTitle("Schedule")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", systemImage: "checkmark") {
                         dismiss()
                     }
                 }
@@ -2474,7 +2685,7 @@ private struct BillTransactionLinkingView: View {
                 BillTransactionSourceFilterOption(
                     id: "card:\(card.id.uuidString)",
                     title: card.name?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Card",
-                    subtitle: card.creditCardDetails?.issuerName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+                    subtitle: card.currentCreditCardDetails?.issuerName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
                     groupTitle: "Cards",
                     systemImage: "creditcard"
                 )
@@ -2624,8 +2835,8 @@ private struct BillTransactionLinkingView: View {
                     }
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", systemImage: "checkmark") {
                         dismiss()
                     }
                 }
@@ -3236,8 +3447,8 @@ private struct BillTransactionLinkFilterSheet: View {
                     .disabled(!hasActiveFilters)
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", systemImage: "checkmark") {
                         dismiss()
                     }
                 }
@@ -3636,8 +3847,8 @@ private struct PlaidPaymentMethodSelectorView: View {
             .navigationTitle("Connect Plaid")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
@@ -3838,8 +4049,8 @@ private struct CreditCardDataSourcesView: View {
             .scrollContentBackground(.hidden)
             .background(MoneyMapDesign.groupedBackground)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", systemImage: "checkmark") {
                         dismiss()
                     }
                 }
@@ -3871,7 +4082,7 @@ private struct CreditCardDataSourcesView: View {
             if bill.plaidAccountID == nil {
                 DataSourceRow(title: "Bank Sync", value: "Not linked", systemImage: "link.slash", tint: .secondary)
             } else {
-                DataSourceRow(title: "Institution", value: plaidAccount?.institutionName ?? bill.creditCardDetails?.issuerName ?? "Synced bank", systemImage: "building.columns", tint: MoneyMapDesign.calmGreen)
+                DataSourceRow(title: "Institution", value: plaidAccount?.institutionName ?? bill.currentCreditCardDetails?.issuerName ?? "Synced bank", systemImage: "building.columns", tint: MoneyMapDesign.calmGreen)
                 DataSourceRow(title: "Account", value: plaidAccount?.displayName ?? "Linked card", systemImage: "creditcard", tint: MoneyMapDesign.calmGreen)
                 DataSourceRow(title: "Current Balance", value: currentBalanceText, systemImage: "dollarsign.circle", tint: MoneyMapDesign.calmGreen)
                 DataSourceRow(title: "Available Credit", value: availableCreditText, systemImage: "gauge.with.dots.needle.33percent", tint: MoneyMapDesign.calmGreen)
@@ -3900,9 +4111,9 @@ private struct CreditCardDataSourcesView: View {
             }
             DataSourceRow(title: "Due Date", value: bill.dueDate.map(MoneyMapFormatters.mediumDateString(for:)) ?? "Not set", systemImage: "calendar", tint: .blue)
             DataSourceRow(title: "Schedule", value: scheduleText, systemImage: "repeat", tint: .blue)
-            DataSourceRow(title: "APR", value: percentageText(bill.creditCardDetails?.annualPercentageRate), systemImage: "percent", tint: .purple)
-            DataSourceRow(title: "Minimum Payment", value: moneyText(bill.creditCardDetails?.minimumPayment), systemImage: "creditcard.and.123", tint: .blue)
-            DataSourceRow(title: "Statement Balance", value: moneyText(bill.creditCardDetails?.statementBalance), systemImage: "doc.text", tint: .indigo)
+            DataSourceRow(title: "APR", value: percentageText(bill.currentCreditCardDetails?.annualPercentageRate), systemImage: "percent", tint: .purple)
+            DataSourceRow(title: "Minimum Payment", value: moneyText(bill.currentCreditCardDetails?.minimumPayment), systemImage: "creditcard.and.123", tint: .blue)
+            DataSourceRow(title: "Statement Balance", value: moneyText(bill.currentCreditCardDetails?.statementBalance), systemImage: "doc.text", tint: .indigo)
             DataSourceRow(title: "Payment Settings", value: bill.autopayEnabled ? "Autopay on" : "Autopay off", systemImage: "gearshape", tint: .secondary)
         }
         .listRowBackground(MoneyMapDesign.surfaceBackground)
@@ -3912,7 +4123,7 @@ private struct CreditCardDataSourcesView: View {
         Section {
             DataSourceRow(title: "Credit Limit", value: creditLimitSourceText, systemImage: "gauge.with.dots.needle.67percent", tint: MoneyMapDesign.warningGold)
             DataSourceRow(title: "Utilization", value: utilizationText, systemImage: "chart.pie", tint: MoneyMapDesign.warningGold)
-            DataSourceRow(title: "Recommended Payment", value: moneyText(bill.creditCardDetails?.recommendedPayment), systemImage: "arrow.down.circle", tint: MoneyMapDesign.warningGold)
+            DataSourceRow(title: "Recommended Payment", value: moneyText(bill.currentCreditCardDetails?.recommendedPayment), systemImage: "arrow.down.circle", tint: MoneyMapDesign.warningGold)
         } header: {
             Text("Calculated by MoneyMap")
         } footer: {
@@ -3929,7 +4140,7 @@ private struct CreditCardDataSourcesView: View {
     }
 
     private var currentBalanceText: String {
-        moneyText(plaidAccount?.currentBalance ?? bill.creditCardDetails?.cardBalance)
+        moneyText(plaidAccount?.currentBalance ?? bill.currentCreditCardDetails?.cardBalance)
     }
 
     private var availableCreditText: String {
@@ -3940,7 +4151,7 @@ private struct CreditCardDataSourcesView: View {
         if let mask = plaidAccount?.mask, !mask.isEmpty {
             return "•••• \(mask)"
         }
-        if let lastFour = bill.creditCardDetails?.lastFourDigits, !lastFour.isEmpty {
+        if let lastFour = bill.currentCreditCardDetails?.lastFourDigits, !lastFour.isEmpty {
             return "•••• \(lastFour)"
         }
         return "Not available"
@@ -3958,7 +4169,7 @@ private struct CreditCardDataSourcesView: View {
     }
 
     private var creditLimitSourceText: String {
-        guard let details = bill.creditCardDetails else { return "Not set" }
+        guard let details = bill.currentCreditCardDetails else { return "Not set" }
         let value = MoneyMapFormatters.currencyString(for: details.creditLimit)
         if plaidAccount?.availableBalance != nil {
             return "\(value) from Plaid balance plus available credit"
@@ -3967,7 +4178,7 @@ private struct CreditCardDataSourcesView: View {
     }
 
     private var utilizationText: String {
-        guard let details = bill.creditCardDetails else { return "Not available" }
+        guard let details = bill.currentCreditCardDetails else { return "Not available" }
         return details.utilization.formatted(.percent.precision(.fractionLength(0)))
     }
 

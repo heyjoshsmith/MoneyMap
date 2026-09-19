@@ -84,7 +84,7 @@ enum MoneyMapPlanningStore {
         return PlanningSnapshot(
             goals: goals,
             bills: bills,
-            nextPayday: paydayConfig?.nextPayday,
+            nextPayday: paydayConfig?.nextScheduledPayday(onOrAfter: .now),
             amountPerPayday: resolvedPaycheckAmount(manualAmount: manualAmount),
             manualAmountPerPayday: manualAmount
         )

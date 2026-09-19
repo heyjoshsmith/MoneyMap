@@ -13,6 +13,8 @@ import SwiftUI
 /// Includes an optional relationship to a credit card (Bill).
 @Model public class Transaction {
     
+    public var manualAccountID: UUID?
+    public var operationID: UUID?
     public var transactionDate: Date?
     public var clearingDate: Date?
     public var transactionDescription: String?

@@ -11,11 +11,12 @@ import SwiftData
 
 struct GridView: View {
     @Environment(\.modelContext) private var modelContext
+    @ScaledMetric(relativeTo: .body) private var minimumMetricWidth: CGFloat = 150
     
     init(_ goal: Goal, choosingImage: Binding<Bool>) {
         self.goal = goal
         self._targetAmount = State(initialValue: goal.targetAmount ?? 0)
-        self._amountSaved = State(initialValue: goal.amountSaved)
+        self._amountSaved = State(initialValue: goal.totalSavedAmount)
         self._deadline = State(initialValue: goal.deadline ?? .now)
         self._priority = State(initialValue: goal.weight)
         self._choosingImage = choosingImage
@@ -66,7 +67,7 @@ struct GridView: View {
                 Widget(.daysUntilDeadline, value: Double(daysUntilDeadline), currency: false)
                 Widget(.numberOfPaydays, value: Double(paydayManager.numberOfPaydaysUntil(goal.deadline ?? .now)), currency: false)
 
-                Widget(.amountSaved, value: goal.amountSaved) {
+                Widget(.amountSaved, value: goal.totalSavedAmount) {
                     editingAmountSaved.toggle()
                 }
                 Widget(.remainingValue, value: remainingAmount)
@@ -82,49 +83,51 @@ struct GridView: View {
         .padding(.horizontal, MoneyMapDesign.sectionSpacing)
         .padding(.vertical, MoneyMapDesign.compactSpacing)
         .sheet(isPresented: $editingPriority) {
-            VStack(alignment: .leading) {
+            ScrollView {
+                VStack(alignment: .leading) {
                 
-                Text("Priority")
-                    .font(.title2.weight(.semibold))
+                    Text("Priority")
+                        .font(.title2.weight(.semibold))
                 
-                ForEach(Priority.allCases) { priority in
-                    Button {
-                        withAnimation {
-                            goal.weight = priority.value
-                            editingPriority.toggle()
+                    ForEach(Priority.allCases) { priority in
+                        Button {
+                            withAnimation {
+                                goal.weight = priority.value
+                                editingPriority.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 15) {
+                                Image(systemName: priority.icon)
+                                    .foregroundStyle(priority.color)
+                                Text(priority.name)
+                                    .foregroundStyle(Color.primary)
+                                Spacer()
+                            }
+                            .padding()
+                            .background(MoneyMapDesign.surfaceBackground)
+                            .clipShape(.rect(cornerRadius: MoneyMapDesign.controlCornerRadius))
                         }
-                    } label: {
-                        HStack(spacing: 15) {
-                            Image(systemName: priority.icon)
-                                .foregroundStyle(priority.color)
-                            Text(priority.name)
-                                .foregroundStyle(Color.primary)
-                            Spacer()
-                        }
-                        .padding()
-                        .background(MoneyMapDesign.surfaceBackground)
-                        .clipShape(.rect(cornerRadius: MoneyMapDesign.controlCornerRadius))
                     }
-                }
                 
+                }
+                .padding()
             }
-            .padding()
             .background(MoneyMapDesign.groupedBackground)
-            .presentationDetents([.fraction(0.33)])
+            .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $editingDeadline) {
             DatePicker("Deadline", selection: $deadline, displayedComponents: .date)
                 .labelsHidden()
                 .datePickerStyle(.graphical)
-                .presentationDetents([.medium])
+                .presentationDetents([.medium, .large])
         }
         .alert("Amount Saved", isPresented: $editingAmountSaved, actions: {
-            TextField(goal.amountSaved.formatted(.currency(code: "USD").precision(.fractionLength(0))), value: $amountSaved, format: .currency(code: "USD").precision(.fractionLength(0)))
+            TextField(goal.totalSavedAmount.formatted(.currency(code: "USD").precision(.fractionLength(0))), value: $amountSaved, format: .currency(code: "USD").precision(.fractionLength(0)))
             Button("Cancel", role: .cancel) { }
             Button("Add Amount") {
                 let amountToAdd = amountSaved ?? 0
-                let previousAmountSaved = goal.amountSaved
-                goal.amountSaved += amountToAdd
+                let previousAmountSaved = goal.totalSavedAmount
+                goal.addContribution(amountToAdd)
                 AuditService.logGoalContribution(
                     goal: goal,
                     previousAmountSaved: previousAmountSaved,
@@ -133,17 +136,17 @@ struct GridView: View {
                 )
             }
             Button("Save Total") {
-                let previousAmountSaved = goal.amountSaved
-                goal.amountSaved = amountSaved ?? 0
+                let previousAmountSaved = goal.totalSavedAmount
+                goal.totalSavedAmount = amountSaved ?? 0
                 AuditService.logGoalTotalAdjusted(
                     goal: goal,
                     previousAmountSaved: previousAmountSaved,
-                    newAmountSaved: goal.amountSaved,
+                    newAmountSaved: goal.totalSavedAmount,
                     context: modelContext
                 )
             }
         }, message: {
-            Text("You currently have \(goal.amountSaved, format: .currency(code: "USD").precision(.fractionLength(0))) saved.")
+            Text("You currently have \(goal.totalSavedAmount, format: .currency(code: "USD").precision(.fractionLength(0))) saved.")
         })
         .alert("Target Amount", isPresented: $editingTargetAmount, actions: {
             TextField((goal.targetAmount ?? 0).formatted(.currency(code: "USD").precision(.fractionLength(0))), value: $targetAmount, format: .currency(code: "USD").precision(.fractionLength(0)))
@@ -165,15 +168,14 @@ struct GridView: View {
     /// The remaining amount left to save.
     var remainingAmount: Double {
         let targetAmount = goal.targetAmount ?? 0
-        return max(targetAmount - goal.amountSaved, 0)
+        return max(targetAmount - goal.totalSavedAmount, 0)
     }
     
     @EnvironmentObject var paydayManager: PaydayManager
 
     private var metricColumns: [GridItem] {
         [
-            GridItem(.flexible(minimum: 0), spacing: MoneyMapDesign.compactSpacing),
-            GridItem(.flexible(minimum: 0), spacing: MoneyMapDesign.compactSpacing)
+            GridItem(.adaptive(minimum: minimumMetricWidth), spacing: MoneyMapDesign.compactSpacing)
         ]
     }
     

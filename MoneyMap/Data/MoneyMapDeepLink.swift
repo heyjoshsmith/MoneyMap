@@ -132,6 +132,7 @@ enum MoneyMapDeepLink {
 @MainActor
 final class DeepLinkManager: ObservableObject {
     @Published var pendingRoute: MoneyMapRoute?
+    @Published var requestedWalletDestination: WalletDestination?
     @Published var requestedBillID: UUID?
     @Published var requestedGoalID: UUID?
     @Published var requestedBillsDestination: BillsNavigationTarget?
@@ -142,17 +143,7 @@ final class DeepLinkManager: ObservableObject {
             return
         }
         pendingRoute = route
-        if case .openBill(let billID) = route {
-            requestedBillID = billID
-        } else if case .openGoal(let goalID) = route {
-            requestedGoalID = goalID
-        } else if case .showUpcomingBills = route {
-            requestedBillsDestination = .upcomingBills
-        } else if case .showCardUtilization = route {
-            requestedBillsDestination = .cardUtilization
-        } else if case .showRecommendations = route {
-            requestedPayDestination = .recommendations
-        }
+
     }
 
     func clearPendingRoute() {

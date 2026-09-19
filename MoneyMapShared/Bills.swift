@@ -370,8 +370,8 @@ public class PaymentMethod: Identifiable {
     public func updateCreditCardMirror(from bill: Bill) {
         type = .creditCard
         name = bill.name ?? "Credit Card"
-        institutionName = bill.creditCardDetails?.issuerName
-        lastFourDigits = Self.normalizedLastFourDigits(bill.creditCardDetails?.lastFourDigits)
+        institutionName = bill.currentCreditCardDetails?.issuerName
+        lastFourDigits = Self.normalizedLastFourDigits(bill.currentCreditCardDetails?.lastFourDigits)
         linkedBillID = bill.id
         plaidAccountID = bill.plaidAccountID
         plaidItemID = bill.plaidItemID
@@ -476,7 +476,26 @@ public class Bill {
     public var category: BillCategory?
     public var recurrenceInterval: Int?
     public var recurrenceUnit: RecurrenceUnit?
+    // Keep the original persisted name for existing CloudKit stores.
     public var creditCardDetails: CreditCardDetails?
+    @Relationship(deleteRule: .cascade, inverse: \BillPaymentEntry.bill)
+    public var paymentEntries: [BillPaymentEntry]?
+    private var recordedPaymentTotal: Double {
+        var seen = Set<UUID>()
+        return (paymentEntries ?? []).filter { seen.insert($0.id).inserted }.reduce(0) { $0 + $1.amount }
+    }
+    public var currentCreditCardDetails: CreditCardDetails? {
+        get {
+            guard var value = creditCardDetails else { return nil }
+            value.cardBalance = value.cardBalance < 0 ? min(value.cardBalance + recordedPaymentTotal, 0) : max(value.cardBalance - recordedPaymentTotal, 0)
+            return value
+        }
+        set {
+            guard var value = newValue else { creditCardDetails = nil; return }
+            value.cardBalance += value.cardBalance < 0 ? -recordedPaymentTotal : recordedPaymentTotal
+            creditCardDetails = value
+        }
+    }
     public var notes: String?
     public var autopaySource: String?
     public var gracePeriodDays: Int?
@@ -492,6 +511,7 @@ public class Bill {
     public var plaidUnavailable: Bool = false
     public var status: Status?
     public var imageData: Data?
+    private var storedReminderNotificationsEnabled: Bool?
     private var storedAutopayEnabled: Bool?
 
     @Relationship(inverse: \Transaction.creditCard) public var transactions: [Transaction]?
@@ -499,6 +519,11 @@ public class Bill {
     public var autopayEnabled: Bool {
         get { storedAutopayEnabled ?? false }
         set { storedAutopayEnabled = newValue }
+    }
+
+    public var reminderNotificationsEnabled: Bool {
+        get { storedReminderNotificationsEnabled ?? true }
+        set { storedReminderNotificationsEnabled = newValue }
     }
 
     public var image: Image? {
@@ -536,7 +561,7 @@ public class Bill {
         self.category = category
         self.recurrenceInterval = recurrenceInterval
         self.recurrenceUnit = recurrenceUnit
-        self.creditCardDetails = creditCardDetails
+        self.currentCreditCardDetails = creditCardDetails
         self.imageData = imageData
         self.storedAutopayEnabled = autopayEnabled
         self.notes = notes
@@ -554,14 +579,11 @@ public class Bill {
         self.plaidUnavailable = plaidUnavailable
     }
     
-    public func makePayment(of amount: Double) {
-        if let currentBalance = self.creditCardDetails?.cardBalance {
-            if currentBalance < 0 {
-                self.creditCardDetails?.cardBalance = min(currentBalance + amount, 0)
-            } else {
-                self.creditCardDetails?.cardBalance = max(currentBalance - amount, 0)
-            }
-        }
+    public func makePayment(of amount: Double, operationID: UUID = UUID()) {
+        guard amount.isFinite, amount >= 0, !(paymentEntries ?? []).contains(where: { $0.id == operationID }) else { return }
+        let payment = BillPaymentEntry(id: operationID, amount: amount, bill: self)
+        if paymentEntries == nil { paymentEntries = [] }
+        paymentEntries?.append(payment)
         datePaid = .now
         status = .paid
         checkStatus()
@@ -822,8 +844,8 @@ extension Bill {
     }
     
     public static func byBalance(lhs: Bill, rhs: Bill) -> Bool {
-        let lhsBalance = lhs.creditCardDetails?.cardBalance ?? 0
-        let rhsBalance = rhs.creditCardDetails?.cardBalance ?? 0
+        let lhsBalance = lhs.currentCreditCardDetails?.cardBalance ?? 0
+        let rhsBalance = rhs.currentCreditCardDetails?.cardBalance ?? 0
         if lhsBalance == rhsBalance {
             return (lhs.amount ?? 0) > (rhs.amount ?? 0)
         }
@@ -831,8 +853,8 @@ extension Bill {
     }
     
     public static func byLimit(lhs: Bill, rhs: Bill) -> Bool {
-        let lhsLimit = lhs.creditCardDetails?.creditLimit ?? 0
-        let rhsLimit = rhs.creditCardDetails?.creditLimit ?? 0
+        let lhsLimit = lhs.currentCreditCardDetails?.creditLimit ?? 0
+        let rhsLimit = rhs.currentCreditCardDetails?.creditLimit ?? 0
         if lhsLimit == rhsLimit {
             return (lhs.amount ?? 0) > (rhs.amount ?? 0)
         }
@@ -849,8 +871,8 @@ extension Bill {
 
         let lhsDate = lhs.dueDate ?? .distantFuture
         let rhsDate = rhs.dueDate ?? .distantFuture
-        let lhsUtilization = lhs.creditCardDetails?.utilization ?? 0
-        let rhsUtilization = rhs.creditCardDetails?.utilization ?? 0
+        let lhsUtilization = lhs.currentCreditCardDetails?.utilization ?? 0
+        let rhsUtilization = rhs.currentCreditCardDetails?.utilization ?? 0
 
         if lhsIsPaid && rhsIsPaid {
             // Both are paid: utilization, then date
@@ -1091,8 +1113,8 @@ public enum PaymentMethodSyncService {
                 let method = PaymentMethod(
                     name: bill.name ?? "Credit Card",
                     type: .creditCard,
-                    institutionName: bill.creditCardDetails?.issuerName,
-                    lastFourDigits: bill.creditCardDetails?.lastFourDigits,
+                    institutionName: bill.currentCreditCardDetails?.issuerName,
+                    lastFourDigits: bill.currentCreditCardDetails?.lastFourDigits,
                     linkedBillID: bill.id,
                     plaidAccountID: bill.plaidAccountID,
                     plaidItemID: bill.plaidItemID,
@@ -1154,11 +1176,11 @@ extension Bills {
     }
     
     var totalBalance: Double {
-        return creditCards.reduce(0) { $0 + ($1.creditCardDetails?.cardBalance ?? 0) }
+        return creditCards.reduce(0) { $0 + ($1.currentCreditCardDetails?.cardBalance ?? 0) }
     }
     
     var totalCreditLimit: Double {
-        return creditCards.reduce(0) { $0 + ($1.creditCardDetails?.creditLimit ?? 0) }
+        return creditCards.reduce(0) { $0 + ($1.currentCreditCardDetails?.creditLimit ?? 0) }
     }
     
     var creditCardUtilization: Double {

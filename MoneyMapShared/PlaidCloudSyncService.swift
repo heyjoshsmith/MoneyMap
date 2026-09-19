@@ -37,7 +37,9 @@ public enum PlaidCloudSyncService {
     public static func pull(context: ModelContext) async throws {
         let record: CKRecord
         do {
-            record = try await database.record(for: snapshotRecordID)
+            record = try await readSnapshot {
+                try await database.record(for: snapshotRecordID)
+            }
         } catch {
             throw mapCloudKitError(error, missingSnapshotError: .missingSnapshot)
         }
@@ -55,6 +57,34 @@ public enum PlaidCloudSyncService {
         try upsertTransactions(snapshot.transactions, context: context)
         try upsertSuggestions(snapshot.suggestions, context: context)
         try context.save()
+    }
+
+    // Retry reads only: interrupted requests are safe to repeat without duplicating writes.
+    static func readSnapshot(
+        sleep: (Double) async throws -> Void = { seconds in
+            try await Task.sleep(for: .seconds(seconds))
+        },
+        fetch: () async throws -> CKRecord
+    ) async throws -> CKRecord {
+        for attempt in 0...2 {
+            try Task.checkCancellation()
+            do {
+                let record = try await fetch()
+                try Task.checkCancellation()
+                return record
+            } catch {
+                try Task.checkCancellation()
+                guard let cloudError = error as? CKError,
+                      [.operationCancelled, .networkFailure, .serviceUnavailable,
+                       .requestRateLimited, .zoneBusy].contains(cloudError.code),
+                      attempt < 2 else { throw error }
+                let delay = max(cloudError.retryAfterSeconds ?? 0, Double(attempt + 1))
+                // Long server backoffs belong to a later user refresh.
+                guard delay <= 10 else { throw error }
+                try await sleep(delay)
+            }
+        }
+        throw CancellationError()
     }
 
     public static func requestMacRefresh(source: String) async throws -> PlaidMacRefreshCommand {
@@ -209,6 +239,7 @@ private extension PlaidCloudSyncService {
         _ error: Error,
         missingSnapshotError: PlaidCloudSyncError? = nil
     ) -> Error {
+        if error is CancellationError || Task.isCancelled { return CancellationError() }
         guard let ckError = error as? CKError else {
             return error
         }
@@ -218,6 +249,8 @@ private extension PlaidCloudSyncService {
         }
 
         switch ckError.code {
+        case .operationCancelled:
+            return PlaidCloudSyncError.cloudUnavailable("The bank update was interrupted. Please try again.")
         case .notAuthenticated:
             return PlaidCloudSyncError.cloudUnavailable("Sign in to iCloud on this device before using Bank Sync.")
         case .networkUnavailable, .networkFailure, .serviceUnavailable, .requestRateLimited, .zoneBusy:

@@ -154,7 +154,7 @@ struct CardView: View {
                     .tint(MoneyMapDesign.calmGreen)
 
                 HStack(spacing: 12) {
-                    Label("\(MoneyMapFormatters.currencyString(for: goal.amountSaved)) saved", systemImage: "banknote")
+                    Label("\(MoneyMapFormatters.currencyString(for: goal.totalSavedAmount)) saved", systemImage: "banknote")
                     Label("\(MoneyMapFormatters.currencyString(for: goal.remainingAmount)) left", systemImage: "dollarsign.circle")
                 }
                 .font(.caption)

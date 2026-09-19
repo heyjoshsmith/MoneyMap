@@ -23,11 +23,12 @@ struct ContentView: View {
     @Query private var transactions: [Transaction]
     @Query(sort: \PaymentMethod.name) private var paymentMethods: [PaymentMethod]
     @Query private var paydayConfigs: [PaydayConfig]
-    @State private var selection: Tab = .today
+    @SceneStorage("window.selectedTab") private var selection: Tab = .today
+    @SceneStorage("window.didApplyInitialContent") private var didApplyInitialContent = false
+    var initialWindowContent: MoneyMapWindowContent? = nil
     
     @AppStorage("lastSeenWhatsNewVersion") private var lastSeenWhatsNewVersion = ""
-    @State private var pendingCSVURLs: [URL] = []
-    @State private var showingBillsImportSheet = false
+    @StateObject private var csvReview = MoneyMapCSVReview()
     @State private var showingWhatsNew = false
     @State private var didScheduleInitialStartupWork = false
     @State private var didCompleteInitialStartupWork = false
@@ -53,25 +54,25 @@ struct ContentView: View {
                 MoneyMapAssistantView()
             }
         }
+        .onChange(of: initialWindowContent, initial: true) { _, content in
+            guard !didApplyInitialContent, let content else { return }
+            didApplyInitialContent = true
+            selection = content.tab
+            content.prepareNavigation(in: deepLinkManager)
+        }
+        .moneyMapAdaptiveTabBarPlacement()
         .background(MoneyMapDesign.groupedBackground)
         .onReceive(deepLinkManager.$pendingRoute) { route in
             guard let route else { return }
             handle(route: route)
             deepLinkManager.clearPendingRoute()
         }
-        .sheet(isPresented: $showingBillsImportSheet, onDismiss: {
-            pendingCSVURLs.removeAll()
-        }) {
+        .modifier(MoneyMapCSVDropTarget(review: csvReview, isEnabled: !showingWhatsNew))
+        .sheet(isPresented: $csvReview.isPresented, onDismiss: csvReview.didDismiss) {
             TransactionCSVImportGuideView(
-                csvURLs: pendingCSVURLs,
-                onFinished: { _ in
-                    pendingCSVURLs.removeAll()
-                    showingBillsImportSheet = false
-                },
-                onCancel: {
-                    pendingCSVURLs.removeAll()
-                    showingBillsImportSheet = false
-                }
+                csvURLs: csvReview.urls,
+                onFinished: { _ in csvReview.isPresented = false },
+                onCancel: { csvReview.isPresented = false }
             )
         }
         .sheet(isPresented: $showingWhatsNew) {
@@ -84,16 +85,18 @@ struct ContentView: View {
         }
         .onAppear {
             MoneyMapDiagnostics.record("content.appear")
-            consumePendingRouteIfNeeded()
             scheduleInitialStartupWork()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
-                consumePendingRouteIfNeeded()
                 if didCompleteInitialStartupWork {
                     scheduleForegroundSync()
                 }
             }
+        }
+        .onChange(of: paydayConfigs.map { "\($0.nextPayday?.timeIntervalSince1970 ?? 0)|\($0.scheduleKindRaw ?? "")|\($0.firstMonthDay ?? -1)|\($0.secondMonthDay ?? -1)" }.joined()) { _, _ in
+            paydayManager.reload()
+            scheduleIndexAndNotificationRefresh()
         }
         .onChange(of: goalNotificationSignature) { _, _ in
             syncGoalNotifications()
@@ -109,8 +112,7 @@ struct ContentView: View {
     private func handle(route: MoneyMapRoute) {
         switch route {
         case .importCSV(let url):
-            pendingCSVURLs = [url]
-            showingBillsImportSheet = true
+            csvReview.accept(url: url)
         case .openBill(let billID):
             selection = .wallet
             deepLinkManager.requestedBillID = billID
@@ -129,7 +131,7 @@ struct ContentView: View {
     }
 
     private func maybePresentWhatsNew() {
-        if lastSeenWhatsNewVersion != WhatsNewRepository.currentPresentationID {
+        if csvReview.canAccept && lastSeenWhatsNewVersion != WhatsNewRepository.currentPresentationID {
             showingWhatsNew = true
         }
     }
@@ -182,17 +184,12 @@ struct ContentView: View {
         }
     }
 
-    private func consumePendingRouteIfNeeded() {
-        guard let route = PendingRouteStore.consume() else { return }
-        handle(route: route)
-    }
-
     private var goalNotificationSignature: String {
         goals
             .sorted { $0.id.uuidString < $1.id.uuidString }
             .map { goal in
                 let deadline = goal.deadline?.timeIntervalSince1970 ?? 0
-                return "\(goal.id.uuidString)|\(goal.amountSaved)|\(goal.targetAmount ?? 0)|\(goal.amountPerPaycheck ?? 0)|\(deadline)"
+                return "\(goal.id.uuidString)|\(goal.totalSavedAmount)|\(goal.targetAmount ?? 0)|\(goal.amountPerPaycheck ?? 0)|\(deadline)"
             }
             .joined(separator: ";") + "|\(paydayManager.nextPayday?.timeIntervalSince1970 ?? 0)"
     }
@@ -222,7 +219,7 @@ struct ContentView: View {
             .filter { $0.category == .creditCard }
             .sorted { $0.id.uuidString < $1.id.uuidString }
             .map { bill in
-                "\(bill.id.uuidString)|\(bill.name ?? "")|\(bill.creditCardDetails?.issuerName ?? "")|\(bill.creditCardDetails?.lastFourDigits ?? "")"
+                "\(bill.id.uuidString)|\(bill.name ?? "")|\(bill.currentCreditCardDetails?.issuerName ?? "")|\(bill.currentCreditCardDetails?.lastFourDigits ?? "")"
             }
             .joined(separator: ";")
         let creditCardMethodSignature = paymentMethods
@@ -280,6 +277,21 @@ struct ContentView: View {
     enum Tab: String, CaseIterable, Identifiable {
         case today, wallet, plan, goals, ask
         var id: Self { return self }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func moneyMapAdaptiveTabBarPlacement() -> some View {
+        #if os(iOS) || os(visionOS)
+        if #available(iOS 27.0, visionOS 27.0, *) {
+            defaultTabBarPlacement(.sidebar)
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
     }
 }
 

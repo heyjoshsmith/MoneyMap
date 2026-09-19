@@ -315,7 +315,7 @@ private enum BillSetupKind: String, CaseIterable {
 
     private static func needsAmount(_ bill: Bill) -> Bool {
         if bill.category == .creditCard {
-            guard let details = bill.creditCardDetails else { return true }
+            guard let details = bill.currentCreditCardDetails else { return true }
             return details.creditLimit <= 0 &&
                 details.cardBalance <= 0 &&
                 details.effectiveMinimumPayment <= 0 &&

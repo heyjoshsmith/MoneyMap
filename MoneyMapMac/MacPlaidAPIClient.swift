@@ -27,7 +27,8 @@ struct MacPlaidAPIClient {
 
     func createHostedLinkSession(
         clientUserID: String,
-        accessToken: String? = nil
+        accessToken: String? = nil,
+        watch: Bool = false
     ) async throws -> PlaidHostedLinkSession {
         let response = try await post(
             path: "/link/token/create",
@@ -41,7 +42,7 @@ struct MacPlaidAPIClient {
                 transactions: accessToken == nil ? PlaidTransactionsLinkOptions(daysRequested: 730) : nil,
                 user: PlaidLinkUser(clientUserID: clientUserID),
                 accessToken: accessToken,
-                hostedLink: PlaidHostedLinkOptions(urlLifetimeSeconds: 3600)
+                hostedLink: PlaidHostedLinkOptions(urlLifetimeSeconds: watch ? 1800 : 3600, isMobileApp: watch ? true : nil, completionRedirectURI: watch ? "moneymap-watch://bank-complete" : nil)
             ),
             responseType: PlaidLinkTokenCreateResponse.self
         )
@@ -364,9 +365,13 @@ struct PlaidLinkUser: Encodable {
 
 struct PlaidHostedLinkOptions: Encodable {
     var urlLifetimeSeconds: Int
+    var isMobileApp: Bool? = nil
+    var completionRedirectURI: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case urlLifetimeSeconds = "url_lifetime_seconds"
+        case isMobileApp = "is_mobile_app"
+        case completionRedirectURI = "completion_redirect_uri"
     }
 }
 
@@ -398,6 +403,7 @@ struct PlaidLinkTokenGetRequest: Encodable {
 
 struct PlaidLinkTokenStatus {
     var publicTokens: [String]
+    var institutionIDs: [String]
     var requestID: String?
     var completedAt: String?
     var finishedAt: String?
@@ -409,6 +415,7 @@ struct PlaidLinkTokenStatus {
 
     init(data: Data) {
         let object = (try? JSONSerialization.jsonObject(with: data)) ?? [:]
+        institutionIDs = Self.collectStrings(named: "institution_id", in: object)
         publicTokens = Self.collectStrings(named: "public_token", in: object)
         requestID = Self.collectStrings(named: "request_id", in: object).first
         completedAt = Self.collectStrings(named: "completed_at", in: object).first

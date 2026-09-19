@@ -543,8 +543,8 @@ private struct DetectionTransaction {
             plaidTransactionID: plaidTransactionID,
             plaidAccountID: plaidAccountID,
             linkedCardName: linkedCard?.name?.nilIfBlank,
-            linkedCardInstitutionName: linkedCard?.creditCardDetails?.issuerName?.nilIfBlank,
-            linkedCardLastFourDigits: linkedCard?.creditCardDetails?.lastFourDigits?.lastFourDigits
+            linkedCardInstitutionName: linkedCard?.currentCreditCardDetails?.issuerName?.nilIfBlank,
+            linkedCardLastFourDigits: linkedCard?.currentCreditCardDetails?.lastFourDigits?.lastFourDigits
         )
     }
 

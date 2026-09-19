@@ -7,10 +7,12 @@
 
 import AppKit
 import Foundation
+import OSLog
 import SwiftData
 
 @MainActor
 final class MacPlaidSyncCoordinator: ObservableObject {
+    private let logger = Logger(subsystem: "com.heyjoshsmith.MoneyMap.Mac", category: "BankSync")
     @Published var isWorking = false
     @Published var statusMessage: String?
     @Published var errorMessage: String?
@@ -21,6 +23,14 @@ final class MacPlaidSyncCoordinator: ObservableObject {
     private let pendingLinkSessionKey = "plaid.pendingHostedLinkSession"
     private let clientUserIDKey = "plaid.clientUserID"
     private let handledMacRefreshRequestIDKey = "plaid.handledMacRefreshRequestID"
+    private var automaticRefreshTask: Task<Void, Never>?
+
+    func startAutomaticRefresh(context: ModelContext) {
+        guard automaticRefreshTask == nil else { return }
+        automaticRefreshTask = Task { [weak self] in
+            await self?.runAutomaticRefreshLoop(context: context)
+        }
+    }
 
     init() {
         if let savedSession = Self.loadPendingLinkSession(defaults: defaults, key: pendingLinkSessionKey),
@@ -164,32 +174,34 @@ final class MacPlaidSyncCoordinator: ObservableObject {
         }
     }
 
-    func runAutomaticRefreshLoop(
-        context: ModelContext,
-        automaticRefreshEnabled: Bool,
-        refreshIntervalMinutes: Int
-    ) async {
-        let interval = TimeInterval(max(refreshIntervalMinutes, 15) * 60)
+    private func runAutomaticRefreshLoop(context: ModelContext) async {
         let pollInterval: UInt64 = 60
-        var nextAutomaticRefresh = Date().addingTimeInterval(interval)
+        var lastAutomaticRefresh = Date.distantPast
 
         while !Task.isCancelled {
+            let automaticRefreshEnabled = defaults.object(forKey: MacBankSyncPreferences.automaticRefreshEnabledKey) as? Bool ?? true
+            let minutes = defaults.object(forKey: MacBankSyncPreferences.refreshIntervalMinutesKey) as? Int ?? 60
+            let interval = TimeInterval(max(minutes, 15) * 60)
             let didHandleCommand = await handlePendingMacRefreshCommand(context: context)
             if didHandleCommand {
-                nextAutomaticRefresh = Date().addingTimeInterval(interval)
+                lastAutomaticRefresh = .now
             }
 
-            if automaticRefreshEnabled, Date() >= nextAutomaticRefresh {
+            if automaticRefreshEnabled, Date().timeIntervalSince(lastAutomaticRefresh) >= interval {
                 await syncAutomatically(context: context)
-                nextAutomaticRefresh = Date().addingTimeInterval(interval)
+                lastAutomaticRefresh = .now
             }
+            await handleWatchCommands(context: context)
 
             try? await Task.sleep(nanoseconds: pollInterval * 1_000_000_000)
         }
     }
 
     func removeConnection(itemID: String, context: ModelContext) async {
-        await run {
+        await run { try await self.performRemoveConnection(itemID: itemID, context: context) }
+    }
+
+    private func performRemoveConnection(itemID: String, context: ModelContext) async throws {
             try self.credentialStore.deleteAccessToken(for: itemID)
             self.defaults.removeObject(forKey: self.cursorDefaultsKey(itemID: itemID))
 
@@ -216,7 +228,6 @@ final class MacPlaidSyncCoordinator: ObservableObject {
             try context.save()
             try await PlaidCloudSyncService.push(context: context)
             self.statusMessage = "Bank removed from MoneyMap. Its local snapshots and Mac Keychain token were deleted."
-        }
     }
 
     private func sync(itemID: String, accessToken: String, client: MacPlaidAPIClient, context: ModelContext) async throws -> PlaidTransactionSyncSummary {
@@ -278,10 +289,12 @@ final class MacPlaidSyncCoordinator: ObservableObject {
         do {
             let message = try await performSyncAll(context: context)
             statusMessage = "Automatic refresh finished. \(message)"
+            logger.notice("Automatic bank refresh and iCloud upload completed.")
         } catch PlaidMacSyncError.missingCredentials, PlaidMacSyncError.noConnections {
             return
         } catch {
             errorMessage = error.localizedDescription
+            logger.error("Automatic bank refresh failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -529,6 +542,86 @@ final class MacPlaidSyncCoordinator: ObservableObject {
         }
     }
 
+    private func handleWatchCommands(context: ModelContext) async {
+        guard !isWorking else { return }
+        do {
+            let commands = try await WatchBankCommandStore.pending()
+            guard !commands.isEmpty, !isWorking else { return }
+            isWorking = true
+            defer { isWorking = false }
+            for var command in commands {
+                if command.expiresAt < .now {
+                    command.state = "expired"; command.message = "Request expired. Start again on Watch."
+                    try await WatchBankCommandStore.update(command); continue
+                }
+                do {
+                    if command.action == "refresh" {
+                        command.message = try await performSyncAll(context: context)
+                        command.state = "succeeded"
+                    } else if command.action == "disconnect", let itemID = command.itemID {
+                        try await performRemoveConnection(itemID: itemID, context: context)
+                        command.state = "succeeded"; command.message = "Bank removed from MoneyMap."
+                    } else if command.action == "link" || command.action == "reconnect" {
+                        guard !WatchBankCompatibility.verifiedInstitutionIDs.isEmpty else {
+                            throw NSError(domain: "MoneyMap", code: 2, userInfo: [NSLocalizedDescriptionKey: "No banks have completed Watch-only verification yet."])
+                        }
+                        if let itemID = command.itemID {
+                            let connection = try context.fetch(FetchDescriptor<PlaidConnection>(predicate: #Predicate { $0.itemID == itemID })).first
+                            guard let institutionID = connection?.institutionID, WatchBankCompatibility.verifiedInstitutionIDs.contains(institutionID) else {
+                                throw NSError(domain: "MoneyMap", code: 4, userInfo: [NSLocalizedDescriptionKey: "This bank is not verified for Watch-only sign-in."])
+                            }
+                        }
+                        let client = MacPlaidAPIClient(credentials: try requireCredentials())
+                        let key = "watch.link." + command.id
+                        if let token = defaults.string(forKey: key) {
+                            let result = try await client.linkTokenStatus(linkToken: token)
+                            if !result.publicTokens.isEmpty {
+                                guard !result.institutionIDs.isEmpty, Set(result.institutionIDs).isSubset(of: WatchBankCompatibility.verifiedInstitutionIDs) else {
+                                    throw NSError(domain: "MoneyMap", code: 3, userInfo: [NSLocalizedDescriptionKey: "This bank is not verified for Watch-only sign-in."])
+                                }
+                                for token in result.publicTokens {
+                                    let exchangeKey = key + ".exchanged." + String(token.suffix(36))
+                                    let itemID: String
+                                    let accessToken: String
+                                    if let saved = defaults.string(forKey: exchangeKey), let access = try credentialStore.accessToken(for: saved) {
+                                        itemID = saved; accessToken = access
+                                    } else {
+                                        let item = try await client.exchangePublicToken(token)
+                                        try credentialStore.saveAccessToken(item.accessToken, itemID: item.itemID)
+                                        defaults.set(item.itemID, forKey: exchangeKey)
+                                        itemID = item.itemID; accessToken = item.accessToken
+                                    }
+                                    _ = try await sync(itemID: itemID, accessToken: accessToken, client: client, context: context)
+                                }
+                                try await PlaidCloudSyncService.push(context: context)
+                                command.state = "succeeded"; command.message = "Bank connected."
+                            } else if result.completedAt != nil, let itemID = command.itemID, let access = try credentialStore.accessToken(for: itemID) {
+                                _ = try await sync(itemID: itemID, accessToken: access, client: client, context: context)
+                                try await PlaidCloudSyncService.push(context: context)
+                                command.state = "succeeded"; command.message = "Bank reconnected."
+                            } else if result.finishedWithoutPublicToken {
+                                command.state = "failed"; command.message = result.userFacingStatusMessage
+                            }
+                        } else {
+                            let access = try command.itemID.flatMap { try credentialStore.accessToken(for: $0) }
+                            let session = try await client.createHostedLinkSession(clientUserID: clientUserID(), accessToken: access, watch: true)
+                            defaults.set(session.linkToken, forKey: key)
+                            command.hostedURL = session.hostedLinkURL; command.state = "ready"
+                            command.message = "Ready to sign in on Watch."
+                        }
+                    } else {
+                        command.state = "failed"; command.message = "Unsupported request."
+                    }
+                } catch { command.state = "failed"; command.message = error.localizedDescription }
+                if command.isTerminal { command.hostedURL = nil }
+                try await WatchBankCommandStore.update(command)
+            }
+        } catch {
+            // A missing development schema must not stop existing Mac refreshes.
+            print("Watch bank requests unavailable: \(error.localizedDescription)")
+        }
+    }
+
     private func requireCredentials() throws -> PlaidStoredCredentials {
         guard let credentials = try credentialStore.loadCredentials() else {
             throw PlaidMacSyncError.missingCredentials
@@ -547,6 +640,7 @@ final class MacPlaidSyncCoordinator: ObservableObject {
     }
 
     private func run(_ operation: @escaping () async throws -> Void) async {
+        guard !isWorking else { return }
         isWorking = true
         statusMessage = nil
         errorMessage = nil

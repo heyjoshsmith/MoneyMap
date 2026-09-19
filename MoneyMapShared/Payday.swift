@@ -44,6 +44,20 @@ public class PaydayConfig {
     public var amountPerPayday: Double?
     public var savingsPerPaycheck: Double?
     
+    public var scheduleKindRaw: String?
+    public var firstMonthDay: Int?
+    public var secondMonthDay: Int?
+
+    public var schedule: PaySchedule {
+        PaySchedule(kind: PayScheduleKind(rawValue: scheduleKindRaw ?? "") ?? .biweekly,
+                    anchor: nextPayday ?? .now, firstDay: firstMonthDay, secondDay: secondMonthDay)
+    }
+
+    public func nextScheduledPayday(onOrAfter date: Date, calendar: Calendar = .current) -> Date? {
+        guard nextPayday != nil else { return nil }
+        return schedule.next(onOrAfter: date, calendar: calendar)
+    }
+
     private var storedStrategy: SaveStrategy? // Allow old data without a value
     public var strategy: SaveStrategy {
         get { storedStrategy ?? SaveStrategy.oneItem } // Fallback for existing data

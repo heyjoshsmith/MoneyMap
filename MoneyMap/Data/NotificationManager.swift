@@ -16,26 +16,47 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     static let markPaidActionID = "MARK_BILL_PAID"
     static let snoozeActionID = "SNOOZE_BILL_REMINDER"
     static let billIDUserInfoKey = "bill_id"
+    static let billNameUserInfoKey = "bill_name"
+    static let billAmountUserInfoKey = "bill_amount"
+    static let billDueDateUserInfoKey = "bill_due_date"
+    static let billDueDateTextUserInfoKey = "bill_due_date_text"
+    static let billPaymentStateUserInfoKey = "bill_payment_state"
+    static let billPaymentDetailUserInfoKey = "bill_payment_detail"
     static let billReminderPrefix = "bill_due_"
+    static let paydayBeforeReminderPrefix = "paydayBefore_"
+    static let paydayOnReminderPrefix = "paydayOn_"
+    static let notifyBillDueEnabledKey = "notifyBillDueEnabled"
+    static let notifyPaydayBeforeEnabledKey = "notifyDayBeforeEnabled"
+    static let notifyPaydayDayOfEnabledKey = "notifyDayOfEnabled"
     static let goalReminderPrefix = "goal_progress_"
     static let goalDeadlineReminderPrefix = "goal_deadline_"
     static let notifyGoalBehindEnabledKey = "notifyGoalBehindEnabled"
     static let notificationTimeKey = "notificationTime"
 
-    weak var deepLinkManager: DeepLinkManager?
+    @MainActor private weak var sceneRouter: MoneyMapSceneRouter?
 
     private struct BillReminderCandidate: Sendable {
         let billID: UUID
         let name: String
         let amount: Double
         let dueDate: Date
+        let dueDateText: String
         let reminderDate: Date
         let autopayEnabled: Bool
+        let paymentState: String
+        let paymentDetail: String
     }
 
     private struct GoalReminderPlan: Sendable {
         let requests: [GoalReminderRequest]
         let activeIdentifiers: Set<String>
+    }
+
+    private struct PaydayReminderRequest: Sendable {
+        let identifier: String
+        let date: Date
+        let title: String
+        let body: String
     }
 
     private struct GoalReminderRequest: Sendable {
@@ -45,9 +66,12 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         let body: String
     }
 
-    func attach(deepLinkManager: DeepLinkManager) {
-        self.deepLinkManager = deepLinkManager
+    @MainActor
+    func attach(sceneRouter: MoneyMapSceneRouter) {
+        self.sceneRouter = sceneRouter
         configureCenter()
+        // A cold-launch notification may arrive after scene activation but before setup.
+        sceneRouter.deliverPendingIfActive()
     }
 
     func configureCenter() {
@@ -78,7 +102,10 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     func scheduleBillDueNotifications(for bills: [Bill]) {
         let candidates = billReminderCandidates(for: bills)
         UNUserNotificationCenter.current().getNotificationSettings { settings in
-            guard Self.canDeliverNotifications(settings) else { return }
+            guard Self.canDeliverNotifications(settings) else {
+                self.clearPendingBillNotifications()
+                return
+            }
             Task { @MainActor in
                 self.scheduleAuthorizedBillDueNotifications(for: candidates)
             }
@@ -86,20 +113,29 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     }
 
     private func billReminderCandidates(for bills: [Bill]) -> [BillReminderCandidate] {
+        guard boolSetting(for: Self.notifyBillDueEnabledKey, defaultValue: true) else { return [] }
+
         let now = Date()
 
         return bills.compactMap { bill -> BillReminderCandidate? in
+            guard bill.reminderNotificationsEnabled else { return nil }
+            guard bill.lifecycleState == .active else { return nil }
             guard bill.datePaid == nil, let dueDate = bill.dueDate else { return nil }
             guard let reminderDate = reminderDate(for: dueDate), reminderDate > now.addingTimeInterval(60) else {
                 return nil
             }
+            let amount = bill.amount ?? bill.currentCreditCardDetails?.effectiveMinimumPayment ?? bill.currentCreditCardDetails?.cardBalance ?? 0
+            let dueDateText = MoneyMapFormatters.mediumDateString(for: dueDate)
             return BillReminderCandidate(
                 billID: bill.id,
                 name: bill.name ?? "Your bill",
-                amount: bill.amount ?? 0,
+                amount: amount,
                 dueDate: dueDate,
+                dueDateText: dueDateText,
                 reminderDate: reminderDate,
-                autopayEnabled: bill.autopayEnabled
+                autopayEnabled: bill.autopayEnabled,
+                paymentState: bill.autopayEnabled ? "Auto pay is enabled" : "Manual payment required",
+                paymentDetail: bill.paymentMethodName(in: []) ?? bill.paymentModeTitle
             )
         }
     }
@@ -120,14 +156,21 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         for candidate in candidates {
             let content = UNMutableNotificationContent()
             let amount = MoneyMapFormatters.currencyString(for: candidate.amount)
-            let dueText = MoneyMapFormatters.mediumDateString(for: candidate.dueDate)
-            content.title = candidate.autopayEnabled ? "Autopay Bill Due Soon" : "Bill Due Soon"
-            content.body = candidate.autopayEnabled
-                ? "\(candidate.name) for \(amount) is due \(dueText). Autopay is on, so no manual checkoff is needed."
-                : "\(candidate.name) for \(amount) is due \(dueText)."
+            content.title = candidate.name
+            content.subtitle = candidate.paymentState
+            content.body = "\(amount) due \(candidate.dueDateText)."
             content.sound = .default
             content.categoryIdentifier = candidate.autopayEnabled ? Self.autopayBillDueCategoryID : Self.billDueCategoryID
-            content.userInfo = [Self.billIDUserInfoKey: candidate.billID.uuidString]
+            content.interruptionLevel = candidate.autopayEnabled ? .passive : .timeSensitive
+            content.userInfo = [
+                Self.billIDUserInfoKey: candidate.billID.uuidString,
+                Self.billNameUserInfoKey: candidate.name,
+                Self.billAmountUserInfoKey: amount,
+                Self.billDueDateUserInfoKey: candidate.dueDate.timeIntervalSince1970,
+                Self.billDueDateTextUserInfoKey: candidate.dueDateText,
+                Self.billPaymentStateUserInfoKey: candidate.paymentState,
+                Self.billPaymentDetailUserInfoKey: candidate.paymentDetail
+            ]
 
             let triggerDate = Calendar.current.dateComponents(
                 [.year, .month, .day, .hour, .minute],
@@ -146,6 +189,110 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
                 }
             }
         }
+    }
+
+    func schedulePaydayNotifications(for paydays: [Date], bills: [Bill]) {
+        let requests = paydayReminderRequests(for: paydays, bills: bills)
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard Self.canDeliverNotifications(settings) else {
+                self.clearPendingPaydayNotifications()
+                return
+            }
+            Task { @MainActor in
+                self.scheduleAuthorizedPaydayNotifications(requests)
+            }
+        }
+    }
+
+    private func paydayReminderRequests(for paydays: [Date], bills: [Bill]) -> [PaydayReminderRequest] {
+        let notifyDayBefore = boolSetting(for: Self.notifyPaydayBeforeEnabledKey, defaultValue: true)
+        let notifyDayOf = boolSetting(for: Self.notifyPaydayDayOfEnabledKey, defaultValue: true)
+        guard notifyDayBefore || notifyDayOf else { return [] }
+
+        let sortedPaydays = paydays.sorted()
+        var requests: [PaydayReminderRequest] = []
+
+        for (index, payday) in sortedPaydays.enumerated() {
+            let nextPayday = index + 1 < sortedPaydays.count ? sortedPaydays[index + 1] : nil
+            let body = billsSummary(for: payday, nextPayday: nextPayday, bills: bills)
+
+            if notifyDayBefore,
+               let beforeDate = Calendar.current.date(byAdding: .day, value: -1, to: payday),
+               let scheduledBeforeDate = scheduledDate(on: beforeDate) {
+                requests.append(PaydayReminderRequest(
+                    identifier: "\(Self.paydayBeforeReminderPrefix)\(payday.timeIntervalSince1970)",
+                    date: scheduledBeforeDate,
+                    title: "Payday Tomorrow",
+                    body: body ?? "Your payday is tomorrow."
+                ))
+            }
+
+            if notifyDayOf,
+               let scheduledPayday = scheduledDate(on: payday) {
+                requests.append(PaydayReminderRequest(
+                    identifier: "\(Self.paydayOnReminderPrefix)\(payday.timeIntervalSince1970)",
+                    date: scheduledPayday,
+                    title: "Payday Today",
+                    body: body ?? "Today is payday."
+                ))
+            }
+        }
+
+        return requests
+    }
+
+    @MainActor
+    private func scheduleAuthorizedPaydayNotifications(_ requests: [PaydayReminderRequest]) {
+        let center = UNUserNotificationCenter.current()
+        let activeIdentifiers = Set(requests.map(\.identifier))
+
+        center.getPendingNotificationRequests { pendingRequests in
+            let stale = pendingRequests
+                .map(\.identifier)
+                .filter {
+                    ($0.hasPrefix(Self.paydayBeforeReminderPrefix) || $0.hasPrefix(Self.paydayOnReminderPrefix)) &&
+                    !activeIdentifiers.contains($0)
+                }
+            if !stale.isEmpty {
+                center.removePendingNotificationRequests(withIdentifiers: stale)
+            }
+        }
+
+        for request in requests {
+            scheduleNotification(
+                center: center,
+                identifier: request.identifier,
+                date: request.date,
+                title: request.title,
+                body: request.body
+            )
+        }
+    }
+
+    private func billsSummary(for payday: Date, nextPayday: Date?, bills: [Bill]) -> String? {
+        let billsDue: [Bill]
+        if let nextPayday {
+            billsDue = bills.filter { bill in
+                guard bill.lifecycleState == .active, bill.status != .paid, let dueDate = bill.dueDate else { return false }
+                return dueDate > payday && dueDate <= nextPayday
+            }
+        } else {
+            billsDue = bills.filter { bill in
+                guard bill.lifecycleState == .active, bill.status != .paid, let dueDate = bill.dueDate else { return false }
+                return dueDate > payday
+            }
+        }
+
+        guard !billsDue.isEmpty else { return nil }
+        let sortedBillsDue = billsDue.sorted(by: Bill.byDate)
+        let names = sortedBillsDue.prefix(3).compactMap(\.name).joined(separator: ", ")
+        let remaining = sortedBillsDue.count - min(sortedBillsDue.count, 3)
+        let totalAmount = sortedBillsDue.reduce(0) { $0 + ($1.amount ?? $1.currentCreditCardDetails?.effectiveMinimumPayment ?? 0) }
+        let amount = MoneyMapFormatters.currencyString(for: totalAmount)
+        if remaining > 0 {
+            return "\(sortedBillsDue.count) bills before next payday, including \(names). Total: \(amount)."
+        }
+        return "Upcoming bills: \(names). Total: \(amount)."
     }
 
     func scheduleGoalProgressNotifications(for goals: [Goal], nextPayday: Date?) {
@@ -333,6 +480,30 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         }
     }
 
+    private func clearPendingPaydayNotifications() {
+        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
+            let identifiers = requests
+                .map(\.identifier)
+                .filter {
+                    $0.hasPrefix(Self.paydayBeforeReminderPrefix) || $0.hasPrefix(Self.paydayOnReminderPrefix)
+                }
+            if !identifiers.isEmpty {
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
+            }
+        }
+    }
+
+    private func clearPendingBillNotifications() {
+        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
+            let identifiers = requests
+                .map(\.identifier)
+                .filter { $0.hasPrefix(Self.billReminderPrefix) }
+            if !identifiers.isEmpty {
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
+            }
+        }
+    }
+
     private func scheduleNotification(
         center: UNUserNotificationCenter,
         identifier: String,
@@ -380,8 +551,11 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
 
     private func queueRouteToBill(_ billID: UUID) {
         DispatchQueue.main.async { [weak self] in
-            self?.deepLinkManager?.pendingRoute = .openBill(billID)
-            self?.deepLinkManager?.requestedBillID = billID
+            if let router = self?.sceneRouter {
+                router.deliver(.openBill(billID))
+            } else {
+                PendingRouteStore.set(.openBill(billID))
+            }
         }
     }
 
@@ -399,8 +573,10 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     private func handleSnooze(response: UNNotificationResponse, billID: UUID) {
         let content = response.notification.request.content.mutableCopy() as? UNMutableNotificationContent
             ?? UNMutableNotificationContent()
-        content.userInfo = [Self.billIDUserInfoKey: billID.uuidString]
-        content.categoryIdentifier = Self.billDueCategoryID
+        var userInfo = response.notification.request.content.userInfo
+        userInfo[Self.billIDUserInfoKey] = billID.uuidString
+        content.userInfo = userInfo
+        content.categoryIdentifier = response.notification.request.content.categoryIdentifier
 
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 3600, repeats: false)
         let request = UNNotificationRequest(

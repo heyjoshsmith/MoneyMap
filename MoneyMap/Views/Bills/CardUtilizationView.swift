@@ -44,7 +44,7 @@ struct CardUtilizationView: View {
                 .keyboardType(.decimalPad)
             Button("Cancel", role: .cancel) { }
             Button("Done") {
-                billToEdit?.creditCardDetails?.cardBalance = Double(alertValue) ?? 0
+                billToEdit?.currentCreditCardDetails?.cardBalance = Double(alertValue) ?? 0
                 saveContext()
                 editingBalance = false
                 alertValue.removeAll()
@@ -57,7 +57,7 @@ struct CardUtilizationView: View {
                 .keyboardType(.decimalPad)
             Button("Cancel", role: .cancel) { }
             Button("Done") {
-                billToEdit?.creditCardDetails?.creditLimit = Double(alertValue) ?? 0
+                billToEdit?.currentCreditCardDetails?.creditLimit = Double(alertValue) ?? 0
                 saveContext()
                 editingLimit = false
                 alertValue.removeAll()
@@ -72,7 +72,7 @@ struct CardUtilizationView: View {
             Button("Done") {
                 if let bill = billToEdit {
                     let amount = Double(alertValue) ?? 0
-                    let previousBalance = bill.creditCardDetails?.cardBalance
+                    let previousBalance = bill.currentCreditCardDetails?.cardBalance
                     let previousDatePaid = bill.datePaid
                     let previousDueDate = bill.dueDate
                     let previousStatus = bill.status
@@ -101,21 +101,21 @@ struct CardUtilizationView: View {
     }
 
     private var paymentPlaceholder: String {
-        if let payment = billToEdit?.creditCardDetails?.recommendedPayment {
+        if let payment = billToEdit?.currentCreditCardDetails?.recommendedPayment {
             return "Recommended: \(payment.currency)"
         }
         return "Enter Payment"
     }
 
     private var balancePlaceholder: String {
-        if let balance = billToEdit?.creditCardDetails?.cardBalance {
+        if let balance = billToEdit?.currentCreditCardDetails?.cardBalance {
             return balance.currency
         }
         return "Enter Balance"
     }
 
     private var limitPlaceholder: String {
-        if let limit = billToEdit?.creditCardDetails?.creditLimit {
+        if let limit = billToEdit?.currentCreditCardDetails?.creditLimit {
             return limit.currency
         }
         return "Enter Limit"

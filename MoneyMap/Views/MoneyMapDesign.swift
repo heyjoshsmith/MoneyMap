@@ -198,12 +198,34 @@ enum MoneyMapDesign {
 
 extension View {
     func moneyMapGroupedListBackground() -> some View {
-        scrollContentBackground(.hidden)
-            .background(MoneyMapDesign.groupedBackground)
+        modifier(MoneyMapGroupedListBackgroundModifier())
     }
 
     func moneyMapListSectionBackground() -> some View {
-        listRowBackground(MoneyMapDesign.surfaceBackground)
+        modifier(MoneyMapListSectionBackgroundModifier())
+    }
+}
+
+private struct MoneyMapGroupedListBackgroundModifier: ViewModifier {
+    @AppStorage(MoneyMapDesign.appearanceStyleKey) private var appearanceStyleRawValue = MoneyMapAppearanceStyle.warm.rawValue
+
+    func body(content: Content) -> some View {
+        let _ = appearanceStyleRawValue
+
+        return content
+            .scrollContentBackground(.hidden)
+            .background(MoneyMapDesign.groupedBackground)
+    }
+}
+
+private struct MoneyMapListSectionBackgroundModifier: ViewModifier {
+    @AppStorage(MoneyMapDesign.appearanceStyleKey) private var appearanceStyleRawValue = MoneyMapAppearanceStyle.warm.rawValue
+
+    func body(content: Content) -> some View {
+        let _ = appearanceStyleRawValue
+
+        return content
+            .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 }
 

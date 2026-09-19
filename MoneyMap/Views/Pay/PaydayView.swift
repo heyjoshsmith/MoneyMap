@@ -21,10 +21,10 @@ struct PaydayView: View {
     @EnvironmentObject var paydayManager: PaydayManager
     @EnvironmentObject private var notificationManager: NotificationManager
     @State private var selectedDate = Date()
-    @AppStorage("notifyDayBeforeEnabled") private var notifyDayBeforeEnabled: Bool = true
-    @AppStorage("notifyDayOfEnabled") private var notifyDayOfEnabled: Bool = true
-    @AppStorage("notifyGoalBehindEnabled") private var notifyGoalBehindEnabled: Bool = true
-    @AppStorage("notificationTime") private var notificationTime: Date = {
+    @AppStorage(NotificationManager.notifyPaydayBeforeEnabledKey) private var notifyDayBeforeEnabled: Bool = true
+    @AppStorage(NotificationManager.notifyPaydayDayOfEnabledKey) private var notifyDayOfEnabled: Bool = true
+    @AppStorage(NotificationManager.notifyGoalBehindEnabledKey) private var notifyGoalBehindEnabled: Bool = true
+    @AppStorage(NotificationManager.notificationTimeKey) private var notificationTime: Date = {
         var components = DateComponents()
         components.hour = 9
         components.minute = 0
@@ -128,6 +128,8 @@ struct PaydayView: View {
                     }
                     .listRowBackground(MoneyMapDesign.surfaceBackground)
                 }
+
+                Section { NavigationLink("Pay Schedule") { PayScheduleEditor() } }
 
                 Section("Notifications") {
                     Button {
@@ -263,7 +265,10 @@ private extension PaydayView {
     }
 
     func rescheduleNotifications() {
-        schedulePaydayNotificationsIfAuthorized(paydayManager.upcomingPaydaysForNextYear())
+        notificationManager.schedulePaydayNotifications(
+            for: paydayManager.upcomingPaydaysForNextYear(),
+            bills: bills
+        )
         notificationManager.scheduleGoalProgressNotifications(
             for: goals,
             nextPayday: paydayManager.nextPayday

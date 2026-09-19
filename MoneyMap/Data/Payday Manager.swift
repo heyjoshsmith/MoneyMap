@@ -42,28 +42,12 @@ class PaydayManager: ObservableObject {
         }
     }
     
+    func reload() { loadPayday() }
+
     private func loadPayday() {
         if let savedPaydayConfig = fetchPrimaryPaydayConfig() {
-            var nextPayday = savedPaydayConfig.nextPayday ?? Date()
-            let today = Calendar.current.startOfDay(for: Date())
-            nextPayday = Calendar.current.startOfDay(for: nextPayday)
-            
-            // Keep advancing by 14 days until the payday is in the future.
-            while nextPayday <= today {
-                nextPayday = Calendar.current.date(byAdding: .day, value: 14, to: nextPayday)!
-            }
-            
-            // Update `nextPayday` in the app
-            self.nextPayday = nextPayday
+            self.nextPayday = savedPaydayConfig.nextScheduledPayday(onOrAfter: .now)
             self.strategy = savedPaydayConfig.strategy
-            
-            // Save the new payday to SwiftData
-            savedPaydayConfig.nextPayday = nextPayday
-            do {
-                try context.save()
-            } catch {
-                print("Error saving updated payday: \(error)")
-            }
         } else {
             // No stored payday exists yet, keep `nextPayday` nil (until user selects one)
             self.nextPayday = nil
@@ -76,27 +60,16 @@ class PaydayManager: ObservableObject {
             return nil
         }
 
-        let primary = configs[0]
-        if configs.count > 1 {
-            for duplicate in configs.dropFirst() {
-                context.delete(duplicate)
-            }
-        }
-        return primary
+        return configs.sorted { ($0.nextPayday ?? .distantFuture) < ($1.nextPayday ?? .distantFuture) }.first
     }
-    
+
+    var schedule: PaySchedule? { fetchPrimaryPaydayConfig()?.schedule }
+
     /// Returns the number of paydays between the next payday and the specified end date.
     func numberOfPaydaysUntil(_ endDate: Date) -> Int {
-        guard let start = nextPayday else { return 0 }
-        var count = 0
-        var current = start
-        while current <= endDate {
-            count += 1
-            current = Calendar.current.date(byAdding: .day, value: 14, to: current)!
-        }
-        return count
+        schedule?.dates(from: .now, through: endDate).count ?? 0
     }
-    
+
     /// Returns the number of days remaining until the next payday.
     func daysUntilNextPayday() -> Int {
         guard let payday = nextPayday else { return 0 }
@@ -107,38 +80,15 @@ class PaydayManager: ObservableObject {
     }
     
     func paydaysSince(_ startDate: Date) -> Int {
-        let today = Date()
-        
-        // Ensure the startDate is in the past
-        guard startDate <= today else { return 0 }
-        
-        var paydayCount = 0
-        var currentPayday = startDate
-        
-        // Keep adding 14 days to the payday count until reaching today
-        while currentPayday <= today {
-            paydayCount += 1
-            currentPayday = Calendar.current.date(byAdding: .day, value: 14, to: currentPayday)!
-        }
-        
-        return paydayCount
+        schedule?.dates(from: startDate, through: .now).count ?? 0
     }
-    
+
     /// Returns an array of all paydays for the next year, starting from the nextPayday.
     func upcomingPaydaysForNextYear() -> [Date] {
-        guard let start = nextPayday else { return [] }
-        guard let startOfDay = Calendar.current.date(bySettingHour: 0, minute: 0, second: 0, of: start) else { return [] }
-        var paydays: [Date] = []
-        var current = startOfDay
-        let oneYearLater = Calendar.current.date(byAdding: .year, value: 1, to: startOfDay)!
-        
-        while current <= oneYearLater {
-            paydays.append(current)
-            current = Calendar.current.date(byAdding: .day, value: 14, to: current)!
-        }
-        
-        return paydays
+        guard let end = Calendar.current.date(byAdding: .year, value: 1, to: .now) else { return [] }
+        return schedule?.dates(from: .now, through: end) ?? []
     }
+
     
 }
 

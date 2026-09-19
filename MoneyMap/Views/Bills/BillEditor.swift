@@ -55,7 +55,7 @@ struct BillEditor: View {
     init(bill: Bill? = nil) {
         self.bill = bill
 
-        let details = bill?.creditCardDetails
+        let details = bill?.currentCreditCardDetails
         _name = State(initialValue: bill?.name ?? "")
         _amount = State(initialValue: bill?.amount ?? details?.minimumPayment ?? 0)
         _dueDate = State(initialValue: bill?.dueDate ?? .now)
@@ -107,14 +107,14 @@ struct BillEditor: View {
             .navigationTitle(bill == nil ? "New Bill" : "Edit Bill")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save", systemImage: "checkmark") {
                         saveBill()
                     }
                     .disabled(!canSave)
@@ -467,9 +467,9 @@ struct BillEditor: View {
         targetBill.lifecycleState = selectedLifecycleState
 
         if selectedCategory == .creditCard {
-            targetBill.creditCardDetails = creditCardDetails
+            targetBill.currentCreditCardDetails = creditCardDetails
         } else {
-            targetBill.creditCardDetails = nil
+            targetBill.currentCreditCardDetails = nil
         }
 
         if hasPaidDate {

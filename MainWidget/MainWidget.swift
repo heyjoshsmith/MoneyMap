@@ -124,8 +124,7 @@ private enum WidgetStore {
         let today = calendar.startOfDay(for: Date())
 
         return configs
-            .compactMap(\.nextPayday)
-            .map { advancePaydayIfNeeded($0, today: today, calendar: calendar) }
+            .compactMap { $0.nextScheduledPayday(onOrAfter: today, calendar: calendar) }
             .sorted()
             .first
     }
@@ -161,12 +160,10 @@ private enum WidgetStore {
         return Array(summaries.prefix(limit))
     }
 
-    private static func advancePaydayIfNeeded(_ payday: Date, today: Date, calendar: Calendar) -> Date {
-        var current = calendar.startOfDay(for: payday)
-        while current < today {
-            current = calendar.date(byAdding: .day, value: 14, to: current) ?? current
-        }
-        return current
+    static func payCycleStart() -> Date? {
+        guard let context = try? context(), let config = try? context.fetch(FetchDescriptor<PaydayConfig>()).first,
+              let next = config.nextScheduledPayday(onOrAfter: .now) else { return nil }
+        return config.schedule.previous(before: next)
     }
 
     static func totalDue(_ bills: [WidgetBillSummary]) -> Double {
@@ -200,102 +197,56 @@ struct MainWidgetProvider: TimelineProvider {
 }
 
 struct MainWidgetEntryView: View {
-    @Environment(\.widgetFamily) private var family
+    @Environment(\.widgetFamily) private var widgetFamily
     var entry: MainWidgetProvider.Entry
+    var familyOverride: WidgetFamily? = nil
+    private var family: WidgetFamily { familyOverride ?? widgetFamily }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Plan Your Money")
-                        .font(family == .systemSmall ? .headline.weight(.bold) : .title3.weight(.bold))
-                    Text("Open the right view fast")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-                Spacer()
-                Text("MAP")
-                    .font(.caption2.weight(.black))
-                    .tracking(1.2)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(.white.opacity(0.16))
-                    .clipShape(Capsule())
-            }
-
-            VStack(spacing: 8) {
-                if let upcomingURL = WidgetDeepLink.upcomingBillsURL() {
-                    Link(destination: upcomingURL) {
-                        WidgetActionPill(
-                            title: "Upcoming Bills",
-                            subtitle: "Due dates and cash needs",
-                            systemImage: "calendar.badge.clock"
-                        )
-                    }
-                }
-
-                if let utilizationURL = WidgetDeepLink.cardUtilizationURL() {
-                    Link(destination: utilizationURL) {
-                        WidgetActionPill(
-                            title: "Card Utilization",
-                            subtitle: "Balances and usage",
-                            systemImage: "chart.pie"
-                        )
-                    }
-                }
-
-                if family != .systemSmall, let recommendationsURL = WidgetDeepLink.recommendationsURL() {
-                    Link(destination: recommendationsURL) {
-                        WidgetActionPill(
-                            title: "Recommendations",
-                            subtitle: "Open today's plan",
-                            systemImage: "wand.and.stars"
-                        )
-                    }
+        VStack(alignment: .leading, spacing: 8) {
+            Text("MoneyMap")
+                .font(.headline.weight(.bold))
+            if family == .systemSmall {
+                action("Bills", image: "calendar", url: WidgetDeepLink.upcomingBillsURL())
+                action("Cards", image: "creditcard", url: WidgetDeepLink.cardUtilizationURL())
+            } else {
+                HStack(spacing: 8) {
+                    action("Bills", image: "calendar", url: WidgetDeepLink.upcomingBillsURL())
+                    action("Cards", image: "creditcard", url: WidgetDeepLink.cardUtilizationURL())
+                    action("Plan", image: "wand.and.stars", url: WidgetDeepLink.recommendationsURL())
                 }
             }
         }
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(12)
         .foregroundStyle(.white)
+        .widgetURL(WidgetDeepLink.upcomingBillsURL())
     }
-}
 
-private struct WidgetActionPill: View {
-    let title: String
-    let subtitle: String
-    let systemImage: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: systemImage)
-                .font(.subheadline.weight(.bold))
-                .frame(width: 30, height: 30)
-                .background(.white.opacity(0.16))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+    private func action(_ title: String, image: String, url: URL?) -> some View {
+        Group {
+            if let url {
+                Link(destination: url) {
+                    Group {
+                        if family == .systemSmall {
+                            Label(title, systemImage: image)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            VStack(spacing: 8) {
+                                Image(systemName: image).font(.title3)
+                                Text(title)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    }
                     .font(.subheadline.weight(.semibold))
-                Text(subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.8))
-            }
-            Spacer()
-            Image(systemName: "arrow.up.forward")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.white.opacity(0.85))
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.white.opacity(0.12))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(.white.opacity(0.10), lineWidth: 1)
+                    .padding(family == .systemSmall ? 6 : 10)
+                    .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
                 }
-        )
+            }
+        }
     }
 }
 
@@ -325,6 +276,7 @@ struct MainWidget: Widget {
 struct PaydayCountdownEntry: TimelineEntry {
     let date: Date
     let nextPayday: Date?
+    var cycleStart: Date? = nil
 }
 
 struct PaydayCountdownProvider: TimelineProvider {
@@ -333,12 +285,12 @@ struct PaydayCountdownProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (PaydayCountdownEntry) -> Void) {
-        completion(PaydayCountdownEntry(date: .now, nextPayday: WidgetStore.fetchNextPayday()))
+        completion(PaydayCountdownEntry(date: .now, nextPayday: WidgetStore.fetchNextPayday(), cycleStart: WidgetStore.payCycleStart()))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<PaydayCountdownEntry>) -> Void) {
         let now = Date()
-        let entry = PaydayCountdownEntry(date: now, nextPayday: WidgetStore.fetchNextPayday())
+        let entry = PaydayCountdownEntry(date: now, nextPayday: WidgetStore.fetchNextPayday(), cycleStart: WidgetStore.payCycleStart())
         let nextRefresh = Calendar.current.date(byAdding: .hour, value: 6, to: now) ?? now.addingTimeInterval(21600)
         completion(Timeline(entries: [entry], policy: .after(nextRefresh)))
     }
@@ -348,82 +300,34 @@ struct PaydayCountdownWidgetView: View {
     var entry: PaydayCountdownEntry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Next Payday")
-                        .font(.headline.weight(.bold))
-                    Text("Cash planning checkpoint")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-                Spacer()
-                Image(systemName: "banknote.fill")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.white.opacity(0.95))
-                    .frame(width: 32, height: 32)
-                    .background(.white.opacity(0.16))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            }
-
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Next Payday", systemImage: "banknote")
+                .font(.caption.weight(.semibold))
             if let nextPayday = entry.nextPayday {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(relativeCountdown(for: nextPayday))
-                        .font(.system(size: 28, weight: .heavy, design: .rounded))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-
-                    HStack {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Date")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.white.opacity(0.7))
-                            Text(nextPayday, format: .dateTime.month(.abbreviated).day().year())
-                                .font(.subheadline.weight(.semibold))
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 3) {
-                            Text("Cycle")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.white.opacity(0.7))
-                            Text(cycleLabel(for: nextPayday))
-                                .font(.subheadline.weight(.semibold))
-                        }
-                    }
-                    .padding(10)
-                    .background(.white.opacity(0.14))
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("Time until payday")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.white.opacity(0.74))
-                            Spacer()
-                            Text(progressLabel(for: nextPayday))
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(.white.opacity(0.88))
-                        }
-                        Capsule()
-                            .fill(.white.opacity(0.22))
-                            .frame(height: 9)
-                            .overlay(alignment: .leading) {
-                                GeometryReader { proxy in
-                                    Capsule()
-                                        .fill(.white.opacity(0.92))
-                                        .frame(width: progressWidth(for: nextPayday, availableWidth: proxy.size.width), height: 9)
-                                }
-                            }
-                    }
+                Spacer(minLength: 0)
+                Text(relativeCountdown(for: nextPayday))
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .minimumScaleFactor(0.65)
+                Text(nextPayday, format: .dateTime.month(.abbreviated).day())
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.85))
+                Spacer(minLength: 0)
+                // A cycle cannot be inferred from the remaining days alone.
+                if let start = entry.cycleStart, start < nextPayday {
+                    ProgressView(value: min(max(entry.date.timeIntervalSince(start) / nextPayday.timeIntervalSince(start), 0), 1))
+                        .tint(.white)
+                        .accessibilityLabel("Pay cycle progress")
                 }
             } else {
-                Text("Not set")
-                    .font(.title3.weight(.semibold))
-                Text("Open MoneyMap to choose your next payday.")
+                Text("Not set").font(.title3.bold())
+                Text("Choose your payday in MoneyMap.")
                     .font(.caption)
-                    .foregroundStyle(.white.opacity(0.82))
+                    .lineLimit(3)
+                    .foregroundStyle(.white.opacity(0.85))
             }
         }
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(12)
         .foregroundStyle(.white)
@@ -431,10 +335,10 @@ struct PaydayCountdownWidgetView: View {
     }
 
     private func relativeCountdown(for date: Date) -> String {
-        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: .now), to: Calendar.current.startOfDay(for: date)).day ?? 0
+        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: entry.date), to: Calendar.current.startOfDay(for: date)).day ?? 0
         switch days {
         case ..<0:
-            return "Needs updating"
+            return "Update payday"
         case 0:
             return "Today"
         case 1:
@@ -444,29 +348,6 @@ struct PaydayCountdownWidgetView: View {
         }
     }
 
-    private func progressWidth(for date: Date, availableWidth: CGFloat) -> CGFloat {
-        let days = max(Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: Calendar.current.startOfDay(for: date)).day ?? 0, 0)
-        let clamped = min(max(days, 0), 14)
-        let ratio = CGFloat(14 - clamped) / 14
-        return min(availableWidth, max(18, availableWidth * ratio))
-    }
-
-    private func cycleLabel(for date: Date) -> String {
-        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: Calendar.current.startOfDay(for: date)).day ?? 0
-        switch days {
-        case 0...3:
-            return "Very Soon"
-        case 4...7:
-            return "This Week"
-        default:
-            return "Next Cycle"
-        }
-    }
-
-    private func progressLabel(for date: Date) -> String {
-        let days = max(Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: Calendar.current.startOfDay(for: date)).day ?? 0, 0)
-        return "\(min(days, 14))/14 days"
-    }
 }
 
 struct PaydayCountdownWidget: Widget {
@@ -526,8 +407,10 @@ struct NextBillProvider: TimelineProvider {
 }
 
 struct NextBillWidgetView: View {
-    @Environment(\.widgetFamily) private var family
+    @Environment(\.widgetFamily) private var widgetFamily
     var entry: NextBillEntry
+    var familyOverride: WidgetFamily? = nil
+    private var family: WidgetFamily { familyOverride ?? widgetFamily }
 
     var body: some View {
         Group {
@@ -544,148 +427,70 @@ struct NextBillWidgetView: View {
     }
 
     private var smallBody: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Next Bill").font(.caption.weight(.semibold))
             if let bill = entry.bill {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("Next Bill Due")
-                            .font(.headline.weight(.bold))
-                        Text(categoryLabel(for: bill.category))
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.78))
-                    }
-                    Spacer()
-                    Image(systemName: WidgetPalette.icon(for: bill.category))
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 32, height: 32)
-                        .background(WidgetPalette.accent(for: bill.category).opacity(0.32))
-                        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(bill.name)
-                        .font(.system(size: 24, weight: .heavy, design: .rounded))
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.75)
-
-                    HStack(alignment: .bottom) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Amount due")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.white.opacity(0.72))
-                            Text(WidgetFormatters.compactCurrency(bill.amount))
-                                .font(.title3.weight(.bold))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.75)
-                        }
-                        Spacer()
-                        Text(WidgetFormatters.shortDate(bill.dueDate))
-                            .font(.caption.weight(.bold))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(.white.opacity(0.14))
-                            .clipShape(Capsule())
-                    }
-                }
-
-                HStack(spacing: 12) {
-                    BillMetricBadge(
-                        title: "Status",
-                        value: relativeBillDueText(for: bill.dueDate),
-                        systemImage: "calendar.badge.clock",
-                        tint: statusTint(for: bill.dueDate, category: bill.category)
-                    )
-                    BillMetricBadge(
-                        title: bill.autopayEnabled ? "Pay" : "Priority",
-                        value: bill.autopayEnabled ? "Autopay" : priorityLabel(for: bill.dueDate),
-                        systemImage: bill.autopayEnabled ? "arrow.triangle.2.circlepath" : "exclamationmark.circle",
-                        tint: .white
-                    )
-                }
+                Text(bill.name)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(WidgetFormatters.compactCurrency(bill.amount))
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                Spacer(minLength: 0)
+                Text(relativeBillDueText(for: bill.dueDate))
+                    .font(.caption.weight(.semibold))
+                Text(bill.autopayEnabled ? "Autopay · \(WidgetFormatters.shortDate(bill.dueDate))" : WidgetFormatters.shortDate(bill.dueDate))
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.8))
             } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Next Bill Due")
-                        .font(.headline.weight(.bold))
-                    Text("No upcoming bills")
-                        .font(.title3.weight(.bold))
-                    Text("You're clear for now.")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.8))
-                }
+                Text("No upcoming bills").font(.headline).lineLimit(2)
+                Text("You're clear for now.").font(.caption).lineLimit(2)
             }
         }
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
     }
 
     private var mediumBody: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: 12) {
             if let bill = entry.bill {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Image(systemName: WidgetPalette.icon(for: bill.category))
-                            .font(.caption.weight(.bold))
-                            .frame(width: 28, height: 28)
-                            .background(WidgetPalette.accent(for: bill.category).opacity(0.28))
-                            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                        Text(categoryLabel(for: bill.category))
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.78))
-                    }
-
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Next Bill", systemImage: WidgetPalette.icon(for: bill.category))
+                        .font(.caption.weight(.semibold))
                     Text(bill.name)
-                        .font(.system(size: 26, weight: .heavy, design: .rounded))
+                        .font(.title3.bold())
                         .lineLimit(2)
-                        .minimumScaleFactor(0.75)
-
+                    Spacer(minLength: 0)
                     Text(relativeBillDueText(for: bill.dueDate))
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(statusTint(for: bill.dueDate, category: bill.category))
+                        .font(.caption.weight(.semibold))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Amount due")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.7))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                VStack(alignment: .trailing, spacing: 6) {
+                    Text("Amount due").font(.caption2)
                     Text(WidgetFormatters.compactCurrency(bill.amount))
-                        .font(.title2.weight(.heavy))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-
-                    Divider()
-                        .overlay(.white.opacity(0.25))
-
-                    BillInfoRow(title: "Date", value: WidgetFormatters.shortDate(bill.dueDate), systemImage: "calendar")
-                    BillInfoRow(
-                        title: bill.autopayEnabled ? "Payment" : "Priority",
-                        value: bill.autopayEnabled ? "Autopay" : priorityLabel(for: bill.dueDate),
-                        systemImage: bill.autopayEnabled ? "arrow.triangle.2.circlepath" : "exclamationmark.circle"
-                    )
-                    if let gracePeriodDays = bill.gracePeriodDays, gracePeriodDays > 0 {
-                        BillInfoRow(title: "Grace", value: "\(gracePeriodDays)d", systemImage: "clock")
+                        .font(.title2.bold())
+                        .minimumScaleFactor(0.5)
+                    Text(WidgetFormatters.shortDate(bill.dueDate)).font(.caption)
+                    Spacer(minLength: 0)
+                    if bill.autopayEnabled {
+                        Text("Autopay").font(.caption2)
+                    }
+                    if let days = bill.gracePeriodDays, days > 0 {
+                        Text("Grace: \(days)d").font(.caption2)
                     }
                 }
-                .padding(10)
-                .frame(width: 142, alignment: .leading)
-                .background(.white.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Next Bill Due")
-                        .font(.headline.weight(.bold))
-                    Text("No upcoming bills")
-                        .font(.title2.weight(.heavy))
-                    Text("You're clear for now.")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-                Spacer()
+                smallBody
             }
         }
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
     }
 
     private func relativeBillDueText(for date: Date) -> String {
-        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: Calendar.current.startOfDay(for: date)).day ?? 0
+        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: entry.date), to: Calendar.current.startOfDay(for: date)).day ?? 0
         switch days {
         case ..<0:
             return "\(abs(days))d overdue"
@@ -698,78 +503,6 @@ struct NextBillWidgetView: View {
         }
     }
 
-    private func categoryLabel(for category: BillCategory?) -> String {
-        category?.name ?? "Bill"
-    }
-
-    private func priorityLabel(for dueDate: Date) -> String {
-        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: Calendar.current.startOfDay(for: dueDate)).day ?? 0
-        switch days {
-        case ...1:
-            return "High"
-        case 2...5:
-            return "Soon"
-        default:
-            return "Planned"
-        }
-    }
-
-    private func statusTint(for dueDate: Date, category: BillCategory?) -> Color {
-        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: Calendar.current.startOfDay(for: dueDate)).day ?? 0
-        if days < 0 {
-            return .red
-        }
-        return WidgetPalette.accent(for: category)
-    }
-}
-
-private struct BillInfoRow: View {
-    let title: String
-    let value: String
-    let systemImage: String
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: systemImage)
-                .font(.caption2.weight(.bold))
-                .frame(width: 14)
-                .foregroundStyle(.white.opacity(0.78))
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(.white.opacity(0.64))
-            Spacer(minLength: 4)
-            Text(value)
-                .font(.caption.weight(.bold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-    }
-}
-
-private struct BillMetricBadge: View {
-    let title: String
-    let value: String
-    let systemImage: String
-    let tint: Color
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: systemImage)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(tint)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.68))
-                Text(value)
-                    .font(.caption.weight(.bold))
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(.white.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
 }
 
 struct NextBillWidget: Widget {
@@ -838,17 +571,30 @@ struct UpcomingBillsListProvider: TimelineProvider {
 }
 
 struct UpcomingBillsListWidgetView: View {
-    @Environment(\.widgetFamily) private var family
     var entry: UpcomingBillsListEntry
 
     var body: some View {
+        ViewThatFits(in: .vertical) {
+            billList(limit: 2)
+            billList(limit: 1)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(12)
+        .foregroundStyle(.white)
+        .widgetURL(WidgetDeepLink.upcomingBillsURL())
+    }
+
+    private func billList(limit: Int) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Upcoming Bills")
-                        .font(.headline.weight(.bold))
+                        .font(.subheadline.weight(.bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     Text(summaryText)
                         .font(.caption2)
+                        .lineLimit(1)
                         .foregroundStyle(.white.opacity(0.78))
                 }
                 Spacer()
@@ -857,8 +603,9 @@ struct UpcomingBillsListWidgetView: View {
                         .font(.caption.weight(.black))
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
-                    Text(countLabel)
+                    Text(countLabel(limit: limit))
                         .font(.caption2.weight(.semibold))
+                        .lineLimit(1)
                         .foregroundStyle(.white.opacity(0.72))
                 }
             }
@@ -870,7 +617,7 @@ struct UpcomingBillsListWidgetView: View {
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.8))
             } else {
-                ForEach(displayBills, id: \.id) { bill in
+                ForEach(Array(entry.bills.prefix(limit)), id: \.id) { bill in
                     HStack(spacing: 10) {
                         ZStack {
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -887,6 +634,7 @@ struct UpcomingBillsListWidgetView: View {
                                 .lineLimit(1)
                             Text(relativeBillText(for: bill.dueDate))
                                 .font(.caption2)
+                                .lineLimit(1)
                                 .foregroundStyle(.white.opacity(0.75))
                         }
 
@@ -899,27 +647,18 @@ struct UpcomingBillsListWidgetView: View {
                                 .minimumScaleFactor(0.75)
                             Text(WidgetFormatters.shortDate(bill.dueDate))
                                 .font(.caption2)
+                                .lineLimit(1)
                                 .foregroundStyle(.white.opacity(0.72))
                         }
                     }
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
+                    .padding(.vertical, 4)
                     .background(.white.opacity(0.10))
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(.top, 16)
-        .padding(.horizontal, 12)
-        .padding(.bottom, 10)
-        .foregroundStyle(.white)
-        .widgetURL(WidgetDeepLink.upcomingBillsURL())
-    }
-
-    private var displayBills: [WidgetBillSummary] {
-        let limit = family == .systemMedium ? 3 : 3
-        return Array(entry.bills.prefix(limit))
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var summaryText: String {
@@ -933,8 +672,8 @@ struct UpcomingBillsListWidgetView: View {
         return "Nothing due soon"
     }
 
-    private var countLabel: String {
-        let hiddenCount = max(entry.bills.count - displayBills.count, 0)
+    private func countLabel(limit: Int) -> String {
+        let hiddenCount = max(entry.bills.count - limit, 0)
         if hiddenCount > 0 {
             return "\(entry.bills.count) bills, +\(hiddenCount)"
         }
@@ -942,7 +681,7 @@ struct UpcomingBillsListWidgetView: View {
     }
 
     private func relativeBillText(for date: Date) -> String {
-        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: Calendar.current.startOfDay(for: date)).day ?? 0
+        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: entry.date), to: Calendar.current.startOfDay(for: date)).day ?? 0
         switch days {
         case ..<0:
             return "\(abs(days))d overdue"

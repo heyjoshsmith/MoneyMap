@@ -173,7 +173,7 @@ fileprivate struct Row: View {
     }
 
     private var paymentPlaceholder: String {
-        if let payment = bill.creditCardDetails?.recommendedPayment {
+        if let payment = bill.currentCreditCardDetails?.recommendedPayment {
             return "Recommended: \(payment.currency)"
         }
         return "Enter Payment"
@@ -192,7 +192,7 @@ fileprivate struct Row: View {
     }
 
     private func recordPayment() {
-        let previousBalance = bill.creditCardDetails?.cardBalance
+        let previousBalance = bill.currentCreditCardDetails?.cardBalance
         let previousDatePaid = bill.datePaid
         let previousDueDate = bill.dueDate
         let previousStatus = bill.status
@@ -217,7 +217,7 @@ fileprivate struct Row: View {
     }
 
     private func markPaid() {
-        let previousBalance = bill.creditCardDetails?.cardBalance
+        let previousBalance = bill.currentCreditCardDetails?.cardBalance
         let previousDatePaid = bill.datePaid
         let previousDueDate = bill.dueDate
         let previousStatus = bill.status

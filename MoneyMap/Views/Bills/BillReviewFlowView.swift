@@ -33,7 +33,10 @@ struct BillReviewFlowView: View {
                     .ignoresSafeArea()
 
                 if let currentBill {
-                    reviewDeck(currentBill)
+                    ScrollView {
+                        reviewDeck(currentBill)
+                            .moneyMapReadableContent()
+                    }
                 } else {
                     BillReviewResultsView(results: reviewedBills) { url in
                         openURL(url)
@@ -43,8 +46,8 @@ struct BillReviewFlowView: View {
             .navigationTitle("Review Bills")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", systemImage: "checkmark") {
                         dismiss()
                     }
                 }
@@ -130,7 +133,7 @@ struct BillReviewFlowView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 440)
+            .frame(minHeight: 440)
 
             VStack(spacing: 10) {
                 HStack(spacing: 12) {
@@ -289,7 +292,7 @@ struct BillReviewFlowView: View {
 
     @discardableResult
     private func markPaid(_ bill: Bill) -> Double {
-        let previousBalance = bill.creditCardDetails?.cardBalance
+        let previousBalance = bill.currentCreditCardDetails?.cardBalance
         let previousDatePaid = bill.datePaid
         let previousDueDate = bill.dueDate
         let previousStatus = bill.status
@@ -321,8 +324,8 @@ struct BillReviewFlowView: View {
     private func paymentAmount(for bill: Bill) -> Double {
         if bill.category == .creditCard {
             return max(
-                bill.creditCardDetails?.recommendedPayment ??
-                bill.creditCardDetails?.effectiveMinimumPayment ??
+                bill.currentCreditCardDetails?.recommendedPayment ??
+                bill.currentCreditCardDetails?.effectiveMinimumPayment ??
                 bill.amount ??
                 0,
                 0

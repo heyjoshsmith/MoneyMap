@@ -64,8 +64,8 @@ struct SavingsView: View {
             }
             .toolbar {
                 if focused {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Done") {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done", systemImage: "checkmark") {
                             focused = false
                             savePaycheckAmount()
                         }
@@ -76,7 +76,7 @@ struct SavingsView: View {
     }
     
     func calculateSavingsDistribution(goals: [Goal], totalPerPaycheck: Double) -> [Goal: Double] {
-        let filteredGoals = goals.filter { ($0.targetAmount ?? 0) - $0.amountSaved > 0 } // Ignore fully saved goals
+        let filteredGoals = goals.filter { ($0.targetAmount ?? 0) - $0.totalSavedAmount > 0 } // Ignore fully saved goals
         guard !filteredGoals.isEmpty else { return [:] }
         
         let weightedGoals = filteredGoals.map { goal -> (Goal, Double) in
@@ -91,7 +91,7 @@ struct SavingsView: View {
         var allocation: [Goal: Double] = [:]
         for (goal, weight) in weightedGoals {
             let percentage = weight / totalWeight
-            let remainingAmount = (goal.targetAmount ?? 0) - goal.amountSaved
+            let remainingAmount = (goal.targetAmount ?? 0) - goal.totalSavedAmount
             allocation[goal] = min(remainingAmount, percentage * totalPerPaycheck)
         }
         

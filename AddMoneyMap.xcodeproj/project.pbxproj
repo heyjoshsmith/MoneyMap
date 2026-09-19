@@ -21,6 +21,9 @@
 		B10100122F5E100000000001 /* MoneyMapShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A726FAEC2DC2C602006D6A82 /* MoneyMapShared.framework */; };
 		B20000012F65000000000001 /* MoneyMapWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = B20000082F65000000000001 /* MoneyMapWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		C0D1000C2F70000000000001 /* MoneyMap.icon in Resources */ = {isa = PBXBuildFile; fileRef = A7FF14062E0CB75100EF0464 /* MoneyMap.icon */; };
+		D10000012F80000000000001 /* MoneyMapNotificationExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D10000022F80000000000001 /* MoneyMapNotificationExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		E90000000000000000000001 /* MoneyMapWatchWidgets.appex in Embed Watch Widgets */ = {isa = PBXBuildFile; fileRef = E90000000000000000000002 /* MoneyMapWatchWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		F91800000000000000000001 /* MainWidget/MainWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = F91800000000000000000002 /* MainWidget/MainWidget.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -73,6 +76,20 @@
 			remoteGlobalIDString = B200000E2F65000000000001;
 			remoteInfo = MoneyMapWatch;
 		};
+		D10000092F80000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 34AF794A2D5C448E001CEE30 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D10000082F80000000000001;
+			remoteInfo = MoneyMapNotificationExtension;
+		};
+		E9000000000000000000000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 34AF794A2D5C448E001CEE30 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E90000000000000000000004;
+			remoteInfo = MoneyMapWatchWidgets;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -106,6 +123,7 @@
 			files = (
 				A7DF69152DBE99A400071A0C /* MoneyMapShareExtension.appex in Embed Foundation Extensions */,
 				A79F7D882F58B83600736215 /* MainWidgetExtension.appex in Embed Foundation Extensions */,
+				D10000012F80000000000001 /* MoneyMapNotificationExtension.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -131,6 +149,17 @@
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E90000000000000000000009 /* Embed Watch Widgets */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				E90000000000000000000001 /* MoneyMapWatchWidgets.appex in Embed Watch Widgets */,
+			);
+			name = "Embed Watch Widgets";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
@@ -145,6 +174,9 @@
 		B10100032F5E100000000001 /* MoneyMapTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MoneyMapTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000082F65000000000001 /* MoneyMapWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MoneyMapWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C0D100012F70000000000001 /* MoneyMap.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MoneyMap.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D10000022F80000000000001 /* MoneyMapNotificationExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MoneyMapNotificationExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		E90000000000000000000002 /* MoneyMapWatchWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; path = MoneyMapWatchWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		F91800000000000000000002 /* MainWidget/MainWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWidget/MainWidget.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -182,6 +214,20 @@
 				PayCycleLiveActivity.swift,
 			);
 			target = C0D100092F70000000000001 /* MoneyMapMac */;
+		};
+		D10000032F80000000000001 /* Exceptions for "MoneyMapNotificationExtension" folder in "MoneyMapNotificationExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = D10000082F80000000000001 /* MoneyMapNotificationExtension */;
+		};
+		E90000000000000000000003 /* Exceptions for "MoneyMapWatchWidgets" folder in "MoneyMapWatchWidgets" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = E90000000000000000000004 /* MoneyMapWatchWidgets */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -234,6 +280,22 @@
 		C0D100032F70000000000001 /* MoneyMapMac */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = MoneyMapMac;
+			sourceTree = "<group>";
+		};
+		D10000042F80000000000001 /* MoneyMapNotificationExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				D10000032F80000000000001 /* Exceptions for "MoneyMapNotificationExtension" folder in "MoneyMapNotificationExtension" target */,
+			);
+			path = MoneyMapNotificationExtension;
+			sourceTree = "<group>";
+		};
+		E90000000000000000000005 /* MoneyMapWatchWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				E90000000000000000000003 /* Exceptions for "MoneyMapWatchWidgets" folder in "MoneyMapWatchWidgets" target */,
+			);
+			path = MoneyMapWatchWidgets;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -295,6 +357,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D10000062F80000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E90000000000000000000008 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -305,11 +381,14 @@
 				A7DF690C2DBE99A400071A0C /* MoneyMapShareExtension */,
 				B10100042F5E100000000001 /* MoneyMapTests */,
 				A79F7D7E2F58B83500736215 /* MainWidget */,
+				D10000042F80000000000001 /* MoneyMapNotificationExtension */,
 				B200000A2F65000000000001 /* MoneyMapWatch */,
+				E90000000000000000000005 /* MoneyMapWatchWidgets */,
 				C0D100032F70000000000001 /* MoneyMapMac */,
 				A747BC602DC284F600DAF6B6 /* Frameworks */,
 				34AF79532D5C448E001CEE30 /* Products */,
 				A7FF14062E0CB75100EF0464 /* MoneyMap.icon */,
+				A712DDD7305CFEEA00A7FC54 /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -321,10 +400,20 @@
 				A726FAEC2DC2C602006D6A82 /* MoneyMapShared.framework */,
 				B10100032F5E100000000001 /* MoneyMapTests.xctest */,
 				A79F7D792F58B83500736215 /* MainWidgetExtension.appex */,
+				D10000022F80000000000001 /* MoneyMapNotificationExtension.appex */,
 				B20000082F65000000000001 /* MoneyMapWatch.app */,
+				E90000000000000000000002 /* MoneyMapWatchWidgets.appex */,
 				C0D100012F70000000000001 /* MoneyMap.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A712DDD7305CFEEA00A7FC54 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				F91800000000000000000002 /* MainWidget/MainWidget.swift */,
+			);
+			name = "Recovered References";
 			sourceTree = "<group>";
 		};
 		A747BC602DC284F600DAF6B6 /* Frameworks */ = {
@@ -369,6 +458,7 @@
 				A726FAF32DC2C602006D6A82 /* PBXTargetDependency */,
 				A79F7D872F58B83600736215 /* PBXTargetDependency */,
 				B200000F2F65000000000001 /* PBXTargetDependency */,
+				D100000A2F80000000000001 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				34AF79542D5C448E001CEE30 /* MoneyMap */,
@@ -483,10 +573,12 @@
 				B200000B2F65000000000001 /* Frameworks */,
 				B200000C2F65000000000001 /* Resources */,
 				B20000072F65000000000001 /* Embed Frameworks */,
+				E90000000000000000000009 /* Embed Watch Widgets */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				E9000000000000000000000B /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				A726FAED2DC2C602006D6A82 /* MoneyMapShared */,
@@ -522,6 +614,49 @@
 			productReference = C0D100012F70000000000001 /* MoneyMap.app */;
 			productType = "com.apple.product-type.application";
 		};
+		D10000082F80000000000001 /* MoneyMapNotificationExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D100000B2F80000000000001 /* Build configuration list for PBXNativeTarget "MoneyMapNotificationExtension" */;
+			buildPhases = (
+				D10000052F80000000000001 /* Sources */,
+				D10000062F80000000000001 /* Frameworks */,
+				D10000072F80000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				D10000042F80000000000001 /* MoneyMapNotificationExtension */,
+			);
+			name = MoneyMapNotificationExtension;
+			packageProductDependencies = (
+			);
+			productName = MoneyMapNotificationExtension;
+			productReference = D10000022F80000000000001 /* MoneyMapNotificationExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		E90000000000000000000004 /* MoneyMapWatchWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E9000000000000000000000C /* Build configuration list for PBXNativeTarget "MoneyMapWatchWidgets" */;
+			buildPhases = (
+				E90000000000000000000006 /* Sources */,
+				E90000000000000000000008 /* Frameworks */,
+				E90000000000000000000007 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A726FAED2DC2C602006D6A82 /* MoneyMapShared */,
+				E90000000000000000000005 /* MoneyMapWatchWidgets */,
+			);
+			name = MoneyMapWatchWidgets;
+			productName = MoneyMapWatchWidgets;
+			productReference = E90000000000000000000002 /* MoneyMapWatchWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -554,6 +689,9 @@
 					C0D100092F70000000000001 = {
 						CreatedOnToolsVersion = 26.3;
 					};
+					D10000082F80000000000001 = {
+						CreatedOnToolsVersion = 26.3;
+					};
 				};
 			};
 			buildConfigurationList = 34AF794D2D5C448E001CEE30 /* Build configuration list for PBXProject "AddMoneyMap" */;
@@ -577,7 +715,9 @@
 				A7DF690A2DBE99A400071A0C /* MoneyMapShareExtension */,
 				A726FAEB2DC2C602006D6A82 /* MoneyMapShared */,
 				A79F7D782F58B83500736215 /* MainWidgetExtension */,
+				D10000082F80000000000001 /* MoneyMapNotificationExtension */,
 				B200000E2F65000000000001 /* MoneyMapWatch */,
+				E90000000000000000000004 /* MoneyMapWatchWidgets */,
 				C0D100092F70000000000001 /* MoneyMapMac */,
 			);
 		};
@@ -635,6 +775,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D10000072F80000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E90000000000000000000007 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -670,6 +824,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F91800000000000000000001 /* MainWidget/MainWidget.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -681,6 +836,20 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		C0D100052F70000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D10000052F80000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E90000000000000000000006 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -729,6 +898,16 @@
 			isa = PBXTargetDependency;
 			target = B200000E2F65000000000001 /* MoneyMapWatch */;
 			targetProxy = B20000042F65000000000001 /* PBXContainerItemProxy */;
+		};
+		D100000A2F80000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D10000082F80000000000001 /* MoneyMapNotificationExtension */;
+			targetProxy = D10000092F80000000000001 /* PBXContainerItemProxy */;
+		};
+		E9000000000000000000000B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E90000000000000000000004 /* MoneyMapWatchWidgets */;
+			targetProxy = E9000000000000000000000A /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1206,6 +1385,7 @@
 		B20000112F65000000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = MoneyMapWatch/MoneyMapWatch.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -1217,6 +1397,7 @@
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_WKApplication = YES;
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.heyjoshsmith.MoneyMap;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1237,6 +1418,7 @@
 		B20000122F65000000000001 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = MoneyMapWatch/MoneyMapWatch.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -1248,6 +1430,7 @@
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_WKApplication = YES;
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.heyjoshsmith.MoneyMap;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1327,6 +1510,109 @@
 			};
 			name = Release;
 		};
+		D100000C2F80000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = K6FKZVH5G5;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MoneyMapNotificationExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MoneyMap;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.heyjoshsmith.MoneyMap.NotificationExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		D100000D2F80000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = K6FKZVH5G5;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MoneyMapNotificationExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MoneyMap;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.heyjoshsmith.MoneyMap.NotificationExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		E9000000000000000000000D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = MoneyMapWatchWidgets/MoneyMapWatchWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = K6FKZVH5G5;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MoneyMapWatchWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MoneyMap;
+				MARKETING_VERSION = 1.1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.heyjoshsmith.MoneyMap.watchkitapp.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Debug;
+		};
+		E9000000000000000000000E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = MoneyMapWatchWidgets/MoneyMapWatchWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = K6FKZVH5G5;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MoneyMapWatchWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MoneyMap;
+				MARKETING_VERSION = 1.1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.heyjoshsmith.MoneyMap.watchkitapp.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1398,6 +1684,24 @@
 			buildConfigurations = (
 				C0D100072F70000000000001 /* Debug */,
 				C0D100082F70000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D100000B2F80000000000001 /* Build configuration list for PBXNativeTarget "MoneyMapNotificationExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D100000C2F80000000000001 /* Debug */,
+				D100000D2F80000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E9000000000000000000000C /* Build configuration list for PBXNativeTarget "MoneyMapWatchWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E9000000000000000000000D /* Debug */,
+				E9000000000000000000000E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

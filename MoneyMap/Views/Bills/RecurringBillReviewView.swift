@@ -1853,8 +1853,8 @@ private struct RecurringChargeDetailView: View {
         .scrollContentBackground(.hidden)
         .background(MoneyMapDesign.groupedBackground)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Done") {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done", systemImage: "checkmark") {
                     dismiss()
                 }
             }
@@ -1883,7 +1883,7 @@ private struct RecurringChargeDetailView: View {
         } message: {
             Text("This removes the imported transactions used for this detected charge. Saved bills are not deleted.")
         }
-        .safeAreaInset(edge: .bottom) {
+        .safeAreaBar(edge: .bottom) {
             HStack(spacing: 10) {
                 Button {
                     add()
@@ -1907,7 +1907,6 @@ private struct RecurringChargeDetailView: View {
             .padding(.horizontal)
             .padding(.top, 10)
             .padding(.bottom, 8)
-            .background(.bar)
         }
     }
 
@@ -2110,7 +2109,7 @@ private struct IgnoredRecurringChargesView: View {
         .listStyle(.insetGrouped)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("Done") {
+                Button("Done", systemImage: "checkmark") {
                     dismiss()
                 }
             }

@@ -21,7 +21,13 @@ struct GoalsView: View {
     @State private var addingGoal = false
     @State private var editingSavingsBalance = false
     
-    @State private var viewingGoal: Goal?
+    @State private var selectedGoalID: UUID?
+    @State private var showsDetail = false
+
+    private var preferredCompactColumn: NavigationSplitViewColumn {
+        get { showsDetail ? .detail : .sidebar }
+        nonmutating set { showsDetail = newValue == .detail }
+    }
     
     private var activeGoals: [Goal] {
         goals.filter { $0.remainingAmount > 0 }
@@ -32,7 +38,7 @@ struct GoalsView: View {
     }
 
     private var totalSaved: Double {
-        goals.reduce(0) { $0 + $1.amountSaved }
+        goals.reduce(0) { $0 + $1.totalSavedAmount }
     }
 
     private var totalTarget: Double {
@@ -54,7 +60,7 @@ struct GoalsView: View {
     
     
     var body: some View {
-        NavigationStack {
+        NavigationSplitView(preferredCompactColumn: Binding(get: { preferredCompactColumn }, set: { preferredCompactColumn = $0 })) {
             List {
                 overviewSection
 
@@ -69,19 +75,8 @@ struct GoalsView: View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(MoneyMapDesign.groupedBackground)
-            .navigationDestination(item: $viewingGoal) { goal in
-                GoalDetailView(goal)
-            }
+            .navigationSplitViewColumnWidth(min: 280, ideal: 360, max: 420)
             .navigationTitle("Goals")
-            .onAppear {
-                routeToRequestedGoalIfNeeded()
-            }
-            .onChange(of: deepLinkManager.requestedGoalID) { _, _ in
-                routeToRequestedGoalIfNeeded()
-            }
-            .onChange(of: goals.count) { _, _ in
-                routeToRequestedGoalIfNeeded()
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Add Goal", systemImage: "plus") {
@@ -96,21 +91,51 @@ struct GoalsView: View {
                     }
                 }
             }
-            .sheet(isPresented: $addingGoal) {
-                NavigationStack {
-                    AddGoalView()
+        } detail: {
+            NavigationStack {
+                if let goal = goals.first(where: { $0.id == selectedGoalID }) {
+                    GoalDetailView(goal)
+                } else {
+                    ContentUnavailableView("Goals", systemImage: "target", description: Text("Choose a goal to see its progress and contributions."))
                 }
             }
-            .sheet(isPresented: $editingSavingsBalance) {
-                ManualSavingsBalanceView(
-                    goals: goals,
-                    nextPayday: paydayManager.nextPayday,
-                    initialBalance: manualSavingsAccount?.balanceAmount ?? 0,
-                    updatedAt: manualSavingsAccount?.updatedAt,
-                    onApply: applySavingsBalance
-                )
+            .id(selectedGoalID)
+        }
+        .navigationSplitViewStyle(.balanced)
+        .moneyMapSceneRestoration(key: "goals.selectedID", value: $selectedGoalID)
+        .moneyMapSceneRestoration(key: "goals.showsDetail", value: $showsDetail)
+        .onAppear {
+            routeToRequestedGoalIfNeeded()
+        }
+        .onChange(of: deepLinkManager.requestedGoalID) { _, _ in
+            routeToRequestedGoalIfNeeded()
+        }
+        .onChange(of: goals.map(\.id)) { _, ids in
+            if let selectedGoalID, !ids.contains(selectedGoalID) {
+                self.selectedGoalID = nil
+                preferredCompactColumn = .sidebar
+            }
+            routeToRequestedGoalIfNeeded()
+        }
+        .sheet(isPresented: $addingGoal) {
+            NavigationStack {
+                AddGoalView()
             }
         }
+        .sheet(isPresented: $editingSavingsBalance) {
+            ManualSavingsBalanceView(
+                goals: goals,
+                nextPayday: paydayManager.nextPayday,
+                initialBalance: manualSavingsAccount?.balanceAmount ?? 0,
+                updatedAt: manualSavingsAccount?.updatedAt,
+                onApply: applySavingsBalance
+            )
+        }
+    }
+
+    private func openGoal(_ goal: Goal) {
+        selectedGoalID = goal.id
+        preferredCompactColumn = .detail
     }
 
     private var overviewSection: some View {
@@ -187,12 +212,14 @@ struct GoalsView: View {
 
     private func goalNavigationLink(_ goal: Goal) -> some View {
         Button {
-            viewingGoal = goal
+            openGoal(goal)
             MoneyMapIntentDonations.donateOpenGoal(goal)
         } label: {
             GoalRowView(goal: goal)
         }
         .buttonStyle(.plain)
+        .listRowBackground(selectedGoalID == goal.id ? MoneyMapDesign.controlBackground : MoneyMapDesign.surfaceBackground)
+        .accessibilityAddTraits(selectedGoalID == goal.id ? .isSelected : [])
         .userActivity("com.heyjoshsmith.MoneyMap.viewingGoalRow") { activity in
             let entity = GoalEntity(goal)
             activity.title = "Reviewing \(entity.name)"
@@ -204,6 +231,7 @@ struct GoalsView: View {
             }
         }
         .contextMenu {
+            MoneyMapOpenWindowButton(content: .goal(goal.id))
             Button("Delete", systemImage: "trash", role: .destructive) {
                 modelContext.delete(goal)
             }
@@ -215,8 +243,8 @@ struct GoalsView: View {
 
         for allocation in plan.allocations {
             guard let goal = goals.first(where: { $0.id == allocation.goalID }) else { continue }
-            let previousAmountSaved = goal.amountSaved
-            goal.amountSaved = allocation.allocatedAmount
+            let previousAmountSaved = goal.totalSavedAmount
+            goal.totalSavedAmount = allocation.allocatedAmount
             AuditService.logGoalContribution(
                 goal: goal,
                 previousAmountSaved: previousAmountSaved,
@@ -242,7 +270,7 @@ struct GoalsView: View {
               let targetGoal = goals.first(where: { $0.id == requestedGoalID }) else {
             return
         }
-        viewingGoal = targetGoal
+        openGoal(targetGoal)
         deepLinkManager.requestedGoalID = nil
     }
     
@@ -433,12 +461,12 @@ private struct ManualSavingsBalanceView: View {
             .navigationTitle("Savings Account")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
+                    Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save & Split") {
+                    Button("Save & Split", systemImage: "checkmark") {
                         onApply(plan)
                         dismiss()
                     }

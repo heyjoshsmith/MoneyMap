@@ -51,6 +51,7 @@ struct WalletAccountsView: View {
                                 }
                             }
                             .contextMenu {
+                                MoneyMapOpenWindowButton(content: .wallet(.account(account.accountID)))
                                 Button {
                                     iconPickerAccount = account
                                 } label: {
@@ -253,6 +254,7 @@ struct WalletAccountDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             Menu {
+                MoneyMapOpenWindowButton(content: .wallet(.account(account.accountID)))
                 Button {
                     isShowingIconPicker = true
                 } label: {
@@ -913,13 +915,13 @@ private struct WalletAccountIconPickerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
+                    Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                    Button("Save", systemImage: "checkmark") {
                         save(iconName)
                         dismiss()
                     }

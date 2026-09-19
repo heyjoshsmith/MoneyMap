@@ -243,6 +243,7 @@ struct HomeView: View {
                 actionsSection
             }
             .scrollContentBackground(.hidden)
+            .moneyMapReadableContent()
             .background(MoneyMapDesign.groupedBackground)
             .navigationTitle("Today")
             .toolbar {

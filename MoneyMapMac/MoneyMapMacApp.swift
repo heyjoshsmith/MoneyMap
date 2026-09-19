@@ -11,6 +11,7 @@ import SwiftUI
 @main
 struct MoneyMapMacApp: App {
     private let modelContainer: ModelContainer
+    private let coordinator: MacPlaidSyncCoordinator
 
     init() {
         do {
@@ -32,11 +33,13 @@ struct MoneyMapMacApp: App {
             )
             print("MoneyMap for Mac is using in-memory data. \(fallbackReason)")
         }
+        coordinator = MacPlaidSyncCoordinator()
+        coordinator.startAutomaticRefresh(context: modelContainer.mainContext)
     }
 
     var body: some Scene {
         WindowGroup {
-            MacBankSyncDashboardView()
+            MacBankSyncDashboardView(coordinator: coordinator)
         }
         .modelContainer(modelContainer)
         .commands {

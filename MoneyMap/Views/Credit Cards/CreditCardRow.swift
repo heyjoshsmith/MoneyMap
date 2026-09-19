@@ -22,7 +22,7 @@ struct CreditCardRow: View {
             isPresented = true
         } label: {
             VStack {
-                if let details = creditCard.creditCardDetails {
+                if let details = creditCard.currentCreditCardDetails {
                     
                     Gauge(value: details.cardBalance, in: 0...(details.creditLimit)) {
                         VStack {

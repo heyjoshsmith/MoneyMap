@@ -13,7 +13,7 @@ import MoneyMapShared
 class ShareViewController: UIViewController {
     
     private lazy var container: ModelContainer? = {
-        try? MoneyMapSharedContainerFactory.make()
+        try? MoneyMapSharedContainerFactory.makeForAppExtension()
     }()
     
     override func viewDidLoad() {

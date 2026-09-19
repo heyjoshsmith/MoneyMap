@@ -1,23 +1,37 @@
-//
-//  MoneyMapWatchApp.swift
-//  MoneyMapWatch
-//
-//  Created by Codex on 5/13/26.
-//
-
 import SwiftData
 import SwiftUI
 
 @main
 struct MoneyMapWatchApp: App {
-    private let modelContainer: ModelContainer = {
-        (try? MoneyMapSharedContainerFactory.make()) ?? MoneyMapSharedContainerFactory.makeInMemory()
-    }()
-
+    @WKApplicationDelegateAdaptor(WatchNotificationDelegate.self) private var delegate
+    @State private var container: ModelContainer?
+    @State private var failure: String?
     var body: some Scene {
         WindowGroup {
-            WatchDashboardView()
-                .modelContainer(modelContainer)
+            Group {
+                if let container {
+                    WatchDashboardView().modelContainer(container)
+                } else if let failure {
+                    VStack(spacing: 12) {
+                        Image(systemName: "externaldrive.badge.exclamationmark").font(.largeTitle)
+                        Text("Unable to Open Data").font(.headline)
+                        Text(failure).font(.caption)
+                        Button("Try Again", action: openStore)
+                    }.padding()
+                } else { ProgressView("Opening MoneyMap") }
+            }
+            .tint(WatchDesign.green)
+            .task { if container == nil { openStore() } }
         }
+    }
+    private func openStore() {
+        #if DEBUG && targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("--watch-preview") {
+            do { container = try WatchPreviewData.make(); failure = nil } catch { failure = error.localizedDescription }
+            return
+        }
+        #endif
+        do { container = try MoneyMapSharedContainerFactory.make(); failure = nil }
+        catch { failure = error.localizedDescription }
     }
 }

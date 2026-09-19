@@ -463,20 +463,20 @@ struct PlaidConnectionsView: View {
         bill.recurrenceInterval = bill.recurrenceInterval ?? 1
         bill.recurrenceUnit = bill.recurrenceUnit ?? .month
         bill.category = .creditCard
-        bill.creditCardDetails = CreditCardDetails(
-            creditLimit: suggestion.liability.creditLimit ?? bill.creditCardDetails?.creditLimit ?? 0,
-            cardBalance: suggestion.account.currentBalance ?? suggestion.liability.currentBalance ?? bill.creditCardDetails?.cardBalance ?? 0,
-            annualPercentageRate: suggestion.liability.aprPercentage ?? bill.creditCardDetails?.annualPercentageRate,
-            minimumPayment: suggestion.liability.minimumPaymentAmount ?? bill.creditCardDetails?.minimumPayment,
-            statementBalance: suggestion.liability.lastStatementBalance ?? bill.creditCardDetails?.statementBalance,
-            issuerName: suggestion.account.institutionName ?? bill.creditCardDetails?.issuerName,
-            lastFourDigits: suggestion.account.mask ?? bill.creditCardDetails?.lastFourDigits,
-            statementClosingDate: PlaidDateParsing.day(suggestion.liability.lastStatementIssueDate) ?? bill.creditCardDetails?.statementClosingDate,
-            promoAPRExpiration: bill.creditCardDetails?.promoAPRExpiration
+        bill.currentCreditCardDetails = CreditCardDetails(
+            creditLimit: suggestion.liability.creditLimit ?? bill.currentCreditCardDetails?.creditLimit ?? 0,
+            cardBalance: suggestion.account.currentBalance ?? suggestion.liability.currentBalance ?? bill.currentCreditCardDetails?.cardBalance ?? 0,
+            annualPercentageRate: suggestion.liability.aprPercentage ?? bill.currentCreditCardDetails?.annualPercentageRate,
+            minimumPayment: suggestion.liability.minimumPaymentAmount ?? bill.currentCreditCardDetails?.minimumPayment,
+            statementBalance: suggestion.liability.lastStatementBalance ?? bill.currentCreditCardDetails?.statementBalance,
+            issuerName: suggestion.account.institutionName ?? bill.currentCreditCardDetails?.issuerName,
+            lastFourDigits: suggestion.account.mask ?? bill.currentCreditCardDetails?.lastFourDigits,
+            statementClosingDate: PlaidDateParsing.day(suggestion.liability.lastStatementIssueDate) ?? bill.currentCreditCardDetails?.statementClosingDate,
+            promoAPRExpiration: bill.currentCreditCardDetails?.promoAPRExpiration
         )
         bill.plaidAccountID = suggestion.account.accountId
         bill.plaidItemID = suggestion.account.itemId
-        bill.plaidUpdatedAt = .now
+        bill.plaidUpdatedAt = PlaidDateParsing.dateTime(suggestion.account.updatedAt)
         bill.checkStatus()
 
         if suggestion.bill == nil {
@@ -529,8 +529,8 @@ struct PlaidConnectionsView: View {
         guard let mask = account.mask else { return nil }
         return bills.first { bill in
             bill.category == .creditCard &&
-            bill.creditCardDetails?.lastFourDigits == mask &&
-            (account.institutionName == nil || bill.creditCardDetails?.issuerName == account.institutionName)
+            bill.currentCreditCardDetails?.lastFourDigits == mask &&
+            (account.institutionName == nil || bill.currentCreditCardDetails?.issuerName == account.institutionName)
         }
     }
 

@@ -363,10 +363,10 @@ final class FinancialPlanningEngineTests: XCTestCase {
     func testPaycheckPlanFlagsBehindGoalAndAllocatesCash() {
         let deadline = Calendar.current.date(byAdding: .day, value: 20, to: .now) ?? .now
         let behindGoal = Goal("Emergency Fund", targetAmount: 1000, deadline: deadline, weight: 1.5, paydaysUntil: 2)
-        behindGoal.amountSaved = 50
+        behindGoal.totalSavedAmount = 50
 
         let onTrackGoal = Goal("Vacation", targetAmount: 400, deadline: Calendar.current.date(byAdding: .day, value: 80, to: .now), weight: 1.0, paydaysUntil: 6)
-        onTrackGoal.amountSaved = 200
+        onTrackGoal.totalSavedAmount = 200
 
         let plan = FinancialPlanningEngine.recommendPaycheckPlan(
             availableCash: 600,
@@ -420,7 +420,7 @@ final class FinancialPlanningEngineTests: XCTestCase {
             weight: 1,
             paydaysUntil: 12
         )
-        aheadGoal.amountSaved = 1200
+        aheadGoal.totalSavedAmount = 1200
 
         let plan = FinancialPlanningEngine.recommendPaycheckPlan(
             availableCash: 1000,
@@ -461,7 +461,7 @@ final class FinancialPlanningEngineTests: XCTestCase {
             weight: 1,
             paydaysUntil: 12
         )
-        aheadGoal.amountSaved = 900
+        aheadGoal.totalSavedAmount = 900
 
         let plan = FinancialPlanningEngine.recommendPaycheckPlan(
             availableCash: 1000,
@@ -565,7 +565,7 @@ final class FinancialPlanningEngineTests: XCTestCase {
             weight: 1,
             paydaysUntil: 2
         )
-        goal.amountSaved = 400
+        goal.totalSavedAmount = 400
 
         let plan = FinancialPlanningEngine.allocateSavingsBalance(
             balance: 250,
@@ -699,7 +699,7 @@ final class FinancialPlanningEngineTests: XCTestCase {
 
         XCTAssertEqual(summary.paidCardCount, 0)
         XCTAssertNil(item.matchedTransactionIDText)
-        XCTAssertEqual(card.creditCardDetails?.cardBalance, 600)
+        XCTAssertEqual(card.currentCreditCardDetails?.cardBalance, 600)
         XCTAssertEqual(plan.status, .active)
     }
 
@@ -766,7 +766,7 @@ final class FinancialPlanningEngineTests: XCTestCase {
         XCTAssertEqual(summary.completedPlanCount, 1)
         XCTAssertEqual(item.matchedTransactionIDText, "tx-posted")
         XCTAssertEqual(item.matchedAt, createdAt)
-        XCTAssertEqual(card.creditCardDetails?.cardBalance, 475)
+        XCTAssertEqual(card.currentCreditCardDetails?.cardBalance, 475)
         XCTAssertEqual(card.status, .paid)
         XCTAssertEqual(plan.status, .completed)
         XCTAssertEqual(plan.completedAt, createdAt)
@@ -832,7 +832,7 @@ final class FinancialPlanningEngineTests: XCTestCase {
 
         XCTAssertEqual(summary.paidCardCount, 0)
         XCTAssertNil(item.matchedTransactionIDText)
-        XCTAssertEqual(card.creditCardDetails?.cardBalance, 600)
+        XCTAssertEqual(card.currentCreditCardDetails?.cardBalance, 600)
         XCTAssertEqual(plan.status, .active)
     }
 
@@ -845,7 +845,7 @@ final class FinancialPlanningEngineTests: XCTestCase {
             weight: 1.0,
             paydaysUntil: 2
         )
-        goal.amountSaved = 100
+        goal.totalSavedAmount = 100
         goal.createdDate = Calendar.current.date(byAdding: .day, value: -20, to: .now) ?? .now
 
         let insights = FinancialPlanningEngine.goalProgressInsights(goals: [goal], nextPayday: nextPayday)

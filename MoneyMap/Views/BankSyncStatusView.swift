@@ -176,6 +176,7 @@ struct BankSyncStatusView: View {
             } footer: {
                 Text("Link synced Plaid cards to your existing MoneyMap credit-card bills without deleting your current schedules or history.")
             }
+            .moneyMapListSectionBackground()
 
             Section {
                 if activeConnectionSnapshots.isEmpty {
@@ -191,11 +192,11 @@ struct BankSyncStatusView: View {
             } footer: {
                 Text("Add or remove banks from MoneyMap for Mac. This phone receives synced snapshots only.")
             }
+            .moneyMapListSectionBackground()
         }
         .navigationTitle("Bank Sync")
         .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(MoneyMapDesign.groupedBackground)
+        .moneyMapGroupedListBackground()
         .refreshable {
             await refreshAndImportBankSync()
         }
@@ -1720,7 +1721,7 @@ private struct PlaidCardUpgradeView: View {
 
     private func suggestedBill(for account: PlaidAccountValue) -> Bill? {
         if let mask = normalizedLastFour(account.mask),
-           let exactLastFour = unlinkedManualCreditCards.first(where: { normalizedLastFour($0.creditCardDetails?.lastFourDigits) == mask }) {
+           let exactLastFour = unlinkedManualCreditCards.first(where: { normalizedLastFour($0.currentCreditCardDetails?.lastFourDigits) == mask }) {
             return exactLastFour
         }
 
@@ -1730,7 +1731,7 @@ private struct PlaidCardUpgradeView: View {
             .map { bill -> (bill: Bill, score: Int) in
                 var score = 0
                 let billName = normalizedMatchText(bill.name)
-                let issuerName = normalizedMatchText(bill.creditCardDetails?.issuerName)
+                let issuerName = normalizedMatchText(bill.currentCreditCardDetails?.issuerName)
                 if !accountName.isEmpty, billName.contains(accountName) || accountName.contains(billName) {
                     score += 3
                 }
@@ -1790,7 +1791,7 @@ private struct PlaidCardUpgradeView: View {
                 plaidAccountID: account.accountID,
                 plaidItemID: account.itemID,
                 plaidInstitutionID: connection(for: account)?.institutionID,
-                plaidUpdatedAt: .now
+                plaidUpdatedAt: account.updatedAt
             )
             mainModelContext.insert(bill)
             bills.append(bill)
@@ -1836,9 +1837,9 @@ private struct PlaidCardUpgradeView: View {
         bill.plaidAccountID = account.accountID
         bill.plaidItemID = account.itemID
         bill.plaidInstitutionID = connection(for: account)?.institutionID
-        bill.plaidUpdatedAt = .now
+        bill.plaidUpdatedAt = account.updatedAt
         bill.plaidUnavailable = false
-        bill.creditCardDetails = creditCardDetails(from: account, existing: bill.creditCardDetails)
+        bill.currentCreditCardDetails = creditCardDetails(from: account, existing: bill.currentCreditCardDetails)
 
         if (bill.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             bill.name = account.displayName
@@ -2137,7 +2138,7 @@ private struct PlaidCardUpgradeAccountRow: View {
 
     private func cardLabel(for bill: Bill) -> String {
         var parts = [bill.name ?? "Card"]
-        if let lastFour = bill.creditCardDetails?.lastFourDigits, !lastFour.isEmpty {
+        if let lastFour = bill.currentCreditCardDetails?.lastFourDigits, !lastFour.isEmpty {
             parts.append("Ending \(lastFour)")
         }
         return parts.joined(separator: " • ")
@@ -2218,10 +2219,10 @@ private struct PlaidManualCardRow: View {
 
     private var detailText: String {
         var parts: [String] = ["Manual"]
-        if let lastFour = bill.creditCardDetails?.lastFourDigits, !lastFour.isEmpty {
+        if let lastFour = bill.currentCreditCardDetails?.lastFourDigits, !lastFour.isEmpty {
             parts.append("Ending \(lastFour)")
         }
-        if let balance = bill.creditCardDetails?.cardBalance {
+        if let balance = bill.currentCreditCardDetails?.cardBalance {
             parts.append("Balance \(balance.formatted(.currency(code: "USD")))")
         }
         return parts.joined(separator: " • ")

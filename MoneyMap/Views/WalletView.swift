@@ -17,10 +17,17 @@ struct WalletView: View {
     @AppStorage(RecurringBillDetector.ignoredSuggestionIDsKey) private var ignoredRecurringBillSuggestionIDs = ""
     @AppStorage(WalletAccountPreferences.appStorageKey) private var accountPreferencesData = WalletAccountPreferences.emptyJSON
 
+    @ScaledMetric(relativeTo: .body) private var minimumTileWidth: CGFloat = 145
+
     private let plaidContainer: ModelContainer
 
     @State private var destination: WalletDestination?
-    @State private var viewingBill: Bill?
+    @State private var showsDetail = false
+
+    private var preferredCompactColumn: NavigationSplitViewColumn {
+        get { showsDetail ? .detail : .sidebar }
+        nonmutating set { showsDetail = newValue == .detail }
+    }
     @State private var isRefreshingBankData = false
     @State private var refreshSummary: WalletRefreshSummary?
     @State private var refreshErrorMessage: String?
@@ -48,55 +55,85 @@ struct WalletView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationSplitView(preferredCompactColumn: Binding(get: { preferredCompactColumn }, set: { preferredCompactColumn = $0 })) {
             List {
                 summarySection
                 refreshFeedbackSection
                 destinationCardsSection
             }
             .navigationTitle("Wallet")
+            .toolbar {
+                ToolbarItem(placement: .secondaryAction) {
+                    MoneyMapOpenWindowButton(content: .wallet(nil))
+                }
+            }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(MoneyMapDesign.groupedBackground)
             .refreshable {
                 await refreshBankData()
             }
-            .navigationDestination(item: $destination, destination: destinationView)
-            .navigationDestination(item: $viewingBill) { bill in
-                BillView(bill: bill)
+            .navigationSplitViewColumnWidth(min: 280, ideal: 360, max: 420)
+        } detail: {
+            Group {
+                if destination == .transactions {
+                    // The inspector belongs outside this destination's navigation stack.
+                    WalletTransactionsView(plaidAccounts: plaidAccountSnapshots)
+                } else {
+                    NavigationStack {
+                        if let destination {
+                            destinationView(destination)
+                        } else {
+                            ContentUnavailableView("Wallet", systemImage: "wallet.pass", description: Text("Choose an area of your wallet to see its details."))
+                        }
+                    }
+                }
             }
-            .onAppear {
-                MoneyMapDiagnostics.record(
-                    "wallet.appear",
-                    metadata: [
-                        "bills": "\(bills.count)",
-                        "transactions": "\(transactions.count)",
-                        "cachedRecurringSuggestions": "\(recurringReviewSuggestions.count)"
-                    ]
-                )
-                consumeDeepLinks()
-                loadPlaidSnapshots()
-                refreshTransactionSummaryCache()
-                scheduleRecurringReviewRefresh()
-            }
-            .onChange(of: deepLinkManager.requestedBillID) { _, _ in
-                consumeDeepLinks()
-            }
-            .onChange(of: deepLinkManager.requestedBillsDestination) { _, _ in
-                consumeDeepLinks()
-            }
-            .onChange(of: bills.count) { _, _ in
-                consumeDeepLinks()
-                scheduleRecurringReviewRefresh()
-            }
-            .onChange(of: transactions.count) { _, _ in
-                refreshTransactionSummaryCache()
-                scheduleRecurringReviewRefresh()
-            }
-            .onChange(of: ignoredRecurringBillSuggestionIDs) { _, _ in
-                scheduleRecurringReviewRefresh()
-            }
+            // Reset nested navigation only when the selection changes, never on resize.
+            .id(destination)
         }
+        .navigationSplitViewStyle(.balanced)
+        .moneyMapSceneRestoration(key: "wallet.destination", value: $destination)
+        .moneyMapSceneRestoration(key: "wallet.showsDetail", value: $showsDetail)
+        .onAppear {
+            MoneyMapDiagnostics.record(
+                "wallet.appear",
+                metadata: [
+                    "bills": "\(bills.count)",
+                    "transactions": "\(transactions.count)",
+                    "cachedRecurringSuggestions": "\(recurringReviewSuggestions.count)"
+                ]
+            )
+            consumeDeepLinks()
+            loadPlaidSnapshots()
+            refreshTransactionSummaryCache()
+            scheduleRecurringReviewRefresh()
+        }
+        .onChange(of: deepLinkManager.requestedWalletDestination) { _, _ in
+            consumeDeepLinks()
+        }
+        .onChange(of: deepLinkManager.requestedBillID) { _, _ in
+            consumeDeepLinks()
+        }
+        .onChange(of: deepLinkManager.requestedBillsDestination) { _, _ in
+            consumeDeepLinks()
+        }
+        .onChange(of: bills.count) { _, _ in
+            consumeDeepLinks()
+            scheduleRecurringReviewRefresh()
+        }
+        .onChange(of: transactions.count) { _, _ in
+            refreshTransactionSummaryCache()
+            scheduleRecurringReviewRefresh()
+        }
+        .onChange(of: ignoredRecurringBillSuggestionIDs) { _, _ in
+            scheduleRecurringReviewRefresh()
+        }
+    }
+
+    private func open(_ target: WalletDestination) {
+        destination = target
+        preferredCompactColumn = .detail
     }
 
     private var summarySection: some View {
@@ -140,9 +177,10 @@ struct WalletView: View {
         Section {
             LazyVGrid(columns: destinationColumns, spacing: 12) {
                 Button {
-                    destination = .cards
+                    open(.cards)
                 } label: {
                     WalletDestinationTile(
+                        isSelected: destination == .cards,
                         title: "Cards",
                         detail: cardsDestinationDetail,
                         systemImage: "creditcard.fill",
@@ -150,11 +188,13 @@ struct WalletView: View {
                     )
                 }
                 .buttonStyle(WalletDestinationTileButtonStyle())
+                .contextMenu { MoneyMapOpenWindowButton(content: .wallet(.cards)) }
 
                 Button {
-                    destination = .accounts
+                    open(.accounts)
                 } label: {
                     WalletDestinationTile(
+                        isSelected: destination == .accounts,
                         title: "Accounts",
                         detail: accountsDestinationDetail,
                         systemImage: "building.columns.fill",
@@ -162,11 +202,13 @@ struct WalletView: View {
                     )
                 }
                 .buttonStyle(WalletDestinationTileButtonStyle())
+                .contextMenu { MoneyMapOpenWindowButton(content: .wallet(.accounts)) }
 
                 Button {
-                    destination = .transactions
+                    open(.transactions)
                 } label: {
                     WalletDestinationTile(
+                        isSelected: destination == .transactions,
                         title: "Activity",
                         detail: transactionsDestinationDetail,
                         systemImage: "list.bullet.rectangle.fill",
@@ -174,11 +216,13 @@ struct WalletView: View {
                     )
                 }
                 .buttonStyle(WalletDestinationTileButtonStyle())
+                .contextMenu { MoneyMapOpenWindowButton(content: .wallet(.transactions)) }
 
                 Button {
-                    destination = .bills
+                    open(.bills)
                 } label: {
                     WalletDestinationTile(
+                        isSelected: destination == .bills,
                         title: "Bills",
                         detail: billsDestinationDetail,
                         systemImage: "calendar.badge.clock",
@@ -186,11 +230,13 @@ struct WalletView: View {
                     )
                 }
                 .buttonStyle(WalletDestinationTileButtonStyle())
+                .contextMenu { MoneyMapOpenWindowButton(content: .wallet(.bills)) }
 
                 Button {
-                    destination = .paymentMethods
+                    open(.paymentMethods)
                 } label: {
                     WalletDestinationTile(
+                        isSelected: destination == .paymentMethods,
                         title: "Payments",
                         detail: paymentMethodsDestinationDetail,
                         systemImage: "wallet.pass.fill",
@@ -198,11 +244,13 @@ struct WalletView: View {
                     )
                 }
                 .buttonStyle(WalletDestinationTileButtonStyle())
+                .contextMenu { MoneyMapOpenWindowButton(content: .wallet(.paymentMethods)) }
 
                 Button {
-                    destination = .bankSyncSettings
+                    open(.bankSyncSettings)
                 } label: {
                     WalletDestinationTile(
+                        isSelected: destination == .bankSyncSettings,
                         title: "Sync",
                         detail: bankSyncDestinationDetail,
                         systemImage: "icloud.and.arrow.down.fill",
@@ -210,6 +258,7 @@ struct WalletView: View {
                     )
                 }
                 .buttonStyle(WalletDestinationTileButtonStyle())
+                .contextMenu { MoneyMapOpenWindowButton(content: .wallet(.bankSyncSettings)) }
             }
             .padding(.vertical, 2)
         } header: {
@@ -320,7 +369,7 @@ struct WalletView: View {
         if !unlinkedPlaidCreditAccounts.isEmpty {
             Section {
                 Button {
-                    destination = .cardUpgrade
+                    open(.cardUpgrade)
                 } label: {
                     WalletCardUpgradeCallout(
                         plaidCards: unlinkedPlaidCreditAccounts.count,
@@ -370,7 +419,7 @@ struct WalletView: View {
             } else {
                 ForEach(creditCards) { card in
                     Button {
-                        viewingBill = card
+                        open(.bill(card.id))
                     } label: {
                         WalletCardRow(card: card)
                     }
@@ -432,8 +481,7 @@ struct WalletView: View {
 
     private var destinationColumns: [GridItem] {
         [
-            GridItem(.flexible(), spacing: 12),
-            GridItem(.flexible(), spacing: 12)
+            GridItem(.adaptive(minimum: minimumTileWidth), spacing: 12)
         ]
     }
 
@@ -702,6 +750,18 @@ struct WalletView: View {
     @ViewBuilder
     private func destinationView(_ destination: WalletDestination) -> some View {
         switch destination {
+        case .bill(let billID):
+            if let bill = bills.first(where: { $0.id == billID }) {
+                BillView(bill: bill)
+            } else {
+                ContentUnavailableView("Bill Unavailable", systemImage: "doc", description: Text("This bill may have been removed."))
+            }
+        case .account(let accountID):
+            if let account = plaidAccountSnapshots.first(where: { $0.accountID == accountID }) {
+                WalletAccountDetailView(account: account, plaidAccounts: plaidAccountSnapshots)
+            } else {
+                ContentUnavailableView("Account Unavailable", systemImage: "building.columns", description: Text("This account may no longer be connected. Check Bank Sync for its status."))
+            }
         case .cards:
             WalletCardsView(cards: creditCards)
         case .accounts:
@@ -730,9 +790,13 @@ struct WalletView: View {
     }
 
     private func consumeDeepLinks() {
+        if let target = deepLinkManager.requestedWalletDestination {
+            open(target)
+            deepLinkManager.requestedWalletDestination = nil
+        }
         if let requestedBillID = deepLinkManager.requestedBillID,
            let targetBill = bills.first(where: { $0.id == requestedBillID }) {
-            viewingBill = targetBill
+            open(.bill(targetBill.id))
             deepLinkManager.requestedBillID = nil
         }
 
@@ -742,9 +806,9 @@ struct WalletView: View {
 
         switch requestedDestination {
         case .upcomingBills:
-            destination = .bills
+            open(.bills)
         case .cardUtilization:
-            destination = .cardUtilization
+            open(.cardUtilization)
         }
         deepLinkManager.requestedBillsDestination = nil
     }
@@ -827,7 +891,7 @@ struct WalletView: View {
             ]
         )
         refreshRecurringReviewSuggestions()
-        destination = .billCalendar
+        open(.billCalendar)
         MoneyMapDiagnostics.record(
             "wallet.recurringCard.destinationSet",
             metadata: ["refreshedSuggestions": "\(recurringReviewSuggestions.count)"]
@@ -1118,19 +1182,6 @@ struct WalletView: View {
     }
 }
 
-private enum WalletDestination: Hashable, Identifiable {
-    case cards
-    case accounts
-    case bills
-    case paymentMethods
-    case transactions
-    case cardUtilization
-    case bankSyncSettings
-    case cardUpgrade
-    case billCalendar
-
-    var id: Self { self }
-}
 
 private struct WalletRefreshSummary: Equatable {
     let refreshedAt: Date
@@ -1518,6 +1569,7 @@ private struct WalletActionRow: View {
 }
 
 private struct WalletDestinationTile: View {
+    var isSelected = false
     let title: String
     let detail: String
     let systemImage: String
@@ -1541,14 +1593,14 @@ private struct WalletDestinationTile: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.title3.weight(.bold))
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
+                    .lineLimit(2)
 
                 Text(detail)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .lineLimit(2)
                     .minimumScaleFactor(0.82)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1556,14 +1608,15 @@ private struct WalletDestinationTile: View {
             Spacer(minLength: 0)
         }
         .padding(14)
-        .frame(maxWidth: .infinity, minHeight: 142, maxHeight: 142, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 142, alignment: .topLeading)
         .background(MoneyMapDesign.surfaceBackground, in: RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06))
+                .strokeBorder(isSelected ? tint : Color.primary.opacity(0.06), lineWidth: isSelected ? 2 : 1)
         }
         .contentShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -1759,7 +1812,7 @@ private struct WalletCardRow: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 4) {
-                Text(MoneyMapFormatters.currencyString(for: card.creditCardDetails?.cardBalance ?? card.amount ?? 0))
+                Text(MoneyMapFormatters.currencyString(for: card.currentCreditCardDetails?.cardBalance ?? card.amount ?? 0))
                     .font(.headline)
                     .monospacedDigit()
 
@@ -1776,7 +1829,7 @@ private struct WalletCardRow: View {
     }
 
     private var cardDetail: String {
-        let details = card.creditCardDetails
+        let details = card.currentCreditCardDetails
         let lastFour = details?.lastFourDigits.map { "Ending \($0)" }
         let limit = details.map { MoneyMapFormatters.currencyString(for: $0.creditLimit) + " limit" }
         let issuer = details?.issuerName
@@ -1887,7 +1940,7 @@ private struct WalletTransactionRow: View {
     }
 }
 
-private enum WalletTransactionSourceFilter: String, CaseIterable, Identifiable {
+private enum WalletTransactionSourceFilter: String, Codable, CaseIterable, Identifiable {
     case all
     case plaid
     case other
@@ -1903,7 +1956,7 @@ private enum WalletTransactionSourceFilter: String, CaseIterable, Identifiable {
     }
 }
 
-private enum WalletTransactionStatusFilter: String, CaseIterable, Identifiable {
+private enum WalletTransactionStatusFilter: String, Codable, CaseIterable, Identifiable {
     case all
     case pending
     case posted
@@ -1919,7 +1972,7 @@ private enum WalletTransactionStatusFilter: String, CaseIterable, Identifiable {
     }
 }
 
-private struct WalletTransactionsView: View {
+struct WalletTransactionsView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var transactions: [Transaction]
 
@@ -1937,7 +1990,7 @@ private struct WalletTransactionsView: View {
     @State private var selectedCategoryFilter: String?
     @State private var sourceFilter: WalletTransactionSourceFilter = .all
     @State private var statusFilter: WalletTransactionStatusFilter = .all
-    @State private var showingFilterSheet = false
+    @State private var showingFilterInspector = false
     @State private var isUpdatingSearchTokens = false
     @State private var isSelecting = false
     @State private var selectedTransactionIDs = Set<PersistentIdentifier>()
@@ -1945,6 +1998,39 @@ private struct WalletTransactionsView: View {
     @State private var showingDeleteConfirmation = false
     @State private var showingBulkDeleteConfirmation = false
     @State private var deletionErrorMessage: String?
+
+    private let filterPresentation: Binding<Bool>?
+
+    init(plaidAccounts: [PlaidAccountValue], filterPresentation: Binding<Bool>? = nil) {
+        self.plaidAccounts = plaidAccounts
+        self.filterPresentation = filterPresentation
+    }
+
+    private var filterPresentationBinding: Binding<Bool> {
+        filterPresentation ?? $showingFilterInspector
+    }
+
+    private var filterState: WalletTransactionFilterState {
+        get {
+            WalletTransactionFilterState(
+                cardID: selectedCardFilterID, institution: selectedPlaidInstitutionFilterName,
+                accountID: selectedPlaidAccountFilterID, typeGroup: selectedTypeGroupFilter,
+                type: selectedTypeFilter, categoryGroup: selectedCategoryGroupFilter,
+                category: selectedCategoryFilter, source: sourceFilter, status: statusFilter
+            )
+        }
+        nonmutating set {
+            selectedCardFilterID = newValue.cardID
+            selectedPlaidInstitutionFilterName = newValue.institution
+            selectedPlaidAccountFilterID = newValue.accountID
+            selectedTypeGroupFilter = newValue.typeGroup
+            selectedTypeFilter = newValue.type
+            selectedCategoryGroupFilter = newValue.categoryGroup
+            selectedCategoryFilter = newValue.category
+            sourceFilter = newValue.source
+            statusFilter = newValue.status
+        }
+    }
 
     private let noCardFilterID = "__moneymap_no_card__"
     private let noPlaidAccountFilterID = "__moneymap_no_plaid_account__"
@@ -1966,7 +2052,7 @@ private struct WalletTransactionsView: View {
         }
     }
 
-    var body: some View {
+    private var transactionListContent: some View {
         List {
             if let deletionErrorMessage {
                 Section {
@@ -1974,6 +2060,7 @@ private struct WalletTransactionsView: View {
                         .foregroundStyle(MoneyMapDesign.attentionRed)
                         .textSelection(.enabled)
                 }
+                .moneyMapListSectionBackground()
             }
 
             if hasActiveFilters {
@@ -1986,12 +2073,14 @@ private struct WalletTransactionsView: View {
                     systemImage: "list.bullet.rectangle",
                     description: Text("Imported Plaid and card transactions will appear here.")
                 )
+                .moneyMapListSectionBackground()
             } else if visibleTransactions.isEmpty {
                 ContentUnavailableView(
                     "No Matching Transactions",
                     systemImage: hasActiveFilters ? "line.3.horizontal.decrease.circle" : "magnifyingglass",
                     description: Text(hasActiveFilters ? "Clear a filter or search term to see more transactions." : "Try a different merchant, category, card, or amount.")
                 )
+                .moneyMapListSectionBackground()
             } else {
                 Section {
                     ForEach(visibleTransactions, id: \.persistentModelID) { transaction in
@@ -2002,12 +2091,14 @@ private struct WalletTransactionsView: View {
                 } footer: {
                     Text(isSelecting ? "Selected transactions can be deleted together from MoneyMap." : "Swipe a test or duplicate import to delete it from MoneyMap.")
                 }
+                .moneyMapListSectionBackground()
             }
         }
+        .moneyMapSceneRestoration(key: "transactions.filters", value: Binding(get: { filterState }, set: { filterState = $0 }))
+        .moneyMapSceneRestoration(key: "transactions.showsFilters", value: $showingFilterInspector)
         .navigationTitle("Transactions")
         .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(MoneyMapDesign.groupedBackground)
+        .moneyMapGroupedListBackground()
         .searchable(
             text: $searchText,
             tokens: $searchTokens,
@@ -2026,13 +2117,17 @@ private struct WalletTransactionsView: View {
                 .disabled(visibleTransactions.isEmpty && !isSelecting)
             }
         }
-        .safeAreaInset(edge: .bottom) {
+        .safeAreaBar(edge: .bottom) {
             if isSelecting {
                 selectionBar
             }
         }
-        .sheet(isPresented: $showingFilterSheet) {
-            WalletTransactionFilterSheet(
+    }
+
+    private var transactionList: some View {
+        NavigationStack { transactionListContent }
+        .inspector(isPresented: filterPresentationBinding) {
+            WalletTransactionFilterInspector(
                 selectedCardFilterID: $selectedCardFilterID,
                 selectedPlaidInstitutionFilterName: $selectedPlaidInstitutionFilterName,
                 selectedPlaidAccountFilterID: $selectedPlaidAccountFilterID,
@@ -2052,9 +2147,14 @@ private struct WalletTransactionsView: View {
                     clearFilters()
                 }
             )
+            .inspectorColumnWidth(min: 300, ideal: 340, max: 420)
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
+    }
+
+    var body: some View {
+        transactionList
         .onAppear {
             syncFilterSearchTokens()
             refreshSearchSuggestions()
@@ -2169,11 +2269,12 @@ private struct WalletTransactionsView: View {
             }
             .padding(.vertical, 2)
         }
+        .moneyMapListSectionBackground()
     }
 
     private var filterButton: some View {
         Button {
-            showingFilterSheet = true
+            filterPresentationBinding.wrappedValue.toggle()
         } label: {
             Label(hasActiveFilters ? "Filters On" : "Filter", systemImage: hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
         }
@@ -2292,7 +2393,7 @@ private struct WalletTransactionsView: View {
             WalletFilterOption(
                 id: card.id.uuidString,
                 title: card.name?.nilIfBlank ?? "Card",
-                subtitle: card.creditCardDetails?.issuerName?.nilIfBlank
+                subtitle: card.currentCreditCardDetails?.issuerName?.nilIfBlank
             )
         }
 
@@ -3110,7 +3211,7 @@ private struct WalletFilterOptionSection: Identifiable, Hashable {
     }
 }
 
-private struct WalletTransactionFilterSheet: View {
+private struct WalletTransactionFilterInspector: View {
     @Environment(\.dismiss) private var dismiss
 
     @Binding var selectedCardFilterID: String?
@@ -3270,7 +3371,7 @@ private struct WalletTransactionFilterSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
+                    Button("Done", systemImage: "checkmark") {
                         dismiss()
                     }
                 }
@@ -3883,4 +3984,16 @@ private extension String {
 
         return remainder.isEmpty ? trimmed : remainder
     }
+}
+
+private struct WalletTransactionFilterState: Codable, Equatable {
+    var cardID: String?
+    var institution: String?
+    var accountID: String?
+    var typeGroup: String?
+    var type: String?
+    var categoryGroup: String?
+    var category: String?
+    var source: WalletTransactionSourceFilter
+    var status: WalletTransactionStatusFilter
 }

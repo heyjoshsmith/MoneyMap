@@ -91,7 +91,7 @@ private struct MoneyMapContextTool: Tool {
         let selectedGoals: [Goal] = matchingGoals.isEmpty ? Array(goals.prefix(8)) : Array(matchingGoals.prefix(8))
 
         let goalLines = selectedGoals.map { goal in
-            let saved = MoneyMapFormatters.currencyString(for: goal.amountSaved)
+            let saved = MoneyMapFormatters.currencyString(for: goal.totalSavedAmount)
             let remaining = MoneyMapFormatters.currencyString(for: goal.remainingAmount)
             let deadline = goal.deadline.map(MoneyMapFormatters.mediumDateString(for:)) ?? "No deadline"
             return "- Goal: \(goal.name ?? "Untitled"), saved \(saved), remaining \(remaining), deadline \(deadline)"
@@ -108,7 +108,7 @@ private struct MoneyMapContextTool: Tool {
         Bills due before payday total: \(MoneyMapFormatters.currencyString(for: dueBeforePaydayTotal))
         Left after bills: \(MoneyMapFormatters.currencyString(for: leftAfterBills))
         Total goals: \(goals.count)
-        Total saved across goals: \(MoneyMapFormatters.currencyString(for: goals.reduce(0) { $0 + $1.amountSaved }))
+        Total saved across goals: \(MoneyMapFormatters.currencyString(for: goals.reduce(0) { $0 + $1.totalSavedAmount }))
         Total remaining across goals: \(MoneyMapFormatters.currencyString(for: goals.reduce(0) { $0 + $1.remainingAmount }))
 
         Bills:

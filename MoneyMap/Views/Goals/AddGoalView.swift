@@ -155,7 +155,7 @@ struct AddGoalView: View {
         })
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("Save") {
+                Button("Save", systemImage: "checkmark") {
                     if paydayManager.nextPayday != nil && computedPaydayCount == nil {
                         errorMessage = "Deadline must be after your next payday."
                         return

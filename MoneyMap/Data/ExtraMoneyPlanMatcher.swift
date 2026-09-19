@@ -198,7 +198,7 @@ enum ExtraMoneyPlanSettlementService {
                 continue
             }
 
-            let previousBalance = bill.creditCardDetails?.cardBalance
+            let previousBalance = bill.currentCreditCardDetails?.cardBalance
             let previousDatePaid = bill.datePaid
             let previousDueDate = bill.dueDate
             let previousStatus = bill.status

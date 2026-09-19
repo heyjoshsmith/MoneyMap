@@ -25,7 +25,23 @@ public class Goal: Identifiable {
 
     
     public var priorityWeight: Double? // Allow old data without a value
+    // Keep the original persisted name: CloudKit does not support field renames.
     public var amountSaved: Double = 0
+    @Relationship(deleteRule: .cascade, inverse: \GoalContribution.goal)
+    public var contributions: [GoalContribution]?
+    public var totalSavedAmount: Double {
+        get {
+            var seen = Set<UUID>()
+            return amountSaved + (contributions ?? []).filter { seen.insert($0.id).inserted }.reduce(0) { $0 + $1.amount }
+        }
+        set { amountSaved += newValue - totalSavedAmount }
+    }
+    public func addContribution(_ amount: Double, operationID: UUID = UUID()) {
+        guard amount.isFinite, !(contributions ?? []).contains(where: { $0.id == operationID }) else { return }
+        let entry = GoalContribution(id: operationID, amount: amount, goal: self)
+        if contributions == nil { contributions = [] }
+        contributions?.append(entry)
+    }
     
     public var weight: Double {
         get { priorityWeight ?? 1.0 } // Fallback for existing data
@@ -51,7 +67,7 @@ public class Goal: Identifiable {
     
     public var remainingAmount: Double {
         guard let target = targetAmount else { return 0 }
-        return max(0, target - amountSaved)
+        return max(0, target - totalSavedAmount)
     }
     
     public var daysUntilDeadline: Int {
@@ -83,7 +99,7 @@ public class Goal: Identifiable {
     /// Progress toward the goal (0 to 1).
     public func progress() -> Double {
         guard let target = targetAmount, target > 0 else { return 0 }
-        return amountSaved / target
+        return totalSavedAmount / target
     }
     
     @available(*, deprecated, message: "Use imageData/uiImage instead. imageURL is only for legacy migration.")

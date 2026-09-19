@@ -150,6 +150,8 @@ public enum MoneyMapSharedDesign {
             let bestMatch = appearance.bestMatch(from: [.darkAqua, .aqua])
             return bestMatch == .darkAqua ? NSColor(dark) : NSColor(light)
         })
+        #elseif os(watchOS)
+        return dark
         #else
         return light
         #endif
@@ -160,6 +162,8 @@ public enum MoneyMapSharedDesign {
         return Color(uiColor: .systemGroupedBackground)
         #elseif os(macOS)
         return Color(nsColor: .windowBackgroundColor)
+        #elseif os(watchOS)
+        return .black
         #else
         return warmNeutral
         #endif
@@ -170,6 +174,8 @@ public enum MoneyMapSharedDesign {
         return Color(uiColor: .secondarySystemGroupedBackground)
         #elseif os(macOS)
         return Color(nsColor: .controlBackgroundColor)
+        #elseif os(watchOS)
+        return Color(white: 0.10)
         #else
         return warmSurface
         #endif
@@ -180,6 +186,8 @@ public enum MoneyMapSharedDesign {
         return Color(uiColor: .tertiarySystemGroupedBackground)
         #elseif os(macOS)
         return Color(nsColor: .underPageBackgroundColor)
+        #elseif os(watchOS)
+        return Color(white: 0.18)
         #else
         return warmRaisedSurface
         #endif

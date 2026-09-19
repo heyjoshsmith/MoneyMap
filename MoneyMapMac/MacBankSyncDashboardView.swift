@@ -16,7 +16,7 @@ struct MacBankSyncDashboardView: View {
     @Query(sort: \PlaidTransactionReviewItem.updatedAt, order: .reverse) private var reviewItems: [PlaidTransactionReviewItem]
     @Query(sort: \PlaidSuggestion.updatedAt, order: .reverse) private var suggestions: [PlaidSuggestion]
 
-    @StateObject private var coordinator = MacPlaidSyncCoordinator()
+    @ObservedObject var coordinator: MacPlaidSyncCoordinator
     @State private var credentialEditor = PlaidCredentialEditorState()
     @State private var launchAtLogin = false
     @State private var launchAtLoginMessage: String?
@@ -48,13 +48,6 @@ struct MacBankSyncDashboardView: View {
             credentialEditor.loadStatus(hasConnections: !connections.isEmpty)
             launchAtLogin = LaunchAtLoginController.isEnabled
             showingCredentialSettings = !credentialEditor.hasStoredCredentials
-        }
-        .task(id: automaticRefreshConfigurationID) {
-            await coordinator.runAutomaticRefreshLoop(
-                context: modelContext,
-                automaticRefreshEnabled: automaticRefreshEnabled,
-                refreshIntervalMinutes: refreshIntervalMinutes
-            )
         }
         .confirmationDialog(
             removeConnectionTitle,
@@ -905,10 +898,6 @@ struct MacBankSyncDashboardView: View {
         automaticRefreshEnabled
             ? "This Mac refreshes every \(automaticRefreshIntervalLabel) while MoneyMap is open. iPhone and iPad read the shared snapshots."
             : "Automatic refresh is off. iPhone and iPad read snapshots after you sync this Mac."
-    }
-
-    private var automaticRefreshConfigurationID: String {
-        "\(automaticRefreshEnabled)-\(refreshIntervalMinutes)-\(credentialEditor.hasStoredCredentials)-\(connections.count)"
     }
 
     private var automaticRefreshIntervalLabel: String {

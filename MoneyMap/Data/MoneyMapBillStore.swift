@@ -47,7 +47,7 @@ enum MoneyMapBillStore {
         return try fetchBills()
             .filter { $0.category == .creditCard }
             .sorted {
-                ($0.creditCardDetails?.utilization ?? 0) > ($1.creditCardDetails?.utilization ?? 0)
+                ($0.currentCreditCardDetails?.utilization ?? 0) > ($1.currentCreditCardDetails?.utilization ?? 0)
             }
             .first
     }
@@ -121,7 +121,7 @@ enum MoneyMapBillStore {
         }
 
         if let amount, amount > 0, bill.category == .creditCard {
-            let previousBalance = bill.creditCardDetails?.cardBalance
+            let previousBalance = bill.currentCreditCardDetails?.cardBalance
             let previousDatePaid = bill.datePaid
             let previousDueDate = bill.dueDate
             let previousStatus = bill.status
@@ -145,7 +145,7 @@ enum MoneyMapBillStore {
             bill.checkStatus()
             AuditService.logBillPayment(
                 bill: bill,
-                previousBalance: bill.creditCardDetails?.cardBalance,
+                previousBalance: bill.currentCreditCardDetails?.cardBalance,
                 previousDatePaid: previousDatePaid,
                 previousDueDate: previousDueDate,
                 previousStatus: previousStatus,
@@ -172,8 +172,8 @@ enum MoneyMapBillStore {
             )
         }
 
-        let recommended = max(bill.creditCardDetails?.recommendedPayment ?? 0, 0)
-        let previousBalance = bill.creditCardDetails?.cardBalance
+        let recommended = max(bill.currentCreditCardDetails?.recommendedPayment ?? 0, 0)
+        let previousBalance = bill.currentCreditCardDetails?.cardBalance
         let previousDatePaid = bill.datePaid
         let previousDueDate = bill.dueDate
         let previousStatus = bill.status

@@ -59,8 +59,8 @@ struct GoalDetailView: View {
 
                     GridView(goal, choosingImage: $choosingImage)
                 }
-                .frame(width: proxy.size.width, alignment: .leading)
-                .clipped()
+                .frame(maxWidth: MoneyMapAdaptiveLayout.readableWidth, alignment: .leading)
+                .frame(width: proxy.size.width, alignment: .center)
                 .padding(.vertical, MoneyMapDesign.sectionSpacing)
             }
             .background(MoneyMapDesign.groupedBackground)
@@ -74,6 +74,9 @@ struct GoalDetailView: View {
             activity.appEntityIdentifier = EntityIdentifier(for: entity)
         }
         .toolbar {
+            ToolbarItem(placement: .secondaryAction) {
+                MoneyMapOpenWindowButton(content: .goal(goal.id))
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 NavigationLink {
                     ActivityFeedView(title: "Goal History", entityID: goal.id, entityTypes: [.goal])
@@ -113,52 +116,47 @@ struct GoalDetailView: View {
         }
     }
 
-    @ViewBuilder
     private var goalHero: some View {
-        ZStack {
-            if let uiImage = goal.uiImage {
-                heroImage(Image(uiImage: uiImage))
-            } else if let selectedImage {
-                heroImage(Image(uiImage: selectedImage))
-            } else if isLoading {
-                ProgressView("Loading Image...")
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .background(MoneyMapDesign.surfaceBackground)
-            } else if testing {
-                heroImage(Image(.test))
-            } else {
-                VStack(spacing: 12) {
-                    Image(systemName: "target")
-                        .font(.system(size: 44, weight: .semibold))
-                    Text(goal.name ?? "Savings Goal")
-                        .font(.title3.weight(.semibold))
+        Rectangle()
+            .fill(MoneyMapDesign.controlBackground)
+            .aspectRatio(16.0 / 9.0, contentMode: .fit)
+            .overlay {
+                if let uiImage = goal.uiImage {
+                    heroImage(Image(uiImage: uiImage))
+                } else if let selectedImage {
+                    heroImage(Image(uiImage: selectedImage))
+                } else if isLoading {
+                    ProgressView("Loading Image...")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(MoneyMapDesign.surfaceBackground)
+                } else if testing {
+                    heroImage(Image(.test))
+                } else {
+                    VStack(spacing: 12) {
+                        Image(systemName: "target")
+                            .font(.system(size: 44, weight: .semibold))
+                        Text(goal.name ?? "Savings Goal")
+                            .font(.title3.weight(.semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(MoneyMapDesign.moneyGradient)
                 }
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                .background(MoneyMapDesign.moneyGradient)
             }
-
-            VStack {
-                Spacer()
-                HStack {
-                    Label("Change Image", systemImage: "photo")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(.black.opacity(0.35), in: Capsule())
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
+            .overlay(alignment: .bottomLeading) {
+                Label("Change Image", systemImage: "photo")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.black.opacity(0.35), in: Capsule())
+                    .padding(12)
             }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: MoneyMapDesign.sectionCornerRadius))
-        .overlay {
-            RoundedRectangle(cornerRadius: MoneyMapDesign.sectionCornerRadius)
-                .stroke(MoneyMapDesign.separator, lineWidth: 1)
-        }
+            .clipShape(RoundedRectangle(cornerRadius: MoneyMapDesign.sectionCornerRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: MoneyMapDesign.sectionCornerRadius)
+                    .stroke(MoneyMapDesign.separator, lineWidth: 1)
+            }
     }
 
     private func heroImage(_ image: Image) -> some View {
@@ -169,8 +167,6 @@ struct GoalDetailView: View {
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .clipped()
         }
-        .aspectRatio(16.0 / 9.0, contentMode: .fit)
-        .background(MoneyMapDesign.controlBackground)
     }
 
     private struct GoalDetailProgressPanel: View {
@@ -187,7 +183,7 @@ struct GoalDetailView: View {
                         Text("Saved")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                        MoneyMapMoneyText(amount: goal.amountSaved, font: .title2.weight(.semibold))
+                        MoneyMapMoneyText(amount: goal.totalSavedAmount, font: .title2.weight(.semibold))
                     }
 
                     Spacer(minLength: 8)

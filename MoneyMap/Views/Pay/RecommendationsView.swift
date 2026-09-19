@@ -61,13 +61,13 @@ struct RecommendationsView: View {
         let creditAccountsByID = Dictionary(uniqueKeysWithValues: creditAccounts.map { ($0.accountID, $0) })
         return creditCards.reduce(0) { total, bill in
             let linkedBalance = bill.plaidAccountID.flatMap { creditAccountsByID[$0]?.balanceAmount } ?? 0
-            return total + max(linkedBalance, abs(bill.creditCardDetails?.cardBalance ?? 0))
+            return total + max(linkedBalance, abs(bill.currentCreditCardDetails?.cardBalance ?? 0))
         }
     }
 
     private var totalGoalSavings: Double {
         goals.reduce(0) { total, goal in
-            total + max(goal.amountSaved, 0)
+            total + max(goal.totalSavedAmount, 0)
         }
     }
 
@@ -227,6 +227,7 @@ struct RecommendationsView: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
+        .moneyMapReadableContent()
         .background(MoneyMapDesign.groupedBackground)
         .navigationTitle("Plan")
         .fullScreenCover(isPresented: $showingAllocationFlow) {
@@ -252,6 +253,9 @@ struct RecommendationsView: View {
             .interactiveDismissDisabled(true)
         }
         .toolbar {
+            ToolbarItem(placement: .secondaryAction) {
+                MoneyMapOpenWindowButton(content: .plan)
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showingWelcome = true
@@ -436,7 +440,7 @@ struct RecommendationsView: View {
                         selectPaycheckAccount(account)
                     } label: {
                         Label(
-                            paycheckAccountPickerTitle(for: account),
+                            paycheckAccountMenuTitle(for: account),
                             systemImage: selectedPaycheckAccountID == account.accountID ? "checkmark.circle.fill" : "building.columns"
                         )
                     }
@@ -498,7 +502,7 @@ struct RecommendationsView: View {
                 } else {
                     Picker("Account", selection: $selectedPaycheckAccountID) {
                         ForEach(orderedPaycheckAccounts) { account in
-                            Text(paycheckAccountPickerTitle(for: account))
+                            Text(paycheckAccountMenuTitle(for: account))
                                 .tag(account.accountID)
                         }
                     }
@@ -817,8 +821,8 @@ struct RecommendationsView: View {
         let groupID = UUID()
         for insight in plan.goalContributions {
             guard let goal = goals.first(where: { $0.id == insight.goalID }) else { continue }
-            let previousAmountSaved = goal.amountSaved
-            goal.amountSaved += insight.recommendedContribution
+            let previousAmountSaved = goal.totalSavedAmount
+            goal.addContribution(insight.recommendedContribution)
             AuditService.logGoalContribution(
                 goal: goal,
                 previousAmountSaved: previousAmountSaved,
@@ -1125,6 +1129,15 @@ struct RecommendationsView: View {
         guard paycheckCashSource == .linkedAccount else { return }
 
         let availableAccountIDs = Set(orderedPaycheckAccounts.map(\.accountID))
+        guard !orderedPaycheckAccounts.isEmpty else {
+            if selectedPaycheckAccountID.isEmpty,
+               let storedAccountID = RecommendationPreferencesStore.paycheckCashAccountID {
+                selectedPaycheckAccountID = storedAccountID
+            }
+            RecommendationPreferencesStore.paycheckCashSource = .linkedAccount
+            return
+        }
+
         if selectedPaycheckAccountID.isEmpty {
             if let storedAccountID = RecommendationPreferencesStore.paycheckCashAccountID,
                availableAccountIDs.contains(storedAccountID) {
@@ -1132,10 +1145,6 @@ struct RecommendationsView: View {
             } else if let firstAccountID = orderedPaycheckAccounts.first?.accountID {
                 selectedPaycheckAccountID = firstAccountID
                 RecommendationPreferencesStore.paycheckCashAccountID = firstAccountID
-            } else {
-                paycheckCashSource = .manual
-                RecommendationPreferencesStore.paycheckCashSource = .manual
-                RecommendationPreferencesStore.paycheckCashAccountID = ""
             }
             return
         }
@@ -1144,11 +1153,6 @@ struct RecommendationsView: View {
             if let firstAccountID = orderedPaycheckAccounts.first?.accountID {
                 selectedPaycheckAccountID = firstAccountID
                 RecommendationPreferencesStore.paycheckCashAccountID = firstAccountID
-            } else {
-                selectedPaycheckAccountID = ""
-                paycheckCashSource = .manual
-                RecommendationPreferencesStore.paycheckCashSource = .manual
-                RecommendationPreferencesStore.paycheckCashAccountID = ""
             }
             return
         }
@@ -1193,6 +1197,10 @@ struct RecommendationsView: View {
         let bankPrefix = institution.map { $0.isEmpty ? "" : "\($0) - " } ?? ""
         let suffix = account.lastFourLabel.map { " - \($0)" } ?? ""
         return "\(bankPrefix)\(account.displayName)\(suffix)"
+    }
+
+    private func paycheckAccountMenuTitle(for account: PaycheckCashAccount) -> String {
+        account.displayName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank ?? "Bank Account"
     }
 
     private func paycheckAccountDetail(for account: PaycheckCashAccount) -> String {
@@ -1336,8 +1344,10 @@ private struct SnapshotHeroMetric: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(tint.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(
+            tint.opacity(0.10),
+            in: RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius, style: .continuous)
+        )
         .accessibilityElement(children: .combine)
     }
 }
@@ -1437,8 +1447,8 @@ private struct ManualAvailableCashEditor: View {
             .navigationTitle("Manual Amount")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", systemImage: "checkmark") {
                         onDone()
                         dismiss()
                     }
@@ -1461,7 +1471,7 @@ private struct ManualAvailableCashEditor: View {
     }
 }
 
-private struct AllocationPlanDraft: Equatable {
+struct AllocationPlanDraft: Equatable {
     var manualAvailableCash: Double
     var paycheckCashSource: PaycheckCashSource
     var selectedPaycheckAccountID: String
@@ -1469,9 +1479,10 @@ private struct AllocationPlanDraft: Equatable {
     var allocationStrategy: PaycheckAllocationStrategy
 }
 
-private struct AllocationGuidedPlanView: View {
+struct AllocationGuidedPlanView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: AllocationPlanDraft
+    @ScaledMetric(relativeTo: .body) private var minimumOptionWidth: CGFloat = 150
 
     let orderedPaycheckAccounts: [PaycheckCashAccount]
     let paycheckAccountLoadError: String?
@@ -1486,6 +1497,13 @@ private struct AllocationGuidedPlanView: View {
 
     @State private var currentStep: AllocationGuidedStep = .money
     @State private var stepNavigationDirection = 1
+    @State private var generatedPlanExplanation: String?
+    @State private var planExplanationError: String?
+    @State private var isGeneratingPlanExplanation = false
+    @State private var showingPlanExplanationSheet = false
+    @State private var previewScrollPosition = ScrollPosition()
+    @State private var planExplanationDetent = PresentationDetent.height(260)
+    @State private var generatedPlanExplanationSignature: String?
     @FocusState private var amountFieldFocused: Bool
 
     init(
@@ -1536,16 +1554,30 @@ private struct AllocationGuidedPlanView: View {
         guard draft.paycheckCashSource == .linkedAccount else { return }
         let availableAccountIDs = Set(orderedPaycheckAccounts.map(\.accountID))
 
+        guard !orderedPaycheckAccounts.isEmpty else {
+            if draft.selectedPaycheckAccountID.isEmpty,
+               let storedAccountID = RecommendationPreferencesStore.paycheckCashAccountID {
+                draft.selectedPaycheckAccountID = storedAccountID
+            }
+            return
+        }
+
         if availableAccountIDs.contains(draft.selectedPaycheckAccountID) {
             return
         }
 
         if let firstAccountID = orderedPaycheckAccounts.first?.accountID {
             draft.selectedPaycheckAccountID = firstAccountID
-        } else {
-            draft.selectedPaycheckAccountID = ""
-            draft.paycheckCashSource = .manual
         }
+    }
+
+    private func persistDraftPreferences() {
+        RecommendationPreferencesStore.paycheckCashSource = draft.paycheckCashSource
+        if !draft.selectedPaycheckAccountID.isEmpty {
+            RecommendationPreferencesStore.paycheckCashAccountID = draft.selectedPaycheckAccountID
+        }
+        RecommendationPreferencesStore.cardStrategy = draft.payoffStrategy
+        RecommendationPreferencesStore.paycheckStrategy = draft.allocationStrategy
     }
 
     private var grossAvailableCash: Double {
@@ -1628,43 +1660,138 @@ private struct AllocationGuidedPlanView: View {
         let insertionEdge: Edge = stepNavigationDirection >= 0 ? .trailing : .leading
         let removalEdge: Edge = stepNavigationDirection >= 0 ? .leading : .trailing
         return .asymmetric(
-            insertion: .push(from: insertionEdge),
-            removal: .push(from: removalEdge)
+            insertion: .move(edge: insertionEdge).combined(with: .opacity),
+            removal: .move(edge: removalEdge).combined(with: .opacity)
         )
     }
 
-    var body: some View {
-        List {
-            stepHeader
+    private var optionColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: minimumOptionWidth), spacing: 12)]
+    }
 
-            currentStepSections
-                .id(currentStep)
-                .transition(stepTransition)
+    private var planExplanationAvailabilityMessage: String? {
+        RecommendationPlanExplainer.availabilityMessage(for: RecommendationPlanExplainer.model.availability)
+    }
+
+    private var planExplanationSignature: String {
+        [
+            draft.paycheckCashSource.rawValue,
+            draft.selectedPaycheckAccountID,
+            draft.payoffStrategy.rawValue,
+            draft.allocationStrategy.rawValue,
+            MoneyMapFormatters.currencyString(for: plan.totalAvailable),
+            MoneyMapFormatters.currencyString(for: cardPaymentTotal),
+            MoneyMapFormatters.currencyString(for: goalContributionTotal),
+            MoneyMapFormatters.currencyString(for: plan.unallocatedCash),
+            digest.topCardName ?? "",
+            digest.topGoalName ?? "",
+            "\(digest.upcomingBillCount)",
+            "\(digest.behindGoalCount)"
+        ].joined(separator: "|")
+    }
+
+    private var planExplanationIntro: String {
+        let cardAmount = MoneyMapFormatters.currencyString(for: cardPaymentTotal)
+        let goalAmount = MoneyMapFormatters.currencyString(for: goalContributionTotal)
+        let unallocatedAmount = MoneyMapFormatters.currencyString(for: plan.unallocatedCash)
+        return "MoneyMap used \(draft.allocationStrategy.title.lowercased()) allocation and \(draft.payoffStrategy.title.lowercased()) payoff priorities to place \(cardAmount) toward cards, \(goalAmount) toward goals, and leave \(unallocatedAmount) flexible."
+    }
+
+    var body: some View {
+        MoneyMapCompanionLayout { showsCompanion in
+            guidedSteps(showsCompanion: showsCompanion)
+        } companion: {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    reviewOverviewSection
+                    cardPaymentReviewSection
+                    goalContributionReviewSection
+                }
+                .padding(20)
+            }
+            .scrollPosition($previewScrollPosition)
+            .accessibilityIdentifier("plan-preview")
+            .background(MoneyMapDesign.groupedBackground)
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(MoneyMapDesign.groupedBackground)
+        .background(MoneyMapDesign.groupedBackground.ignoresSafeArea())
         .navigationTitle("Plan Payoff")
         .navigationBarTitleDisplayMode(.inline)
-        .safeAreaInset(edge: .bottom) {
-            guidedNavigationFooter
-        }
         .onAppear {
             syncDraftPaycheckCashSelection()
+            persistDraftPreferences()
+        }
+        .onChange(of: currentStep) { _, newValue in
+            if newValue == .review {
+                Task {
+                    await generatePlanExplanationIfNeeded()
+                }
+            }
+        }
+        .onChange(of: planExplanationSignature) { _, _ in
+            generatedPlanExplanationSignature = nil
+            generatedPlanExplanation = nil
+            planExplanationError = nil
+            if currentStep == .review {
+                Task {
+                    await generatePlanExplanationIfNeeded()
+                }
+            }
+        }
+        .sheet(isPresented: $showingPlanExplanationSheet) {
+            PlanExplanationSheet(
+                intro: planExplanationIntro,
+                generatedExplanation: generatedPlanExplanation,
+                availabilityMessage: planExplanationAvailabilityMessage,
+                errorMessage: planExplanationError,
+                isGenerating: isGeneratingPlanExplanation,
+                plan: plan,
+                digest: digest,
+                cardPaymentTotal: cardPaymentTotal,
+                goalContributionTotal: goalContributionTotal
+            )
+            .presentationDetents([.height(260), .medium, .large], selection: $planExplanationDetent)
+            .presentationDragIndicator(.visible)
         }
         .onChange(of: draft.paycheckCashSource) { _, _ in
             syncDraftPaycheckCashSelection()
+            persistDraftPreferences()
+        }
+        .onChange(of: draft.selectedPaycheckAccountID) { _, _ in
+            persistDraftPreferences()
+        }
+        .onChange(of: draft.payoffStrategy) { _, _ in
+            persistDraftPreferences()
+        }
+        .onChange(of: draft.allocationStrategy) { _, _ in
+            persistDraftPreferences()
         }
         .onChange(of: orderedPaycheckAccounts.map(\.accountID)) { _, _ in
             syncDraftPaycheckCashSelection()
+            persistDraftPreferences()
         }
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
+            ToolbarItem(placement: .cancellationAction) {
                 Button {
                     onClose(draft)
                     dismiss()
                 } label: {
                     Label("Close", systemImage: "xmark")
+                }
+            }
+
+            ToolbarItem(placement: .confirmationAction) {
+                Button(primaryActionTitle, systemImage: primaryActionSystemImage) {
+                    advance()
+                }
+                .disabled(primaryActionDisabled)
+                .accessibilityIdentifier("plan-continue")
+            }
+
+            ToolbarItem(placement: .secondaryAction) {
+                if let previousStep = currentStep.previous {
+                    Button("Previous Step", systemImage: "chevron.left") {
+                        move(to: previousStep, direction: -1)
+                    }
                 }
             }
 
@@ -1677,8 +1804,33 @@ private struct AllocationGuidedPlanView: View {
         }
     }
 
+    private func guidedSteps(showsCompanion: Bool) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    stepHeader
+                        .id("plan-payoff-top")
+
+                    currentStepSections(showsCompanion: showsCompanion)
+                        .id(currentStep)
+                        .transition(stepTransition)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+            }
+            .accessibilityIdentifier("plan-steps")
+            .scrollIndicators(.hidden)
+            .background(MoneyMapDesign.groupedBackground)
+            .onChange(of: currentStep) { _, _ in
+                withAnimation(.smooth(duration: 0.28)) {
+                    proxy.scrollTo("plan-payoff-top", anchor: .top)
+                }
+            }
+        }
+    }
+
     @ViewBuilder
-    private var currentStepSections: some View {
+    private func currentStepSections(showsCompanion: Bool) -> some View {
         switch currentStep {
         case .money:
             moneyStepSection
@@ -1687,143 +1839,80 @@ private struct AllocationGuidedPlanView: View {
             priorityStepSection
             scenarioStepSection
         case .review:
-            reviewOverviewSection
-            cardPaymentReviewSection
-            goalContributionReviewSection
+            planExplanationSection
+            if !showsCompanion {
+                reviewOverviewSection
+                cardPaymentReviewSection
+                goalContributionReviewSection
+            }
         }
     }
 
     private var stepHeader: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 14) {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 16) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(.white.opacity(0.16))
                     Image(systemName: currentStep.systemImage)
-                        .font(.title2.weight(.semibold))
+                        .font(.title.weight(.semibold))
                         .foregroundStyle(.white)
-                        .frame(width: 52, height: 52)
-                        .background(MoneyMapDesign.calmGreen, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .accessibilityHidden(true)
-
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("Step \(currentStep.rawValue + 1) of \(AllocationGuidedStep.allCases.count)")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-
-                        Text(currentStep.title)
-                            .font(.title2.weight(.semibold))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-
-                        Text(currentStep.detail)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
                 }
+                .frame(width: 64, height: 64)
+                .accessibilityHidden(true)
 
-                ProgressView(value: Double(currentStep.rawValue + 1), total: Double(AllocationGuidedStep.allCases.count))
-                    .tint(MoneyMapDesign.calmGreen)
-            }
-            .padding(.vertical, 4)
-        }
-        .listRowBackground(MoneyMapDesign.surfaceBackground)
-    }
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("Step \(currentStep.rawValue + 1) of \(AllocationGuidedStep.allCases.count)")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.76))
 
-    private var guidedNavigationFooter: some View {
-        HStack(spacing: 12) {
-            if let previousStep = currentStep.previous {
-                Button {
-                    move(to: previousStep, direction: -1)
-                } label: {
-                    Label("Back", systemImage: "chevron.left")
+                    Text(currentStep.title)
+                        .font(.largeTitle.weight(.bold))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text(currentStep.detail)
+                        .font(.body)
+                        .foregroundStyle(.white.opacity(0.78))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .buttonStyle(.glass)
-                .controlSize(.large)
+                .foregroundStyle(.white)
             }
 
-            Button {
-                advance()
-            } label: {
-                Label(primaryActionTitle, systemImage: primaryActionSystemImage)
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.glassProminent)
-            .controlSize(.large)
-            .disabled(primaryActionDisabled)
+            ProgressView(value: Double(currentStep.rawValue + 1), total: Double(AllocationGuidedStep.allCases.count))
+                .tint(.white)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
+        .padding(20)
+        .background(MoneyMapDesign.moneyGradient, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .accessibilityElement(children: .combine)
     }
 
     private var moneyStepSection: some View {
-        Section("Available Money") {
-            Picker("Source", selection: $draft.paycheckCashSource) {
-                ForEach(PaycheckCashSource.allCases) { source in
-                    Text(source.title).tag(source)
-                }
-            }
-
-            Text(draft.paycheckCashSource.description)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        PlanPayoffSectionCard(
+            title: "Available Money",
+            subtitle: "Choose what dollars this plan can use.",
+            systemImage: "banknote"
+        ) {
+            cashSourcePickerRow
 
             switch draft.paycheckCashSource {
             case .manual:
-                TextField("Amount Available For Goals And Cards", value: $draft.manualAvailableCash, format: .currency(code: "USD"))
-                    .keyboardType(.decimalPad)
-                    .focused($amountFieldFocused)
-
-                Text("Only include money you want to put toward cards and goals right now.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                manualAmountRow
 
             case .linkedAccount:
-                if let paycheckAccountLoadError {
-                    MoneyMapEmptyState(
-                        title: "Bank Accounts Unavailable",
-                        message: paycheckAccountLoadError,
-                        systemImage: "exclamationmark.triangle"
-                    )
-                } else if orderedPaycheckAccounts.isEmpty {
-                    MoneyMapEmptyState(
-                        title: "No Bank Accounts Synced",
-                        message: "Connect a bank account from Wallet before using a synced account balance.",
-                        systemImage: "building.columns"
-                    )
-                } else {
-                    Picker("Account", selection: $draft.selectedPaycheckAccountID) {
-                        ForEach(orderedPaycheckAccounts) { account in
-                            Text(paycheckAccountPickerTitle(for: account))
-                                .tag(account.accountID)
-                        }
-                    }
-
-                    if let selectedPaycheckAccount {
-                        MoneyMapSummaryRow(
-                            title: "Synced Amount",
-                            value: MoneyMapFormatters.currencyString(for: PaycheckCashResolver.balance(for: selectedPaycheckAccount)),
-                            detail: paycheckAccountDetail(for: selectedPaycheckAccount),
-                            systemImage: "building.columns",
-                            tint: MoneyMapDesign.calmGreen
-                        )
-                    } else {
-                        Text("Choose the account where your extra money lands.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                linkedAccountSettings
             }
 
-            MoneyMapSummaryRow(
+            PlanPayoffStatCard(
                 title: "Available To Plan",
                 value: MoneyMapFormatters.currencyString(for: plan.totalAvailable),
                 detail: activeAllocatedCash > 0 ? "\(MoneyMapFormatters.currencyString(for: activeAllocatedCash)) is already reserved" : "No saved plan is reserving this source",
                 systemImage: "banknote",
-                tint: MoneyMapDesign.calmGreen
+                tint: MoneyMapDesign.calmGreen,
+                isProminent: true
             )
 
             if activeAllocatedCash > 0 {
-                MoneyMapSummaryRow(
+                PlanPayoffStatCard(
                     title: "Already Allocated",
                     value: MoneyMapFormatters.currencyString(for: activeAllocatedCash),
                     detail: "\(matchingActivePlanCount) active saved plan\(matchingActivePlanCount == 1 ? "" : "s") reserved from this source",
@@ -1832,64 +1921,246 @@ private struct AllocationGuidedPlanView: View {
                 )
             }
         }
-        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var cashSourcePickerRow: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Source")
+                .font(.headline)
+
+            LazyVGrid(columns: optionColumns, spacing: 12) {
+                PlanPayoffSourceButton(
+                    title: "Manual",
+                    detail: "Type an amount",
+                    systemImage: "keyboard",
+                    isSelected: draft.paycheckCashSource == .manual
+                ) {
+                    withAnimation(.snappy(duration: 0.22)) {
+                        draft.paycheckCashSource = .manual
+                    }
+                }
+
+                PlanPayoffSourceButton(
+                    title: "Bank Account",
+                    detail: "Use synced cash",
+                    systemImage: "building.columns",
+                    isSelected: draft.paycheckCashSource == .linkedAccount
+                ) {
+                    withAnimation(.snappy(duration: 0.22)) {
+                        draft.paycheckCashSource = .linkedAccount
+                    }
+                }
+            }
+
+            Text(draft.paycheckCashSource.description)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 3)
+    }
+
+    private var manualAmountRow: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Amount", systemImage: "dollarsign.circle")
+                .font(.headline)
+                .foregroundStyle(MoneyMapDesign.calmGreen)
+
+            TextField("Amount Available For Goals And Cards", value: $draft.manualAvailableCash, format: .currency(code: "USD"))
+                .font(.largeTitle.weight(.bold))
+                .fontDesign(.rounded)
+                .monospacedDigit()
+                .keyboardType(.decimalPad)
+                .focused($amountFieldFocused)
+                .padding(14)
+                .background(MoneyMapDesign.controlBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+            Text("Only include money you want to put toward cards and goals right now.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 3)
+    }
+
+    @ViewBuilder
+    private var linkedAccountSettings: some View {
+        if let paycheckAccountLoadError {
+            MoneyMapEmptyState(
+                title: "Bank Accounts Unavailable",
+                message: paycheckAccountLoadError,
+                systemImage: "exclamationmark.triangle"
+            )
+        } else if orderedPaycheckAccounts.isEmpty {
+            MoneyMapEmptyState(
+                title: "No Bank Accounts Synced",
+                message: "Connect a bank account from Wallet before using a synced account balance.",
+                systemImage: "building.columns"
+            )
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Account")
+                    .font(.headline)
+
+                Menu {
+                    ForEach(orderedPaycheckAccounts) { account in
+                        Button {
+                            withAnimation(.snappy(duration: 0.2)) {
+                                draft.selectedPaycheckAccountID = account.accountID
+                            }
+                        } label: {
+                            Label(
+                                paycheckAccountMenuTitle(for: account),
+                                systemImage: account.accountID == draft.selectedPaycheckAccountID ? "checkmark.circle.fill" : "building.columns"
+                            )
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "building.columns.fill")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                            .frame(width: 32, height: 32)
+                            .background(Color.primary.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(selectedPaycheckAccount.map(paycheckAccountMenuTitle(for:)) ?? "Choose Account")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Text("Synced cash source")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer(minLength: 8)
+
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(12)
+                    .background(MoneyMapDesign.controlBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .tint(.primary)
+
+                Text("Choose the account where your extra money lands.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 3)
+
+            if let selectedPaycheckAccount {
+                PaycheckAccountDetailCard(account: selectedPaycheckAccount)
+            }
+        }
     }
 
     private var timingStepSection: some View {
-        Section("Current Pressure") {
-            MoneyMapSummaryRow(
-                title: "Upcoming Bills",
-                value: "\(digest.upcomingBillCount)",
-                detail: digest.upcomingBillCount == 0 ? "No urgent bills in the planning window" : "Included in this plan",
-                systemImage: "calendar.badge.exclamationmark",
-                tint: digest.upcomingBillCount > 0 ? MoneyMapDesign.warningGold : .secondary
-            )
+        PlanPayoffSectionCard(
+            title: "Current Pressure",
+            subtitle: "Signals that affect how MoneyMap splits this cash.",
+            systemImage: "gauge.with.dots.needle.33percent"
+        ) {
+            LazyVGrid(columns: optionColumns, spacing: 12) {
+                PlanPayoffStatCard(
+                    title: "Upcoming Bills",
+                    value: "\(digest.upcomingBillCount)",
+                    detail: digest.upcomingBillCount == 0 ? "No urgent bills" : "Included in plan",
+                    systemImage: "calendar.badge.exclamationmark",
+                    tint: digest.upcomingBillCount > 0 ? MoneyMapDesign.warningGold : .secondary
+                )
 
-            MoneyMapSummaryRow(
-                title: "Behind Goals",
-                value: "\(digest.behindGoalCount)",
-                detail: digest.behindGoalCount == 0 ? "No goal shortfalls detected" : "Need extra attention",
-                systemImage: "target",
-                tint: digest.behindGoalCount > 0 ? .orange : MoneyMapDesign.calmGreen
-            )
+                PlanPayoffStatCard(
+                    title: "Behind Goals",
+                    value: "\(digest.behindGoalCount)",
+                    detail: digest.behindGoalCount == 0 ? "On pace" : "Needs attention",
+                    systemImage: "target",
+                    tint: digest.behindGoalCount > 0 ? .orange : MoneyMapDesign.calmGreen
+                )
+            }
         }
-        .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
     private var priorityStepSection: some View {
-        Section("Priorities") {
-            Picker("Card Payoff", selection: $draft.payoffStrategy) {
-                ForEach(CreditCardPayoffStrategy.allCases) { strategy in
-                    Text(strategy.title).tag(strategy)
-                }
-            }
-            Text(draft.payoffStrategy.description)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        PlanPayoffSectionCard(
+            title: "Priorities",
+            subtitle: "Pick how assertive the plan should be.",
+            systemImage: "slider.horizontal.3"
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Card Payoff")
+                    .font(.headline)
 
-            Picker("Allocation Style", selection: $draft.allocationStrategy) {
-                ForEach(PaycheckAllocationStrategy.allCases) { strategy in
-                    Text(strategy.title).tag(strategy)
+                ForEach(CreditCardPayoffStrategy.allCases) { strategy in
+                    PlanPayoffOptionButton(
+                        title: strategy.title,
+                        detail: strategy.description,
+                        systemImage: "creditcard",
+                        isSelected: draft.payoffStrategy == strategy,
+                        tint: .blue
+                    ) {
+                        withAnimation(.snappy(duration: 0.2)) {
+                            draft.payoffStrategy = strategy
+                        }
+                    }
                 }
             }
-            Text(draft.allocationStrategy.description)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Allocation Style")
+                    .font(.headline)
+
+                ForEach(PaycheckAllocationStrategy.allCases) { strategy in
+                    PlanPayoffOptionButton(
+                        title: strategy.title,
+                        detail: strategy.description,
+                        systemImage: "target",
+                        isSelected: draft.allocationStrategy == strategy,
+                        tint: MoneyMapDesign.calmGreen
+                    ) {
+                        withAnimation(.snappy(duration: 0.2)) {
+                            draft.allocationStrategy = strategy
+                        }
+                    }
+                }
+            }
         }
-        .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
     private var scenarioStepSection: some View {
-        Section("Compare") {
+        PlanPayoffSectionCard(
+            title: "Compare",
+            subtitle: "Preview how different available amounts change the plan.",
+            systemImage: "rectangle.3.group"
+        ) {
             ForEach(scenarios) { scenario in
                 RecommendationScenarioRow(scenario: scenario)
             }
         }
-        .listRowBackground(MoneyMapDesign.surfaceBackground)
+    }
+
+    private var planExplanationSection: some View {
+        PlanExplanationCard(
+            intro: planExplanationIntro,
+            generatedExplanation: generatedPlanExplanation,
+            availabilityMessage: planExplanationAvailabilityMessage,
+            errorMessage: planExplanationError,
+            isGenerating: isGeneratingPlanExplanation
+        ) {
+            planExplanationDetent = .height(260)
+            showingPlanExplanationSheet = true
+        }
     }
 
     private var reviewOverviewSection: some View {
-        Section("Plan Summary") {
+        PlanPayoffSectionCard(
+            title: "Plan Summary",
+            subtitle: currentStep == .review ? "Review before saving this allocation." : "Updates as you adjust your plan.",
+            systemImage: "checklist"
+        ) {
             PaycheckPlanOverviewPanel(
                 totalAvailable: plan.totalAvailable,
                 cardPaymentTotal: cardPaymentTotal,
@@ -1898,11 +2169,13 @@ private struct AllocationGuidedPlanView: View {
                 summary: plan.summary
             )
         }
-        .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
     private var cardPaymentReviewSection: some View {
-        Section("Debt Payoff") {
+        PlanPayoffSectionCard(
+            title: "Debt Payoff",
+            systemImage: "creditcard"
+        ) {
             if plan.creditCardPayments.isEmpty {
                 MoneyMapEmptyState(
                     title: "No Debt Payoff Yet",
@@ -1915,11 +2188,13 @@ private struct AllocationGuidedPlanView: View {
                 }
             }
         }
-        .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
     private var goalContributionReviewSection: some View {
-        Section("Savings Goals") {
+        PlanPayoffSectionCard(
+            title: "Savings Goals",
+            systemImage: "target"
+        ) {
             if plan.goalContributions.isEmpty {
                 MoneyMapEmptyState(
                     title: "No Savings Plan Yet",
@@ -1932,7 +2207,6 @@ private struct AllocationGuidedPlanView: View {
                 }
             }
         }
-        .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
 
     private func advance() {
@@ -1953,21 +2227,521 @@ private struct AllocationGuidedPlanView: View {
         }
     }
 
-    private func paycheckAccountPickerTitle(for account: PaycheckCashAccount) -> String {
-        let institution = account.institutionName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let bankPrefix = institution.map { $0.isEmpty ? "" : "\($0) - " } ?? ""
-        let suffix = account.lastFourLabel.map { " - \($0)" } ?? ""
-        return "\(bankPrefix)\(account.displayName)\(suffix)"
+    private func generatePlanExplanationIfNeeded() async {
+        let signature = planExplanationSignature
+        guard plan.totalAvailable > 0 else { return }
+        guard generatedPlanExplanationSignature != signature else { return }
+        guard !isGeneratingPlanExplanation else { return }
+
+        if planExplanationAvailabilityMessage != nil {
+            generatedPlanExplanationSignature = signature
+            return
+        }
+
+        isGeneratingPlanExplanation = true
+        planExplanationError = nil
+
+        do {
+            let explanation = try await RecommendationPlanExplainer.explain(
+                plan: plan,
+                digest: digest,
+                nextPayday: nextPayday
+            )
+            guard !Task.isCancelled else { return }
+            generatedPlanExplanation = explanation
+            generatedPlanExplanationSignature = signature
+        } catch {
+            guard !Task.isCancelled else { return }
+            planExplanationError = "MoneyMap couldn't generate an Apple Intelligence explanation right now."
+            generatedPlanExplanationSignature = signature
+        }
+
+        isGeneratingPlanExplanation = false
     }
 
-    private func paycheckAccountDetail(for account: PaycheckCashAccount) -> String {
-        let balanceKind = account.availableBalance == nil && account.currentBalance != nil ? "current balance" : "available balance"
-        let institution = account.institutionName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let institutionLabel = institution.flatMap { $0.isEmpty ? nil : $0 }
-        let accountName = [institutionLabel, account.displayName]
-            .compactMap { $0 }
-            .joined(separator: " - ")
-        return "\(balanceKind.capitalized) from \(accountName)"
+    private func paycheckAccountMenuTitle(for account: PaycheckCashAccount) -> String {
+        account.displayName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank ?? "Bank Account"
+    }
+
+}
+
+private struct PlanExplanationCard: View {
+    let intro: String
+    let generatedExplanation: String?
+    let availabilityMessage: String?
+    let errorMessage: String?
+    let isGenerating: Bool
+    let onShowMore: () -> Void
+
+    private var bodyText: String {
+        generatedExplanation?.nilIfBlank ?? intro
+    }
+
+    var body: some View {
+        Button(action: onShowMore) {
+            HStack(alignment: .center, spacing: 14) {
+                Image(systemName: "sparkles")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.purple)
+                    .frame(width: 38, height: 38)
+                    .background(.purple.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Plan Rationale")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+
+                    Text(isGenerating ? "Apple Intelligence is preparing the explanation." : bodyText)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let availabilityMessage {
+                        Text(availabilityMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    } else if let errorMessage {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundStyle(MoneyMapDesign.attentionRed)
+                            .lineLimit(2)
+                    }
+                }
+
+                Spacer(minLength: 8)
+
+                if isGenerating {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "info.circle")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.purple)
+                }
+            }
+            .padding(16)
+            .background(MoneyMapDesign.surfaceBackground, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(MoneyMapDesign.separator.opacity(0.18), lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Plan rationale")
+    }
+}
+
+private struct PlanExplanationSheet: View {
+    let intro: String
+    let generatedExplanation: String?
+    let availabilityMessage: String?
+    let errorMessage: String?
+    let isGenerating: Bool
+    let plan: PaycheckRecommendationPlan
+    let digest: RecommendationDigest
+    let cardPaymentTotal: Double
+    let goalContributionTotal: Double
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "sparkles")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.purple)
+                        .frame(width: 40, height: 40)
+                        .background(.purple.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Why This Plan")
+                            .font(.title2.weight(.bold))
+                        Text("Apple Intelligence explains the plan using only the current MoneyMap signals.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    if isGenerating {
+                        Label("Apple Intelligence is preparing the explanation.", systemImage: "sparkles")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                    } else if let generatedExplanation = generatedExplanation?.nilIfBlank {
+                        Text(generatedExplanation)
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if let availabilityMessage {
+                        Text(availabilityMessage)
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if let errorMessage {
+                        Text(errorMessage)
+                            .font(.body)
+                            .foregroundStyle(MoneyMapDesign.attentionRed)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Text(intro)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Decision Signals")
+                        .font(.headline)
+
+                    PlanExplanationFactRow(
+                        title: "Available Money",
+                        value: MoneyMapFormatters.currencyString(for: plan.totalAvailable),
+                        systemImage: "banknote"
+                    )
+
+                    PlanExplanationFactRow(
+                        title: "Cards",
+                        value: "\(MoneyMapFormatters.currencyString(for: cardPaymentTotal)) using \(plan.payoffStrategy.title.lowercased()) priority",
+                        systemImage: "creditcard"
+                    )
+
+                    PlanExplanationFactRow(
+                        title: "Goals",
+                        value: "\(MoneyMapFormatters.currencyString(for: goalContributionTotal)) using \(plan.allocationStrategy.title.lowercased()) allocation",
+                        systemImage: "target"
+                    )
+
+                    PlanExplanationFactRow(
+                        title: "Flexible",
+                        value: MoneyMapFormatters.currencyString(for: plan.unallocatedCash),
+                        systemImage: "dollarsign.circle"
+                    )
+
+                    if digest.upcomingBillCount > 0 {
+                        PlanExplanationFactRow(
+                            title: "Bill Pressure",
+                            value: "\(digest.upcomingBillCount) upcoming bill\(digest.upcomingBillCount == 1 ? "" : "s") in the planning window",
+                            systemImage: "calendar.badge.exclamationmark"
+                        )
+                    }
+
+                    if digest.behindGoalCount > 0 {
+                        PlanExplanationFactRow(
+                            title: "Goal Pressure",
+                            value: "\(digest.behindGoalCount) goal\(digest.behindGoalCount == 1 ? "" : "s") behind schedule",
+                            systemImage: "target"
+                        )
+                    }
+
+                    if let topCardName = digest.topCardName {
+                        PlanExplanationFactRow(
+                            title: "Top Card",
+                            value: topCardName,
+                            systemImage: "creditcard.fill"
+                        )
+                    }
+
+                    if let topGoalName = digest.topGoalName {
+                        PlanExplanationFactRow(
+                            title: "Top Goal",
+                            value: topGoalName,
+                            systemImage: "scope"
+                        )
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 22)
+            .padding(.bottom, 32)
+        }
+        .background(MoneyMapDesign.groupedBackground.ignoresSafeArea())
+    }
+}
+
+private struct PlanExplanationFactRow: View {
+    let title: String
+    let value: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.purple)
+                .frame(width: 28)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text(value)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MoneyMapDesign.controlBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct PlanPayoffSectionCard<Content: View>: View {
+    @ScaledMetric(relativeTo: .headline) private var iconSize: CGFloat = 34
+    let title: String
+    var subtitle: String?
+    var systemImage: String?
+    let content: Content
+
+    init(
+        title: String,
+        subtitle: String? = nil,
+        systemImage: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.systemImage = systemImage
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.headline)
+                        .foregroundStyle(MoneyMapDesign.calmGreen)
+                        .frame(width: iconSize, height: iconSize)
+                        .background(MoneyMapDesign.calmGreen.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .accessibilityHidden(true)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.title3.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 14) {
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(MoneyMapDesign.surfaceBackground, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(MoneyMapDesign.separator.opacity(0.18), lineWidth: 1)
+        }
+    }
+}
+
+private struct PlanPayoffSourceButton: View {
+    @ScaledMetric(relativeTo: .headline) private var iconSize: CGFloat = 34
+    let title: String
+    let detail: String
+    let systemImage: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Image(systemName: systemImage)
+                        .font(.headline)
+                        .foregroundStyle(isSelected ? .white : MoneyMapDesign.calmGreen)
+                        .frame(width: iconSize, height: iconSize)
+                        .background((isSelected ? Color.white.opacity(0.18) : MoneyMapDesign.calmGreen.opacity(0.12)), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                    Spacer(minLength: 8)
+
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.headline)
+                        .foregroundStyle(isSelected ? .white : .secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(isSelected ? .white.opacity(0.76) : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .foregroundStyle(isSelected ? .white : .primary)
+            .frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
+            .padding(12)
+            .background(
+                isSelected ? AnyShapeStyle(MoneyMapDesign.moneyGradient) : AnyShapeStyle(MoneyMapDesign.controlBackground),
+                in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(isSelected ? Color.white.opacity(0.20) : MoneyMapDesign.separator.opacity(0.16), lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+}
+
+private struct PlanPayoffOptionButton: View {
+    @ScaledMetric(relativeTo: .headline) private var iconSize: CGFloat = 34
+    let title: String
+    let detail: String
+    let systemImage: String
+    let isSelected: Bool
+    let tint: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: systemImage)
+                    .font(.headline)
+                    .foregroundStyle(isSelected ? .white : tint)
+                    .frame(width: iconSize, height: iconSize)
+                    .background((isSelected ? Color.white.opacity(0.18) : tint.opacity(0.12)), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.body.weight(.semibold))
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(isSelected ? .white.opacity(0.78) : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.headline)
+                    .foregroundStyle(isSelected ? .white : .secondary)
+            }
+            .foregroundStyle(isSelected ? .white : .primary)
+            .padding(12)
+            .background(
+                isSelected ? AnyShapeStyle(tint.gradient) : AnyShapeStyle(MoneyMapDesign.controlBackground),
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+}
+
+private struct PlanPayoffStatCard: View {
+    let title: String
+    let value: String
+    let detail: String
+    let systemImage: String
+    let tint: Color
+    var isProminent: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: systemImage)
+                    .font(isProminent ? .title3.weight(.semibold) : .headline)
+                    .foregroundStyle(tint)
+                    .frame(width: 34, height: 34)
+                    .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .accessibilityHidden(true)
+
+                Spacer(minLength: 8)
+            }
+
+            Text(value)
+                .font(isProminent ? .title.weight(.bold) : .title3.weight(.semibold))
+                .fontDesign(.rounded)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(isProminent ? 16 : 12)
+        .background(MoneyMapDesign.controlBackground, in: RoundedRectangle(cornerRadius: isProminent ? 18 : 16, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct PaycheckAccountDetailCard: View {
+    let account: PaycheckCashAccount
+
+    private var institutionName: String? {
+        account.institutionName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
+    }
+
+    private var balanceKind: String {
+        account.availableBalance == nil && account.currentBalance != nil ? "Current balance" : "Available balance"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "building.columns")
+                    .font(.headline)
+                    .foregroundStyle(MoneyMapDesign.calmGreen)
+                    .frame(width: 28)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(account.displayName)
+                        .font(.subheadline.weight(.semibold))
+                    if let institutionName {
+                        Text(institutionName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer(minLength: 12)
+
+                MoneyMapMoneyText(
+                    amount: PaycheckCashResolver.balance(for: account),
+                    font: .subheadline.weight(.semibold),
+                    foregroundStyle: .primary
+                )
+            }
+
+            Text("\(balanceKind) synced \(account.updatedAt.formatted(date: .abbreviated, time: .shortened)).")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .background(MoneyMapDesign.controlBackground, in: RoundedRectangle(cornerRadius: MoneyMapDesign.controlCornerRadius, style: .continuous))
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -2270,8 +3044,8 @@ private struct SavedExtraMoneyPlanDetailView: View {
         .navigationTitle("Plan Details")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Done") {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done", systemImage: "checkmark") {
                     dismiss()
                 }
             }
@@ -2560,8 +3334,12 @@ private struct RecommendationScenarioRow: View {
         scenario.plan.goalContributions.reduce(0) { $0 + $1.recommendedContribution }
     }
 
+    private var flexibleTotal: Double {
+        scenario.plan.unallocatedCash
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(scenario.title)
                     .font(.headline)
@@ -2569,18 +3347,58 @@ private struct RecommendationScenarioRow: View {
                 MoneyMapMoneyText(amount: scenario.availableCash, font: .headline)
             }
 
-            Text(scenario.plan.summary)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                RecommendationScenarioMetric(
+                    title: "Cards",
+                    amount: cardTotal,
+                    systemImage: "creditcard",
+                    tint: .blue
+                )
 
-            HStack(spacing: 14) {
-                Label(MoneyMapFormatters.currencyString(for: cardTotal), systemImage: "creditcard")
-                Label(MoneyMapFormatters.currencyString(for: goalTotal), systemImage: "target")
+                RecommendationScenarioMetric(
+                    title: "Goals",
+                    amount: goalTotal,
+                    systemImage: "target",
+                    tint: MoneyMapDesign.calmGreen
+                )
+
+                RecommendationScenarioMetric(
+                    title: "Flexible",
+                    amount: flexibleTotal,
+                    systemImage: "dollarsign.circle",
+                    tint: flexibleTotal > 0 ? MoneyMapDesign.warningGold : .secondary
+                )
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct RecommendationScenarioMetric: View {
+    let title: String
+    let amount: Double
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label(title, systemImage: systemImage)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            MoneyMapMoneyText(
+                amount: amount,
+                font: .caption.weight(.semibold),
+                foregroundStyle: .primary
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityElement(children: .combine)
     }
 }
@@ -2588,56 +3406,108 @@ private struct RecommendationScenarioRow: View {
 private struct CardPaymentRecommendationRow: View {
     let recommendation: CreditCardPaymentRecommendation
     @State private var isShowingReason = false
+    @State private var reasonDetent = PresentationDetent.height(230)
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             Image(systemName: "creditcard")
                 .font(.headline)
                 .foregroundStyle(.blue)
                 .frame(width: 26, alignment: .center)
                 .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(recommendation.billName)
-                        .font(.headline)
-                    Spacer(minLength: 8)
-                    MoneyMapMoneyText(amount: recommendation.recommendedPayment, font: .headline)
-                }
-
-                Text(recommendation.decisionSummary)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 7) {
+                Text(recommendation.billName)
+                    .font(.headline)
+                    .lineLimit(1)
 
                 HStack(spacing: 12) {
                     if let dueDate = recommendation.dueDate {
                         Label(MoneyMapFormatters.mediumDateString(for: dueDate), systemImage: "calendar")
                     }
                     Label(recommendation.utilization.formatted(.percent.precision(.fractionLength(0))), systemImage: "chart.pie")
-                    if let apr = recommendation.annualPercentageRate {
-                        Label(apr.formatted(.percent.precision(.fractionLength(1))), systemImage: "percent")
-                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+            }
 
-                DisclosureGroup(isExpanded: $isShowingReason) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(recommendation.decisionDetails, id: \.self) { detail in
-                            Label(detail, systemImage: "checkmark.circle")
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 2)
+            Spacer(minLength: 10)
+
+            HStack(spacing: 8) {
+                MoneyMapMoneyText(amount: recommendation.recommendedPayment, font: .headline)
+
+                Button {
+                    reasonDetent = .height(230)
+                    isShowingReason = true
                 } label: {
-                    Label("Why this", systemImage: "info.circle")
-                        .font(.caption.weight(.semibold))
+                    Image(systemName: "info.circle")
+                        .font(.title3.weight(.semibold))
                         .foregroundStyle(.blue)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Circle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Why this recommendation")
             }
         }
         .padding(.vertical, 4)
+        .sheet(isPresented: $isShowingReason) {
+            CardPaymentReasonSheet(recommendation: recommendation)
+                .presentationDetents([.height(230), .medium, .large], selection: $reasonDetent)
+                .presentationDragIndicator(.visible)
+        }
+    }
+}
+
+private struct CardPaymentReasonSheet: View {
+    let recommendation: CreditCardPaymentRecommendation
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "info.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.blue)
+                        .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Why This Payment")
+                            .font(.title3.weight(.semibold))
+                        Text(recommendation.billName)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 12)
+
+                    MoneyMapMoneyText(
+                        amount: recommendation.recommendedPayment,
+                        font: .title3.weight(.bold)
+                    )
+                }
+
+                Text(recommendation.decisionIntro)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(recommendation.decisionDetails, id: \.self) { detail in
+                        Label(detail, systemImage: "checkmark.circle")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.top, 2)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            .padding(.bottom, 28)
+        }
+        .background(MoneyMapDesign.groupedBackground.ignoresSafeArea())
     }
 }
 
@@ -2712,6 +3582,10 @@ private extension CreditCardPaymentRecommendation {
         }
 
         return rationale
+    }
+
+    var decisionIntro: String {
+        "\(billName) gets \(MoneyMapFormatters.currencyString(for: recommendedPayment)) because it best matches the current payoff priority, due date, and utilization signals."
     }
 
     var decisionExplanation: String {
@@ -2853,7 +3727,7 @@ private struct RecommendationsWelcomeSheet: View {
             }
             .navigationTitle("How It Works")
             .navigationBarTitleDisplayMode(.inline)
-            .safeAreaInset(edge: .bottom) {
+            .safeAreaBar(edge: .bottom) {
                 Button {
                     onDone()
                 } label: {
@@ -2867,7 +3741,6 @@ private struct RecommendationsWelcomeSheet: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity)
-                .background(.thinMaterial)
             }
         }
     }

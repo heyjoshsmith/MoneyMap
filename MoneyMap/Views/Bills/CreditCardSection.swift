@@ -327,7 +327,7 @@ private struct CreditCardListRow: View {
     let card: Bill
 
     private var details: CreditCardDetails? {
-        card.creditCardDetails
+        card.currentCreditCardDetails
     }
 
     private var utilization: Double {

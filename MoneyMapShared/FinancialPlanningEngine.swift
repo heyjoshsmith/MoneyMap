@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import SwiftData
 
 struct GoalSavingInsight: Equatable {
     let goalID: UUID
@@ -227,7 +228,7 @@ enum FinancialPlanningEngine {
 
         var paymentsByID: [UUID: Double] = [:]
         let candidates: [CreditCardPaymentCandidate] = prioritizedCards.compactMap { bill in
-            let details = bill.creditCardDetails
+            let details = bill.currentCreditCardDetails
             let linkedAccount = linkedCreditAccount(for: bill, creditAccountsByID: creditAccountsByID)
             let balance = effectiveCardBalance(for: bill, creditAccountsByID: creditAccountsByID)
             guard balance > 0 else { return nil }
@@ -374,12 +375,14 @@ enum FinancialPlanningEngine {
     }
 
     static func goalProgressInsights(goals: [Goal], nextPayday: Date?) -> [GoalSavingInsight] {
-        goals.compactMap { goal in
+        let config = try? goals.first?.modelContext?.fetch(FetchDescriptor<PaydayConfig>()).first
+        let schedule = config?.schedule ?? nextPayday.map { PaySchedule(anchor: $0) }
+        return goals.compactMap { goal in
             guard goal.remainingAmount > 0 else { return nil }
-            let paydaysRemaining = goal.deadline.map { paydaysUntil(deadline: $0, nextPayday: nextPayday) } ?? 1
-            let targetPerPaycheck = roundedToCents(goal.amountPerPaycheck ?? (goal.remainingAmount / Double(max(paydaysRemaining, 1))))
-            let expectedSavedByNow = targetPerPaycheck * Double(max(paydaysElapsed(for: goal, nextPayday: nextPayday), 1))
-            let shortfallAmount = roundedToCents(max(0, expectedSavedByNow - goal.amountSaved))
+            let paydaysRemaining = goal.deadline.map { paydaysUntil(deadline: $0, nextPayday: nextPayday, schedule: schedule) } ?? 1
+            let targetPerPaycheck = roundedToCents(config?.scheduleKindRaw != nil ? (goal.remainingAmount / Double(max(paydaysRemaining, 1))) : (goal.amountPerPaycheck ?? (goal.remainingAmount / Double(max(paydaysRemaining, 1)))))
+            let expectedSavedByNow = targetPerPaycheck * Double(max(paydaysElapsed(for: goal, nextPayday: nextPayday, schedule: schedule), 1))
+            let shortfallAmount = roundedToCents(max(0, expectedSavedByNow - goal.totalSavedAmount))
             return GoalSavingInsight(
                 goalID: goal.id,
                 goalName: goal.name ?? "Goal",
@@ -461,9 +464,9 @@ enum FinancialPlanningEngine {
                 goalID: goal.id,
                 goalName: goal.name ?? "Goal",
                 targetAmount: roundedToCents(targetAmount),
-                currentSavedAmount: roundedToCents(goal.amountSaved),
+                currentSavedAmount: roundedToCents(goal.totalSavedAmount),
                 allocatedAmount: allocatedAmount,
-                deltaAmount: roundedToCents(allocatedAmount - goal.amountSaved),
+                deltaAmount: roundedToCents(allocatedAmount - goal.totalSavedAmount),
                 isBehindSchedule: insight?.isBehindSchedule ?? false,
                 targetPerPaycheck: insight?.targetPerPaycheck ?? roundedToCents(goal.amountPerPaycheck ?? 0)
             )
@@ -675,7 +678,7 @@ enum FinancialPlanningEngine {
         creditAccountsByID: [String: CreditCardPlanningAccount] = [:],
         strategy: CreditCardPayoffStrategy
     ) -> Double {
-        let details = bill.creditCardDetails
+        let details = bill.currentCreditCardDetails
         let linkedAccount = linkedCreditAccount(for: bill, creditAccountsByID: creditAccountsByID)
         let balance = effectiveCardBalance(for: bill, creditAccountsByID: creditAccountsByID)
         let creditLimit = effectiveCreditLimit(details: details, linkedAccount: linkedAccount, balance: balance)
@@ -716,7 +719,7 @@ enum FinancialPlanningEngine {
         creditAccountsByID: [String: CreditCardPlanningAccount] = [:]
     ) -> Double {
         guard bill.category == .creditCard else { return 0 }
-        let details = bill.creditCardDetails
+        let details = bill.currentCreditCardDetails
         let linkedBalance = linkedCreditAccount(for: bill, creditAccountsByID: creditAccountsByID)?.balanceAmount ?? 0
         return max(
             linkedBalance,
@@ -729,7 +732,7 @@ enum FinancialPlanningEngine {
     }
 
     private static func effectiveMinimumPayment(for bill: Bill) -> Double {
-        let detailedMinimum = bill.creditCardDetails?.effectiveMinimumPayment ?? 0
+        let detailedMinimum = bill.currentCreditCardDetails?.effectiveMinimumPayment ?? 0
         if detailedMinimum > 0 {
             return detailedMinimum
         }
@@ -754,7 +757,7 @@ enum FinancialPlanningEngine {
     }
 
     private static func statementTarget(for bill: Bill, balance: Double) -> Double {
-        if let statementBalance = bill.creditCardDetails?.statementBalance {
+        if let statementBalance = bill.currentCreditCardDetails?.statementBalance {
             return min(abs(statementBalance), balance)
         }
         if let amount = bill.amount, amount > 0 {
@@ -764,10 +767,10 @@ enum FinancialPlanningEngine {
     }
 
     private static func duePaymentTarget(for bill: Bill, balance: Double) -> Double {
-        if let statementBalance = bill.creditCardDetails?.statementBalance {
+        if let statementBalance = bill.currentCreditCardDetails?.statementBalance {
             return min(abs(statementBalance), balance)
         }
-        if let minimumPayment = bill.creditCardDetails?.effectiveMinimumPayment, minimumPayment > 0 {
+        if let minimumPayment = bill.currentCreditCardDetails?.effectiveMinimumPayment, minimumPayment > 0 {
             return min(minimumPayment, balance)
         }
         if let amount = bill.amount, amount > 0 {
@@ -777,7 +780,7 @@ enum FinancialPlanningEngine {
     }
 
     private static func rationale(for bill: Bill, nextPayday: Date?, strategy: CreditCardPayoffStrategy) -> String {
-        let details = bill.creditCardDetails
+        let details = bill.currentCreditCardDetails
         let isMarkedPaid = bill.datePaid != nil || bill.status == .paid
         let isDueBeforeNextPayday = isDueBefore(nextPayday: nextPayday, dueDate: bill.dueDate)
 
@@ -832,42 +835,14 @@ enum FinancialPlanningEngine {
         return dueDay >= today && dueDay <= horizon
     }
 
-    private static func paydaysUntil(deadline: Date, nextPayday: Date?) -> Int {
+    private static func paydaysUntil(deadline: Date, nextPayday: Date?, schedule: PaySchedule?) -> Int {
         guard let nextPayday else { return 1 }
-
-        var count = 0
-        var current = Calendar.current.startOfDay(for: nextPayday)
-        let end = Calendar.current.startOfDay(for: deadline)
-
-        while current <= end {
-            count += 1
-            current = Calendar.current.date(byAdding: .day, value: 14, to: current) ?? current.addingTimeInterval(60 * 60 * 24 * 14)
-        }
-
-        return max(count, 1)
+        return max((schedule ?? PaySchedule(anchor: nextPayday)).dates(from: nextPayday, through: deadline).count, 1)
     }
 
-    private static func paydaysElapsed(for goal: Goal, nextPayday: Date?) -> Int {
-        guard
-            let nextPayday,
-            let firstPayday = Calendar.current.date(byAdding: .day, value: -14, to: nextPayday)
-        else {
-            return 1
-        }
-
-        let createdDay = Calendar.current.startOfDay(for: goal.createdDate)
-        var current = Calendar.current.startOfDay(for: firstPayday)
-        let today = Calendar.current.startOfDay(for: Date())
-        var count = 0
-
-        while current <= today {
-            if current >= createdDay {
-                count += 1
-            }
-            current = Calendar.current.date(byAdding: .day, value: 14, to: current) ?? current.addingTimeInterval(60 * 60 * 24 * 14)
-        }
-
-        return max(count, 1)
+    private static func paydaysElapsed(for goal: Goal, nextPayday: Date?, schedule: PaySchedule?) -> Int {
+        guard let nextPayday else { return 1 }
+        return max((schedule ?? PaySchedule(anchor: nextPayday)).dates(from: goal.createdDate, through: .now).count, 1)
     }
 
     private static func roundedToCents(_ value: Double) -> Double {

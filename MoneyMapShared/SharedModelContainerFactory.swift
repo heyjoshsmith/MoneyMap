@@ -44,21 +44,32 @@ public enum MoneyMapSharedContainerFactory {
         fallbackReason: "The shared container has not been opened yet."
     )
 
-    public static func make() throws -> ModelContainer {
+    /// App extensions share the on-device store; the containing app owns iCloud syncing.
+    /// Starting CloudKit in an extension without iCloud entitlements traps before
+    /// Swift can catch an error and fall back to a local container.
+    public static func makeForAppExtension() throws -> ModelContainer {
+        try make(cloudKitEnabled: false)
+    }
+
+    public static func make(cloudKitEnabled: Bool = true) throws -> ModelContainer {
         let schema = sharedSchema()
 
         let containerURL = try storeDirectory()
 
         let storeURL = containerURL.appendingPathComponent("shared.sqlite")
 
-        if isRunningUnderXCTest {
+        if !cloudKitEnabled || isRunningUnderXCTest {
             let container = try ModelContainer(
                 for: schema,
                 configurations: [
                     ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: .none)
                 ]
             )
-            lastReport = MoneyMapSharedContainerReport(mode: .localOnly, storeURL: storeURL, fallbackReason: "Unit tests use local storage.")
+            lastReport = MoneyMapSharedContainerReport(
+                mode: .localOnly,
+                storeURL: storeURL,
+                fallbackReason: cloudKitEnabled ? "Unit tests use local storage." : "The app extension uses shared local storage. MoneyMap handles iCloud sync."
+            )
             writeDiagnostic(lastReport)
             return container
         }
@@ -114,9 +125,9 @@ public enum MoneyMapSharedContainerFactory {
 
     private static func sharedSchema() -> Schema {
         Schema([
-            Goal.self,
+            Goal.self, GoalContribution.self, FinanceActionReceipt.self,
             PaydayConfig.self,
-            Bill.self,
+            Bill.self, BillPaymentEntry.self,
             Transaction.self,
             AuditEvent.self,
             PaymentMethod.self,
