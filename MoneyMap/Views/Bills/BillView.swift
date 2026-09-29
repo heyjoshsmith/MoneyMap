@@ -66,6 +66,7 @@ struct BillView: View {
     @State private var gracePeriodDays = 0
     @State private var plaidUnavailable = false
     @State private var showingPaymentLinkSetup = false
+    @State private var showingFundingSourcePicker = false
     @State private var showingPaymentSettings = false
     @State private var showingNotificationSettings = false
     @State private var showingPaymentMethodEditor = false
@@ -530,6 +531,12 @@ struct BillView: View {
             case .playground:
                 // Present the official Image Playground UI via a dedicated view
                 EmptyView()
+            }
+        }
+        .sheet(isPresented: $showingFundingSourcePicker, onDismiss: { selectedPaymentMethodID = bill.paymentMethodID }) {
+            NavigationStack {
+                BillFundingAssignmentView(bill: bill)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingFundingSourcePicker = false } } }
             }
         }
         .sheet(isPresented: $showingPaymentLinkSetup) {
@@ -1517,6 +1524,10 @@ struct BillView: View {
 
                 Divider()
 
+                Button { showingFundingSourcePicker = true } label: {
+                    LabeledContent("Pay From", value: bill.paymentMethod(in: paymentMethods)?.displayName ?? "Choose account or card")
+                }
+
                 Picker("Payment Type", selection: $paymentMode) {
                     ForEach(BillPaymentMode.allCases) { mode in
                         Label(mode.title, systemImage: mode.icon)
@@ -1527,7 +1538,6 @@ struct BillView: View {
                     autopayEnabled = mode == .autopay
                     if mode != .autopay {
                         autopaySource = ""
-                        selectedPaymentMethodID = nil
                     }
                     saveBillMeta()
                 }
@@ -1829,7 +1839,7 @@ struct BillView: View {
         let normalizedAutopaySource = autopaySource.trimmingCharacters(in: .whitespacesAndNewlines)
         bill.updatePaymentSettings(
             autopayEnabled: paymentMode == .autopay,
-            paymentMethodID: paymentMode == .autopay ? selectedPaymentMethodID : nil,
+            paymentMethodID: selectedPaymentMethodID,
             autopaySource: normalizedAutopaySourceForSave(fallback: normalizedAutopaySource),
             gracePeriodDays: gracePeriodDays,
             paymentMode: paymentMode

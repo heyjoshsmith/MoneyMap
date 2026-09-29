@@ -33,6 +33,7 @@ struct BillEditor: View {
     @State private var autopaySource: String
     @State private var selectedPaymentMethodID: UUID?
     @State private var showingPaymentMethodEditor = false
+    @State private var showingFundingSourcePicker = false
     @State private var gracePeriodDays: Int
     @State private var paymentLink: String
     @State private var notes: String
@@ -158,7 +159,12 @@ struct BillEditor: View {
                 autopayEnabled = mode == .autopay
                 if mode != .autopay {
                     autopaySource = ""
-                    selectedPaymentMethodID = nil
+                }
+            }
+            .sheet(isPresented: $showingFundingSourcePicker) {
+                NavigationStack {
+                    BillPaymentSourcePicker(selection: $selectedPaymentMethodID, excludedBillID: bill?.id)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingFundingSourcePicker = false } } }
                 }
             }
             .sheet(isPresented: $showingPaymentMethodEditor) {
@@ -251,7 +257,10 @@ struct BillEditor: View {
                 }
             }
 
-            if paymentMode == .autopay {
+            Group {
+                Button { showingFundingSourcePicker = true } label: {
+                    Label("Choose Account or Card", systemImage: "creditcard")
+                }
                 Picker("Pay From", selection: $selectedPaymentMethodID) {
                     Text("No Payment Method").tag(Optional<UUID>.none)
                     ForEach(sortedPaymentMethods) { method in
@@ -270,7 +279,7 @@ struct BillEditor: View {
                     Label("Add Payment Method", systemImage: "plus.circle")
                 }
 
-                if selectedPaymentMethod == nil {
+                if selectedPaymentMethod == nil && paymentMode == .autopay {
                     HStack {
                         Text("Autopay Source")
                         Spacer()
@@ -465,7 +474,7 @@ struct BillEditor: View {
         targetBill.recurrenceUnit = repeats ? selectedRecurrenceUnit : nil
         targetBill.updatePaymentSettings(
             autopayEnabled: paymentMode == .autopay,
-            paymentMethodID: paymentMode == .autopay ? selectedPaymentMethodID : nil,
+            paymentMethodID: selectedPaymentMethodID,
             autopaySource: normalizedAutopaySource,
             gracePeriodDays: gracePeriodDays,
             paymentMode: paymentMode

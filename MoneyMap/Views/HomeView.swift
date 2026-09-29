@@ -25,6 +25,9 @@ struct HomeView: View {
     @Query private var transactions: [Transaction]
     @Query(sort: \Goal.deadline, order: .forward) private var goals: [Goal]
     @Query private var paydayConfigs: [PaydayConfig]
+    @Query private var paymentMethods: [PaymentMethod]
+    @State private var fundingBank = BillFundingBankSnapshot()
+    @State private var showingFundingSources = false
 
     @State private var destination: HomeNavigationTarget?
     @State private var showingAddBill = false
@@ -83,9 +86,17 @@ struct HomeView: View {
         overdueBills.isEmpty ? billsBeforePayday : overdueBills
     }
 
+    private var fundingCoverage: BillFundingCoverage {
+        fundingBank.coverage(bills: billsBeforePayday, methods: paymentMethods, allBills: bills)
+    }
+
     private var leftAfterBills: Double? {
-        guard payAmount > 0 else { return nil }
-        return payAmount - dueBeforePaydayTotal
+        guard RecommendationPreferencesStore.paycheckCashSource == .linkedAccount else { return nil }
+        guard let accountID = RecommendationPreferencesStore.paycheckCashAccountID else { return nil }
+        guard let account = fundingBank.activeAccounts.first(where: { $0.accountID == accountID && $0.type.lowercased() == "depository" }),
+              account.currencyCode?.uppercased() == "USD",
+              let available = account.availableBalance ?? account.currentBalance else { return nil }
+        return fundingCoverage.remaining(in: "account:\(accountID)", available: available)
     }
 
     private var billsBeforePayday: [Bill] {
@@ -93,7 +104,7 @@ struct HomeView: View {
         return bills.withoutCreditCards
             .filter { bill in
                 guard let dueDate = bill.dueDate else { return false }
-                return dueDate <= nextPayday && bill.status != .paid
+                return dueDate <= nextPayday && bill.status != .paid && bill.lifecycleState == .active
             }
             .sorted(by: Bill.byDate)
     }
@@ -102,7 +113,7 @@ struct HomeView: View {
         bills.withoutCreditCards
             .filter { bill in
                 guard let dueDate = bill.dueDate else { return false }
-                return Calendar.current.startOfDay(for: dueDate) < today && bill.status != .paid
+                return Calendar.current.startOfDay(for: dueDate) < today && bill.status != .paid && bill.lifecycleState == .active
             }
             .sorted(by: Bill.byDate)
     }
@@ -173,55 +184,25 @@ struct HomeView: View {
             )
         }
 
-        if let leftAfterBills {
-            if leftAfterBills < 0 {
-                return TodayAnswer(
-                    eyebrow: "Planning window",
-                    title: "Bills need attention",
-                    metric: "\(MoneyMapFormatters.currencyString(for: abs(leftAfterBills))) short",
-                    detail: "Upcoming bills are higher than the available amount currently saved in MoneyMap.",
-                    systemImage: "exclamationmark.circle.fill",
-                    tint: .orange,
-                    actionTitle: "Plan Money",
-                    action: .recommendations
-                )
-            }
-
-            if !hasGoals {
-                return TodayAnswer(
-                    eyebrow: "Planning window",
-                    title: dueBeforePaydayTotal > 0 ? "Bills are mapped" : "No bills due soon",
-                    metric: "\(MoneyMapFormatters.currencyString(for: leftAfterBills)) left",
-                    detail: "Add a savings goal when you want MoneyMap to guide what happens after bills.",
-                    systemImage: "checkmark.circle.fill",
-                    tint: .green,
-                    actionTitle: "Add Goal",
-                    action: .addGoal
-                )
-            }
-
-            return TodayAnswer(
-                eyebrow: "Planning window",
-                title: dueBeforePaydayTotal > 0 ? "Upcoming bills are covered" : "No bills due soon",
-                metric: "\(MoneyMapFormatters.currencyString(for: leftAfterBills)) left",
-                detail: "Use Plan when you're ready to split the remaining money across cards and goals.",
-                systemImage: "checkmark.circle.fill",
-                tint: .green,
-                actionTitle: "Plan Money",
-                action: .recommendations
-            )
+        let coverage = fundingCoverage
+        if !coverage.isComplete {
+            let count = coverage.unresolvedBillIDs.count
+            return TodayAnswer(eyebrow: "Planning window", title: "Check bill payment sources",
+                metric: "\(count) bill\(count == 1 ? "" : "s") to review",
+                detail: "Choose where each bill is charged so MoneyMap can check the right account, pocket, or card. Missing balances stay unconfirmed.",
+                systemImage: "creditcard", tint: .orange, actionTitle: "Connect Bills", action: .funding)
         }
-
-        return TodayAnswer(
-            eyebrow: "Available money",
-            title: "Ready for an allocation plan",
-            metric: dueBeforePaydayTotal > 0 ? MoneyMapFormatters.currencyString(for: dueBeforePaydayTotal) : "No bills due",
-            detail: "Add the money you want to plan so MoneyMap can split it across bills, cards, and goals.",
-            systemImage: "wand.and.stars",
-            tint: .purple,
-            actionTitle: "Plan Money",
-            action: .recommendations
-        )
+        if coverage.shortfall > 0 {
+            return TodayAnswer(eyebrow: "Planning window", title: "Payment sources need attention",
+                metric: "\(MoneyMapFormatters.currencyString(for: coverage.shortfall)) short",
+                detail: "The assigned accounts or cards don’t cover all their bills. Money in other pockets isn’t counted toward these charges.",
+                systemImage: "exclamationmark.circle.fill", tint: .orange, actionTitle: "Review Sources", action: .funding)
+        }
+        return TodayAnswer(eyebrow: "Planning window",
+            title: billsBeforePayday.isEmpty ? "No bills due soon" : "Upcoming bills are covered",
+            metric: billsBeforePayday.isEmpty ? "You're up to date" : MoneyMapFormatters.currencyString(for: dueBeforePaydayTotal),
+            detail: "Coverage uses each bill’s assigned source and its latest saved balance. Credit-card charges use available credit, which still needs to be repaid.",
+            systemImage: "checkmark.circle.fill", tint: .green, actionTitle: "Review Sources", action: .funding)
     }
 
     var body: some View {
@@ -261,6 +242,9 @@ struct HomeView: View {
                 NavigationStack {
                     AddGoalView()
                 }
+            }
+            .sheet(isPresented: $showingFundingSources, onDismiss: { refreshFundingBalances() }) {
+                BillFundingView(planningDate: paydayManager.nextPayday)
             }
             .sheet(isPresented: $showingSettings) {
                 Settings()
@@ -308,8 +292,15 @@ struct HomeView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: AppRefreshEvents.billsDidChange)) { _ in
                 billsRefreshToken += 1
+                refreshFundingBalances()
+                refreshResolvedPayAmount()
             }
+            .task { refreshFundingBalances() }
         }
+    }
+
+    private func refreshFundingBalances() {
+        fundingBank = (try? .load()) ?? BillFundingBankSnapshot()
     }
 
     private func scheduleBillStatusRefresh() {
@@ -428,15 +419,17 @@ struct HomeView: View {
                 systemImage: "target"
             )
 
-            if payAmount > 0 {
-                let leftAfterBills = max(payAmount - billsBeforePayday.totalAmount, 0)
-                MoneyMapSummaryRow(
-                    title: "Left After Bills",
+            Button { showingFundingSources = true } label: {
+                MoneyMapSummaryRow(title: "Bill Payment Sources",
+                    value: fundingCoverage.isComplete ? (fundingCoverage.shortfall > 0 ? "Review shortfall" : "Connected") : "\(fundingCoverage.unresolvedBillIDs.count) to review",
+                    detail: "Accounts, pockets, and cards for each bill", systemImage: "creditcard")
+            }.buttonStyle(.plain)
+            if let leftAfterBills {
+                MoneyMapSummaryRow(title: "Left in Planning Account",
                     value: MoneyMapFormatters.currencyString(for: leftAfterBills),
-                    detail: RecommendationPreferencesStore.paycheckCashSource == .linkedAccount ? "Based on your synced account" : "Based on your current available amount",
-                    systemImage: "dollarsign.circle"
-                )
+                    detail: "After bills charged to this account only", systemImage: "dollarsign.circle")
             }
+
         }
         .listRowBackground(MoneyMapDesign.surfaceBackground)
     }
@@ -523,6 +516,8 @@ struct HomeView: View {
 
     private func run(_ action: HomeAction) {
         switch action {
+        case .funding:
+            showingFundingSources = true
         case .payday:
             destination = .payday
         case .recommendations:
@@ -673,6 +668,7 @@ private struct TodayBillDueRow: View {
 }
 
 private enum HomeAction {
+    case funding
     case payday
     case recommendations
     case reviewBills
