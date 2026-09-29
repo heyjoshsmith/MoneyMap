@@ -50,11 +50,12 @@ final class MacPlaidSyncCoordinator: ObservableObject {
         }
     }
 
-    func startHostedLinkConnection() async {
+    func startHostedLinkConnection(primaryProduct: String = "transactions") async {
         await run {
             let credentials = try self.requireCredentials()
             let session = try await MacPlaidAPIClient(credentials: credentials).createHostedLinkSession(
-                clientUserID: self.clientUserID()
+                clientUserID: self.clientUserID(),
+                primaryProduct: primaryProduct
             )
             let pendingSession = PlaidPendingLinkSession(
                 linkToken: session.linkToken,
@@ -71,7 +72,7 @@ final class MacPlaidSyncCoordinator: ObservableObject {
         }
     }
 
-    func startReconnect(itemID: String) async {
+    func startReconnect(itemID: String, upgradeDataAccess: Bool = false) async {
         await run {
             let credentials = try self.requireCredentials()
             guard let accessToken = try self.credentialStore.accessToken(for: itemID) else {
@@ -81,7 +82,7 @@ final class MacPlaidSyncCoordinator: ObservableObject {
                 clientUserID: self.clientUserID(),
                 accessToken: accessToken
             )
-            let pendingSession = PlaidPendingLinkSession(
+            var pendingSession = PlaidPendingLinkSession(
                 linkToken: session.linkToken,
                 hostedLinkURL: session.hostedLinkURL,
                 expiration: session.expiration,
@@ -90,9 +91,10 @@ final class MacPlaidSyncCoordinator: ObservableObject {
                 itemID: itemID,
                 createdAt: .now
             )
+            pendingSession.isDataUpgrade = upgradeDataAccess
             self.savePendingLinkSession(pendingSession)
             NSWorkspace.shared.open(session.hostedLinkURL)
-            self.statusMessage = "Plaid reconnect opened in your browser. Finish there, then return here and choose Finish Bank Connection."
+            self.statusMessage = upgradeDataAccess ? "Approve additional data access in your browser, then return here to finish." : "Bank sign-in opened in your browser. Return here when you finish."
         }
     }
 
@@ -124,20 +126,38 @@ final class MacPlaidSyncCoordinator: ObservableObject {
             let linkStatus = try await client.linkTokenStatus(linkToken: pendingSession.linkToken)
             let publicTokens = NSOrderedSet(array: linkStatus.publicTokens).compactMap { $0 as? String }
 
+            if pendingSession.mode == .updateItem {
+                if linkStatus.hasSuccessfulCompletion {
+                    guard let itemID = pendingSession.itemID,
+                          let accessToken = try self.credentialStore.accessToken(for: itemID) else {
+                        throw PlaidMacSyncError.missingAccessToken
+                    }
+                    // Update mode keeps the same access token, even if Link returns a public token.
+                    let summary = try await self.sync(itemID: itemID, accessToken: accessToken, client: client, context: context)
+                    try await PlaidCloudSyncService.push(context: context)
+                    self.clearPendingLinkSession()
+                    let connection = try context.fetch(FetchDescriptor<PlaidConnection>()).first { $0.itemID == itemID }
+                    let consentStillNeeded = PlaidConnectionEnrichment.decode(connection?.enrichmentJSON)?.productStatuses.contains {
+                        $0.diagnosticMessage?.contains("ADDITIONAL_CONSENT_REQUIRED") == true
+                    } ?? false
+                    self.statusMessage = consentStillNeeded
+                        ? "Bank sign-in finished and available data synced. Plaid still reports that additional data permissions were not granted. Check this connection’s data access details."
+                        : summary.userMessage(prefix: pendingSession.isDataUpgrade == true ? "Data access updated" : "Reconnect finished")
+                    return
+                }
+                if linkStatus.finishedWithoutPublicToken {
+                    self.clearPendingLinkSession()
+                    throw PlaidMacSyncError.linkFinishedWithoutPublicToken(linkStatus.userFacingStatusMessage)
+                }
+                self.statusMessage = "Waiting for Plaid to confirm the reconnect. Finish the bank flow in your browser, then choose Finish Bank Connection again."
+                return
+            }
+
             if publicTokens.isEmpty {
                 if linkStatus.finishedWithoutPublicToken {
                     self.clearPendingLinkSession()
                     throw PlaidMacSyncError.linkFinishedWithoutPublicToken(linkStatus.userFacingStatusMessage)
                 }
-
-                if pendingSession.mode == .updateItem, let itemID = pendingSession.itemID, let accessToken = try self.credentialStore.accessToken(for: itemID) {
-                    let summary = try await self.sync(itemID: itemID, accessToken: accessToken, client: client, context: context)
-                    try await PlaidCloudSyncService.push(context: context)
-                    self.clearPendingLinkSession()
-                    self.statusMessage = summary.userMessage(prefix: "Reconnect finished")
-                    return
-                }
-
                 self.statusMessage = "Plaid Link is not finished yet. Complete the bank login in your browser, then choose Finish Bank Connection again."
                 return
             }
@@ -191,6 +211,7 @@ final class MacPlaidSyncCoordinator: ObservableObject {
                 await syncAutomatically(context: context)
                 lastAutomaticRefresh = .now
             }
+            await handlePhoneReconnectCommand(context: context)
             await handleWatchCommands(context: context)
 
             try? await Task.sleep(nanoseconds: pollInterval * 1_000_000_000)
@@ -232,20 +253,168 @@ final class MacPlaidSyncCoordinator: ObservableObject {
 
     private func sync(itemID: String, accessToken: String, client: MacPlaidAPIClient, context: ModelContext) async throws -> PlaidTransactionSyncSummary {
         let item = try await client.item(accessToken: accessToken)
-        let institution: PlaidInstitutionDTO?
+        var initialStatuses: [PlaidProductSyncStatus] = []
+        var institution: PlaidInstitutionDTO?
         if let institutionID = item.institutionID {
-            institution = try await client.institution(id: institutionID)
-        } else {
-            institution = nil
+            do { institution = try await client.institution(id: institutionID) }
+            catch { initialStatuses.append(Self.productFailure("institution", error: error)) }
         }
-        let accounts = try await client.accounts(accessToken: accessToken)
-        let liabilities = try? await client.liabilities(accessToken: accessToken)
+        let accounts: [PlaidAccountDTO]
+        let liveBalances: Bool
+        do {
+            accounts = try await client.accounts(accessToken: accessToken)
+            liveBalances = true
+            initialStatuses.append(.init(product: "balance", state: "available"))
+        } catch {
+            initialStatuses.append(Self.productFailure("balance", error: error))
+            do { accounts = try await client.accounts(accessToken: accessToken, cached: true) }
+            catch {
+                initialStatuses.append(Self.productFailure("accounts", error: error))
+                try upsertConnection(item: item, institution: institution, context: context)
+                if let connection = try context.fetch(FetchDescriptor<PlaidConnection>()).first(where: { $0.itemID == itemID }) {
+                    var metadata = PlaidConnectionEnrichment.decode(connection.enrichmentJSON) ?? PlaidConnectionEnrichment()
+                    metadata.item = item.details
+                    if let products = institution?.products { metadata.item["institution_supported_products"] = .array(products.map { .string($0) }) }
+                    metadata.productStatuses.removeAll { status in initialStatuses.contains { $0.product == status.product } }
+                    metadata.productStatuses.append(contentsOf: initialStatuses)
+                    connection.enrichmentJSON = try metadata.encoded()
+                    connection.status = "needs_attention"
+                    connection.errorMessage = error.localizedDescription
+                    try context.save()
+                }
+                throw error
+            }
+            liveBalances = false
+        }
         try upsertConnection(item: item, institution: institution, context: context)
-        try upsertAccounts(accounts, itemID: itemID, institutionName: institution?.name, context: context)
+        try upsertAccounts(accounts, itemID: itemID, institutionName: institution?.name, liveBalances: liveBalances, context: context)
+        let connections = try context.fetch(FetchDescriptor<PlaidConnection>())
+        guard let connection = connections.first(where: { $0.itemID == itemID }) else { throw PlaidMacSyncError.noConnections }
+        var enrichment = PlaidConnectionEnrichment.decode(connection.enrichmentJSON) ?? PlaidConnectionEnrichment()
+        enrichment.item = item.details
+        if let products = institution?.products { enrichment.item["institution_supported_products"] = .array(products.map { .string($0) }) }
+        enrichment.productStatuses = initialStatuses
+        var documents: [String: [String: PlaidJSONValue]] = [:]
+        let products = [("liabilities", "/liabilities/get"), ("recurring", "/transactions/recurring/get"),
+                        ("holdings", "/investments/holdings/get"), ("investment_transactions", "/investments/transactions/get")]
+        for (product, path) in products {
+            // Investments is account-specific. Other optional products can be unavailable despite account support;
+            // requesting them records Plaid's actual entitlement/consent error instead of guessing capability.
+            if (product == "holdings" || product == "investment_transactions") && !accounts.contains(where: { $0.type == "investment" }) {
+                enrichment.productStatuses.append(.init(product: product, state: "unavailable", message: "No investment accounts are connected."))
+                continue
+            }
+            do {
+                documents[product] = product == "investment_transactions"
+                    ? try await client.investmentTransactions(accessToken: accessToken)
+                    : try await client.productDocument(path: path, accessToken: accessToken)
+                enrichment.productStatuses.append(.init(product: product, state: "available"))
+            } catch {
+                enrichment.productStatuses.append(Self.productFailure(product, error: error))
+            }
+        }
+        var liabilities: PlaidLiabilitiesResponse?
+        if let document = documents["liabilities"] {
+            do { liabilities = try JSONDecoder().decode(PlaidLiabilitiesResponse.self, from: JSONEncoder().encode(document)) }
+            catch { enrichment.productStatuses.removeAll { $0.product == "liabilities" }; enrichment.productStatuses.append(Self.productFailure("liabilities", error: error)) }
+        }
+        try applyEnrichment(documents, accounts: accounts, itemID: itemID, context: context)
         try upsertSuggestions(accounts: accounts, itemID: itemID, liabilities: liabilities, context: context)
-        let transactionSummary = try await syncTransactions(itemID: itemID, accessToken: accessToken, client: client, context: context)
+        let transactionSummary: PlaidTransactionSyncSummary
+        do {
+            if accounts.contains(where: { $0.type == "credit" || $0.type == "depository" }) {
+                transactionSummary = try await syncTransactions(itemID: itemID, accessToken: accessToken, client: client, context: context)
+                enrichment.productStatuses.append(.init(product: "transactions", state: "available"))
+            } else {
+                transactionSummary = .init(pageCount: 0, addedCount: 0, modifiedCount: 0, removedCount: 0, nextCursor: "not_applicable", restartCount: 0)
+                enrichment.productStatuses.append(.init(product: "transactions", state: "unavailable", message: "No checking, savings, or credit accounts are connected. Investment activity is synced separately."))
+            }
+        } catch {
+            enrichment.productStatuses.append(Self.productFailure("transactions", error: error))
+            connection.enrichmentJSON = try enrichment.encoded()
+            try context.save()
+            throw error
+        }
+        connection.enrichmentJSON = try enrichment.encoded()
+        connection.lastSyncAt = .now
+        connection.updatedAt = .now
         try context.save()
         return transactionSummary
+    }
+
+    private static func productFailure(_ product: String, error: Error) -> PlaidProductSyncStatus {
+        var state = "failed"
+        if case PlaidAPIError.plaid(let response) = error,
+           ["PRODUCT_NOT_READY", "PRODUCT_NOT_SUPPORTED", "ADDITIONAL_CONSENT_REQUIRED", "ACCESS_NOT_GRANTED", "PRODUCTS_NOT_SUPPORTED", "INVALID_PRODUCT", "NO_INVESTMENT_ACCOUNTS"].contains(response.errorCode ?? "") {
+            state = "unavailable"
+        }
+        let message: String
+        if case PlaidAPIError.plaid(let response) = error {
+            let productName: String
+            switch product {
+            case "liabilities": productName = "card and loan payment details"
+            case "holdings", "investment_transactions": productName = "investment data"
+            case "recurring": productName = "recurring bills and income"
+            case "balance": productName = "balance updates"
+            default: productName = "this bank data"
+            }
+            switch response.errorCode {
+            case "ADDITIONAL_CONSENT_REQUIRED", "ACCESS_NOT_GRANTED":
+                message = "Reconnect this bank to allow \(productName)."
+            case "PRODUCT_NOT_READY":
+                message = "Your bank is still preparing \(productName). MoneyMap will try again on the next sync."
+            case "PRODUCT_NOT_SUPPORTED", "PRODUCTS_NOT_SUPPORTED", "INVALID_PRODUCT", "NO_INVESTMENT_ACCOUNTS":
+                message = "This connection does not currently provide \(productName)."
+            default:
+                message = response.displayMessage ?? response.errorMessage ?? "This bank could not provide \(productName). Try syncing again."
+            }
+        } else { message = error.localizedDescription }
+        return .init(product: product, state: state, message: message, diagnosticMessage: error.localizedDescription)
+    }
+
+    private func applyEnrichment(_ documents: [String: [String: PlaidJSONValue]], accounts: [PlaidAccountDTO], itemID: String, context: ModelContext) throws {
+        let snapshots = try context.fetch(FetchDescriptor<PlaidAccountSnapshot>()).filter { $0.itemID == itemID }
+        func objects(_ document: [String: PlaidJSONValue], _ key: String) -> [[String: PlaidJSONValue]] {
+            (document[key]?.array ?? []).compactMap(\.object)
+        }
+        for snapshot in snapshots {
+            var data = PlaidAccountEnrichment.decode(snapshot.enrichmentJSON) ?? PlaidAccountEnrichment()
+            // Cached Accounts fallback must not replace a credit limit from an earlier live balance.
+            if data.balanceSource != "cached" || data.creditLimit == nil {
+                data.creditLimit = accounts.first { $0.accountID == snapshot.accountID }?.balances.limit
+            }
+            for (product, document) in documents {
+                data.productUpdatedAt[product] = .now
+                switch product {
+                case "liabilities":
+                    let liabilities = document["liabilities"]?.object ?? [:]
+                    data.creditLiability = objects(liabilities, "credit").first { $0["account_id"]?.string == snapshot.accountID }
+                    data.mortgageLiability = objects(liabilities, "mortgage").first { $0["account_id"]?.string == snapshot.accountID }
+                    data.studentLoanLiability = objects(liabilities, "student").first { $0["account_id"]?.string == snapshot.accountID }
+                case "recurring":
+                    data.recurringInflows = objects(document, "inflow_streams").filter { $0["account_id"]?.string == snapshot.accountID }
+                    data.recurringOutflows = objects(document, "outflow_streams").filter { $0["account_id"]?.string == snapshot.accountID }
+                case "holdings":
+                    data.holdings = objects(document, "holdings").filter { $0["account_id"]?.string == snapshot.accountID }
+                case "investment_transactions":
+                    data.investmentTransactions = objects(document, "investment_transactions").filter { $0["account_id"]?.string == snapshot.accountID }
+                default: break
+                }
+            }
+            if documents["holdings"] != nil || documents["investment_transactions"] != nil {
+                var securities = Dictionary(data.securities.compactMap { object -> (String, [String: PlaidJSONValue])? in
+                    guard let id = object["security_id"]?.string else { return nil }; return (id, object)
+                }, uniquingKeysWith: { _, new in new })
+                let ids = Set((data.holdings + data.investmentTransactions).compactMap { $0["security_id"]?.string })
+                for product in ["holdings", "investment_transactions"] {
+                    for security in objects(documents[product] ?? [:], "securities") {
+                        if let id = security["security_id"]?.string, ids.contains(id) { securities[id] = security }
+                    }
+                }
+                data.securities = securities.filter { ids.contains($0.key) }.sorted { $0.key < $1.key }.map(\.value)
+            }
+            snapshot.enrichmentJSON = try data.encoded()
+        }
     }
 
     private func performSyncAll(context: ModelContext) async throws -> String {
@@ -351,10 +520,9 @@ final class MacPlaidSyncCoordinator: ObservableObject {
         let existing = try context.fetch(FetchDescriptor<PlaidConnection>())
         let connection = existing.first(where: { $0.itemID == item.itemID }) ?? PlaidConnection(itemID: item.itemID)
         connection.institutionID = item.institutionID
-        connection.institutionName = institution?.name
+        if let name = institution?.name { connection.institutionName = name }
         connection.status = "active"
         connection.errorMessage = nil
-        connection.lastSyncAt = .now
         connection.updatedAt = .now
 
         if !existing.contains(where: { $0 === connection }) {
@@ -366,10 +534,21 @@ final class MacPlaidSyncCoordinator: ObservableObject {
         _ accounts: [PlaidAccountDTO],
         itemID: String,
         institutionName: String?,
+        liveBalances: Bool,
         context: ModelContext
     ) throws {
         let existing = try context.fetch(FetchDescriptor<PlaidAccountSnapshot>())
         let accountsByID = Dictionary(existing.map { ($0.accountID, $0) }, uniquingKeysWith: { first, _ in first })
+        // The successful unfiltered Accounts response is authoritative for active connected accounts.
+        // Remove stale source snapshots and suggestions, retaining the user's bills and transaction history.
+        let activeIDs = Set(accounts.map(\.accountID))
+        for snapshot in existing where snapshot.itemID == itemID && !activeIDs.contains(snapshot.accountID) {
+            context.delete(snapshot)
+        }
+        let suggestions = try context.fetch(FetchDescriptor<PlaidSuggestion>())
+        for suggestion in suggestions where suggestion.plaidItemID == itemID && !activeIDs.contains(suggestion.plaidAccountID) {
+            context.delete(suggestion)
+        }
 
         for dto in accounts {
             let snapshot = accountsByID[dto.accountID] ?? PlaidAccountSnapshot(
@@ -379,16 +558,25 @@ final class MacPlaidSyncCoordinator: ObservableObject {
                 type: dto.type
             )
             snapshot.itemID = itemID
-            snapshot.institutionName = institutionName
+            if let institutionName { snapshot.institutionName = institutionName }
             snapshot.accountName = dto.name
             snapshot.officialName = dto.officialName
             snapshot.mask = dto.mask
             snapshot.type = dto.type
             snapshot.subtype = dto.subtype
-            snapshot.currentBalance = dto.balances.current
-            snapshot.availableBalance = dto.balances.available
-            snapshot.currencyCode = dto.balances.isoCurrencyCode
-            snapshot.updatedAt = .now
+            var metadata = PlaidAccountEnrichment.decode(snapshot.enrichmentJSON) ?? PlaidAccountEnrichment()
+            metadata.balanceSource = liveBalances ? "live" : "cached"
+            let reportedDate = dto.balances.lastUpdatedDateTime.flatMap { ISO8601DateFormatter().date(from: $0) }
+            if liveBalances, reportedDate != nil { metadata.balanceSource = "bank_reported" }
+            if liveBalances || accountsByID[dto.accountID] == nil {
+                snapshot.currentBalance = dto.balances.current
+                snapshot.availableBalance = dto.balances.available
+                snapshot.currencyCode = dto.balances.isoCurrencyCode
+                // A cache response often has no source timestamp. Never label its retrieval time a fresh bank balance.
+                snapshot.updatedAt = reportedDate ?? (liveBalances ? .now : .distantPast)
+            }
+            if liveBalances { metadata.productUpdatedAt["balance"] = snapshot.updatedAt }
+            snapshot.enrichmentJSON = try metadata.encoded()
 
             if accountsByID[dto.accountID] == nil {
                 context.insert(snapshot)
@@ -418,8 +606,13 @@ final class MacPlaidSyncCoordinator: ObservableObject {
             suggestion.kind = kind
             suggestion.plaidItemID = itemID
             suggestion.title = account.name
-            suggestion.amount = creditLiabilities[account.accountID]?.lastStatementBalance ?? account.balances.current
-            suggestion.dueDate = PlaidMacDateParsing.day(creditLiabilities[account.accountID]?.nextPaymentDueDate)
+            // A bill schedules a payment, while the statement balance remains in account metadata.
+            // This changes only the review suggestion; accepted cards retain their chosen payment amount.
+            let creditLiability = creditLiabilities[account.accountID]
+            if account.type != "credit" || liabilities != nil || suggestionsByKey["\(kind.rawValue):\(account.accountID)"] == nil {
+                suggestion.amount = creditLiability?.minimumPaymentAmount ?? creditLiability?.lastStatementBalance ?? account.balances.current
+                suggestion.dueDate = PlaidMacDateParsing.day(creditLiability?.nextPaymentDueDate)
+            }
             suggestion.detail = account.mask.map { "Ending \($0)" }
             suggestion.updatedAt = .now
 
@@ -435,28 +628,45 @@ final class MacPlaidSyncCoordinator: ObservableObject {
         client: MacPlaidAPIClient,
         context: ModelContext
     ) async throws -> PlaidTransactionSyncSummary {
-        let startingCursor = storedCursor(itemID: itemID)
+        let savedCursor = storedCursor(itemID: itemID)
+        let backfillKey = "plaid.transactions.enrichmentBackfill.v1.\(itemID)"
+        let existingItems = try context.fetch(FetchDescriptor<PlaidTransactionReviewItem>())
+        let needsBackfill = !defaults.bool(forKey: backfillKey) && existingItems.contains {
+            $0.plaidItemID == itemID && $0.bankRemovedAt == nil && ($0.enrichmentJSON?.isEmpty ?? true)
+        }
+        let startingCursor = needsBackfill ? nil : savedCursor
         let maxPaginationRestarts = 3
         var restartCount = 0
 
         while true {
             do {
+                // Capture removals since the old cursor before requesting full history. A nil-cursor
+                // response alone cannot tell us which previously imported transactions were removed.
+                let delta: PlaidTransactionSyncBatch?
+                if needsBackfill, let savedCursor {
+                    delta = try await fetchTransactionSyncBatch(accessToken: accessToken, startingCursor: savedCursor, client: client)
+                } else { delta = nil }
                 let batch = try await fetchTransactionSyncBatch(
                     accessToken: accessToken,
                     startingCursor: startingCursor,
                     client: client
                 )
-                try applyTransactionSyncBatch(batch, itemID: itemID, context: context)
-
+                if let delta { try applyTransactionSyncBatch(delta, itemID: itemID, context: context) }
+                try applyTransactionSyncBatch(batch, itemID: itemID, preservingTombstones: needsBackfill, context: context)
+                // Persist all rows before committing the external cursor. A crash before this point
+                // safely replays the same idempotent batch on the next refresh.
+                try context.save()
                 if let cursor = batch.nextCursor, !cursor.isEmpty {
                     defaults.set(cursor, forKey: cursorDefaultsKey(itemID: itemID))
+                    if needsBackfill { defaults.set(true, forKey: backfillKey) }
                 }
-
+                let knownIDs = Set(existingItems.map(\.plaidTransactionID))
+                let additions = Set((batch.added + (delta?.added ?? [])).map(\.transactionID)).subtracting(knownIDs).count
                 return PlaidTransactionSyncSummary(
-                    pageCount: batch.pageCount,
-                    addedCount: batch.added.count,
-                    modifiedCount: batch.modified.count,
-                    removedCount: batch.removed.count,
+                    pageCount: batch.pageCount + (delta?.pageCount ?? 0),
+                    addedCount: needsBackfill ? additions : batch.added.count,
+                    modifiedCount: batch.modified.count + (delta?.modified.count ?? 0),
+                    removedCount: Set((batch.removed + (delta?.removed ?? [])).map(\.transactionID)).count,
                     nextCursor: batch.nextCursor,
                     restartCount: restartCount
                 )
@@ -503,6 +713,7 @@ final class MacPlaidSyncCoordinator: ObservableObject {
     private func applyTransactionSyncBatch(
         _ batch: PlaidTransactionSyncBatch,
         itemID: String,
+        preservingTombstones: Bool = false,
         context: ModelContext
     ) throws {
         let existing = try context.fetch(FetchDescriptor<PlaidTransactionReviewItem>())
@@ -520,7 +731,10 @@ final class MacPlaidSyncCoordinator: ObservableObject {
             reviewItem.plaidItemID = itemID
             reviewItem.name = transaction.name
             reviewItem.merchantName = transaction.merchantName
-            reviewItem.category = transaction.category?.joined(separator: " / ")
+            let enrichment = PlaidTransactionEnrichment(details: transaction.details)
+            reviewItem.enrichmentJSON = try enrichment.encoded()
+            if !preservingTombstones { reviewItem.bankRemovedAt = nil }
+            reviewItem.category = enrichment.detailedCategory ?? transaction.category?.joined(separator: " / ")
             reviewItem.date = PlaidMacDateParsing.day(transaction.date)
             reviewItem.authorizedDate = PlaidMacDateParsing.day(transaction.authorizedDate)
             reviewItem.amount = transaction.amount
@@ -536,9 +750,113 @@ final class MacPlaidSyncCoordinator: ObservableObject {
         }
 
         for removed in batch.removed {
-            if let reviewItem = reviewItemsByID[removed.transactionID], reviewItem.status == .ready {
-                reviewItem.status = .skipped
+            if let reviewItem = reviewItemsByID[removed.transactionID] {
+                reviewItem.bankRemovedAt = .now
+                reviewItem.updatedAt = .now
+                if reviewItem.status == .ready { reviewItem.status = .skipped }
             }
+        }
+    }
+
+    /// iPhone has its own consent bridge. The separate Watch institution verification gate stays intact.
+    private func handlePhoneReconnectCommand(context: ModelContext) async {
+        guard !isWorking else { return }
+        do {
+            guard var command = try await PhoneBankReconnectCommandStore.latest(), !isWorking else { return }
+            let activeKey = "phone.bankReconnect.activeRequestID"
+            if let previousID = defaults.string(forKey: activeKey), previousID != command.id {
+                clearPhoneReconnectSession(id: previousID)
+            }
+            if command.isTerminal { clearPhoneReconnectSession(id: command.id); return }
+            defaults.set(command.id, forKey: activeKey)
+            isWorking = true
+            defer { isWorking = false }
+            let key = "phone.bankReconnect.linkToken.\(command.id)"
+            if command.hasExpired {
+                command.state = .failed
+                command.message = "Bank sign-in expired. Start reconnect again from your iPhone."
+                _ = try await PhoneBankReconnectCommandStore.update(command)
+                clearPhoneReconnectSession(id: command.id)
+                return
+            }
+            do {
+                let connections = try context.fetch(FetchDescriptor<PlaidConnection>())
+                guard connections.contains(where: { $0.itemID == command.itemID }),
+                      let accessToken = try credentialStore.accessToken(for: command.itemID) else {
+                    throw PlaidMacSyncError.missingAccessToken
+                }
+                let client = MacPlaidAPIClient(credentials: try requireCredentials())
+                if let token = defaults.string(forKey: key) {
+                    if command.state == .requested {
+                        command.hostedURL = defaults.url(forKey: key + ".url")
+                        guard command.sanitizedHostedURL != nil else {
+                            throw PlaidAPIError.transport("The pending bank sign-in session could not be restored. Start reconnect again from your iPhone.")
+                        }
+                        if let expiration = defaults.object(forKey: key + ".expiration") as? Date {
+                            command.expiresAt = min(command.expiresAt, expiration)
+                        }
+                        command.state = .ready
+                        command.message = "Ready to continue your bank sign-in on iPhone."
+                        _ = try await PhoneBankReconnectCommandStore.update(command)
+                        return
+                    }
+                    let result = try await client.linkTokenStatus(linkToken: token)
+                    if result.hasSuccessfulCompletion {
+                        // Re-check after network work so canceled/superseded requests do not trigger a sync.
+                        guard let current = try await PhoneBankReconnectCommandStore.latest(), current.id == command.id,
+                              !current.isTerminal, !current.hasExpired else { return }
+                        _ = try await sync(itemID: command.itemID, accessToken: accessToken, client: client, context: context)
+                        try await PlaidCloudSyncService.push(context: context)
+                        let connection = connections.first { $0.itemID == command.itemID }
+                        let consentMissing = PlaidConnectionEnrichment.decode(connection?.enrichmentJSON)?.productStatuses.contains {
+                            $0.diagnosticMessage?.contains("ADDITIONAL_CONSENT_REQUIRED") == true
+                        } ?? false
+                        command.state = .succeeded
+                        command.message = consentMissing
+                            ? "Bank sign-in finished and available data synced. Plaid still needs additional permissions for some bank details."
+                            : "Bank reconnected and the latest available data synced."
+                        if try await PhoneBankReconnectCommandStore.update(command) { clearPhoneReconnectSession(id: command.id) }
+                    } else if result.finishedWithoutPublicToken {
+                        command.state = .failed
+                        command.message = result.userFacingStatusMessage
+                        if try await PhoneBankReconnectCommandStore.update(command) { clearPhoneReconnectSession(id: command.id) }
+                    }
+                } else if command.state == .requested {
+                    let session = try await client.createHostedLinkSession(clientUserID: clientUserID(), accessToken: accessToken, phone: true)
+                    command.hostedURL = session.hostedLinkURL
+                    guard command.sanitizedHostedURL != nil else {
+                        throw PlaidAPIError.transport("Plaid returned an unexpected bank sign-in address. Try reconnecting again.")
+                    }
+                    command.state = .ready
+                    command.message = "Ready to continue your bank sign-in on iPhone."
+                    if let expiration = session.expiration { command.expiresAt = min(command.expiresAt, expiration) }
+                    // The Link token stays on this Mac; only the short-lived Hosted Link URL goes to iCloud.
+                    defaults.set(session.hostedLinkURL, forKey: key + ".url")
+                    defaults.set(command.expiresAt, forKey: key + ".expiration")
+                    defaults.set(session.linkToken, forKey: key)
+                    if !(try await PhoneBankReconnectCommandStore.update(command)) { clearPhoneReconnectSession(id: command.id) }
+                } else {
+                    command.state = .failed
+                    command.message = "This Mac no longer has the pending sign-in session. Start reconnect again from your iPhone."
+                    _ = try await PhoneBankReconnectCommandStore.update(command)
+                }
+            } catch {
+                command.state = .failed
+                command.message = error.localizedDescription
+                if try await PhoneBankReconnectCommandStore.update(command) { clearPhoneReconnectSession(id: command.id) }
+            }
+        } catch {
+            logger.error("iPhone bank reconnect bridge failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func clearPhoneReconnectSession(id: String) {
+        let key = "phone.bankReconnect.linkToken.\(id)"
+        defaults.removeObject(forKey: key)
+        defaults.removeObject(forKey: key + ".url")
+        defaults.removeObject(forKey: key + ".expiration")
+        if defaults.string(forKey: "phone.bankReconnect.activeRequestID") == id {
+            defaults.removeObject(forKey: "phone.bankReconnect.activeRequestID")
         }
     }
 
@@ -575,7 +893,7 @@ final class MacPlaidSyncCoordinator: ObservableObject {
                         let key = "watch.link." + command.id
                         if let token = defaults.string(forKey: key) {
                             let result = try await client.linkTokenStatus(linkToken: token)
-                            if !result.publicTokens.isEmpty {
+                            if !result.publicTokens.isEmpty && command.itemID == nil {
                                 guard !result.institutionIDs.isEmpty, Set(result.institutionIDs).isSubset(of: WatchBankCompatibility.verifiedInstitutionIDs) else {
                                     throw NSError(domain: "MoneyMap", code: 3, userInfo: [NSLocalizedDescriptionKey: "This bank is not verified for Watch-only sign-in."])
                                 }
@@ -595,7 +913,7 @@ final class MacPlaidSyncCoordinator: ObservableObject {
                                 }
                                 try await PlaidCloudSyncService.push(context: context)
                                 command.state = "succeeded"; command.message = "Bank connected."
-                            } else if result.completedAt != nil, let itemID = command.itemID, let access = try credentialStore.accessToken(for: itemID) {
+                            } else if result.hasSuccessfulCompletion, let itemID = command.itemID, let access = try credentialStore.accessToken(for: itemID) {
                                 _ = try await sync(itemID: itemID, accessToken: access, client: client, context: context)
                                 try await PlaidCloudSyncService.push(context: context)
                                 command.state = "succeeded"; command.message = "Bank reconnected."
@@ -713,6 +1031,7 @@ struct PlaidPendingLinkSession: Codable, Identifiable {
     var mode: PlaidPendingLinkMode
     var itemID: String?
     var createdAt: Date
+    var isDataUpgrade: Bool? = nil
 
     var id: String { linkToken }
 

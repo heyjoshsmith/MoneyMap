@@ -19,6 +19,7 @@ final class CSVDropTests: XCTestCase {
                         recurrenceInterval: 1, recurrenceUnit: .month,
                         creditCardDetails: CreditCardDetails(creditLimit: 1000, cardBalance: 50))
         container.mainContext.insert(bill)
+        try container.mainContext.save()
         let preview = try previewTransactionCSVFiles(from: review.urls, for: bill)
         XCTAssertEqual(preview.importableRows, 1)
         XCTAssertTrue(try container.mainContext.fetch(FetchDescriptor<Transaction>()).isEmpty)

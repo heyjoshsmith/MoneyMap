@@ -51,7 +51,7 @@ enum MoneyMapPlanningStore {
         )
         return accounts
             .filter { account in
-                activeItemIDs.isEmpty || activeItemIDs.contains(account.itemID)
+                connections.isEmpty || activeItemIDs.contains(account.itemID)
             }
             .filter { account in
                 isEligiblePaycheckCashAccount(account)
@@ -66,6 +66,10 @@ enum MoneyMapPlanningStore {
     }
 
     static func resolvedPaycheckAmount(manualAmount: Double) -> Double {
+        // Manual planning should never open the bank database during rendering.
+        guard RecommendationPreferencesStore.paycheckCashSource != .manual else {
+            return max(manualAmount, 0)
+        }
         let accounts = (try? fetchPaycheckCashAccounts()) ?? []
         return PaycheckCashResolver.availableCash(
             source: RecommendationPreferencesStore.paycheckCashSource,

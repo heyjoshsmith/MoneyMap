@@ -13,7 +13,6 @@ enum HomeNavigationTarget: String, Identifiable {
     case payday
     case recommendations
     case upcomingBills
-    case assistant
 
     var id: String { rawValue }
 }
@@ -277,8 +276,6 @@ struct HomeView: View {
                     RecommendationsView()
                 case .upcomingBills:
                     BillsView(mode: .upcoming)
-                case .assistant:
-                    MoneyMapAssistantView()
                 }
             }
             .userActivity("com.heyjoshsmith.MoneyMap.viewingHome") { activity in
@@ -472,17 +469,6 @@ struct HomeView: View {
                 .buttonStyle(.plain)
             }
 
-            Button {
-                destination = .assistant
-            } label: {
-                MoneyMapActionListRow(
-                    title: "Ask MoneyMap",
-                    detail: "Search your data or ask a question.",
-                    systemImage: "sparkles",
-                    tint: .purple
-                )
-            }
-            .buttonStyle(.plain)
 
             Button {
                 showingAddBill = true

@@ -10,8 +10,41 @@ import SwiftData
 @testable import MoneyMapShared
 
 final class TransactionImportTests: XCTestCase {
+    func testImportRejectsCardLinkedAfterPreviewWithoutInsertingRows() throws {
+        let container = try ModelContainer(for: Bill.self, Transaction.self,
+            configurations: ModelConfiguration(UUID().uuidString, isStoredInMemoryOnly: true, cloudKitDatabase: .none))
+        let context = ModelContext(container)
+        let bill = Bill(name: "Manual Card", amount: 0, dueDate: .now,
+                        category: .creditCard, recurrenceInterval: 1, recurrenceUnit: .month)
+        context.insert(bill)
+        try context.save()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try "Transaction Date,Description,Merchant,Amount (USD)\n04-20-2026,Coffee,Cafe,5.25".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        XCTAssertEqual(try previewTransactionCSVFiles(from: [url], for: bill).importableRows, 1)
+        bill.plaidAccountID = "linked-account"
+        // A manual-only flag must not override an existing bank link.
+        bill.plaidUnavailable = true
+        XCTAssertThrowsError(try importTransactionCSVFiles(from: [url], to: bill, context: context))
+        XCTAssertThrowsError(try previewTransactionCSVFiles(from: [url], for: bill))
+        XCTAssertTrue(try context.fetch(FetchDescriptor<Transaction>()).isEmpty)
+    }
+
+    func testManualImportEligibilityRequiresUnlinkedCreditCard() {
+        let bill = Bill(name: "Card", amount: 0, dueDate: .now,
+                        category: .creditCard, recurrenceInterval: 1, recurrenceUnit: .month)
+        XCTAssertTrue(bill.canImportTransactionsManually)
+        bill.plaidUnavailable = true
+        XCTAssertTrue(bill.canImportTransactionsManually)
+        bill.plaidItemID = "linked-item"
+        XCTAssertFalse(bill.canImportTransactionsManually)
+        bill.plaidItemID = nil
+        bill.category = .utilities
+        XCTAssertFalse(bill.canImportTransactionsManually)
+    }
+
     func testImportSkipsDuplicateRowsAndReimports() throws {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(UUID().uuidString, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: Bill.self, Transaction.self, configurations: config)
         let context = ModelContext(container)
 
@@ -48,7 +81,7 @@ final class TransactionImportTests: XCTestCase {
     }
 
     func testPreviewReportsNewDuplicateAndInvalidRows() throws {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(UUID().uuidString, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: Bill.self, Transaction.self, configurations: config)
         let context = ModelContext(container)
 
@@ -100,7 +133,7 @@ final class TransactionImportTests: XCTestCase {
     }
 
     func testMultiFileImportSummaryMatchesInsertedTransactions() throws {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(UUID().uuidString, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: Bill.self, Transaction.self, configurations: config)
         let context = ModelContext(container)
 

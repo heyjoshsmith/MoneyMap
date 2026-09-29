@@ -16,6 +16,8 @@ public enum PlaidReviewStatus: String, CaseIterable, Codable {
 
 @Model
 public class PlaidTransactionReviewItem: Identifiable {
+    public var enrichmentJSON: String?
+    public var bankRemovedAt: Date?
     public var id: UUID = UUID()
     public var plaidTransactionID: String = ""
     public var plaidAccountID: String = ""
@@ -71,8 +73,8 @@ public class PlaidTransactionReviewItem: Identifiable {
     public var status: PlaidReviewStatus {
         get { PlaidReviewStatus(rawValue: statusRaw) ?? .ready }
         set {
+            // Review decisions must not change the bank snapshot's freshness.
             statusRaw = newValue.rawValue
-            updatedAt = .now
         }
     }
 

@@ -30,6 +30,24 @@ import SwiftUI
     public var plaidImportedAt: Date?
     public var plaidIsPending: Bool?
     public var linkedBillID: UUID?
+    public var plaidEnrichmentJSON: String?
+    public var plaidCurrencyCode: String?
+    public var plaidOriginalAmount: Double?
+    public var plaidBankRemovedAt: Date?
+    public var plaidBankSnapshotJSON: String?
+    public var plaidBankUpdatedAt: Date?
+
+    /// Source values remain available without treating foreign currency as dollars.
+    public var displayAmount: Double? { plaidOriginalAmount ?? amountUSD }
+    public var displayCurrencyCode: String {
+        plaidCurrencyCode ?? (plaidTransactionID == nil || (amountUSD != nil && plaidOriginalAmount == nil) ? "USD" : "XXX")
+    }
+    public var displayAmountText: String {
+        guard let amount = displayAmount else { return "—" }
+        if displayCurrencyCode == "XXX" { return "\(amount.formatted()) (currency unavailable)" }
+        return amount.formatted(.currency(code: displayCurrencyCode))
+    }
+
     
     @Relationship public var creditCard: Bill?
     

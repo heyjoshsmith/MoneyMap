@@ -26,6 +26,7 @@ private struct LinkedCardPullToRefresh: ViewModifier {
 }
 
 struct BillView: View {
+    @State private var linkedBankAccount: PlaidAccountValue?
     
     @Environment(\.supportsImagePlayground) private var supportsImagePlayground
     @Environment(\.modelContext) private var modelContext
@@ -269,8 +270,8 @@ struct BillView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Bank Sync")
                         .font(.headline)
-                    if let updatedAt = bill.plaidUpdatedAt {
-                        Text("Updated \(updatedAt.formatted(date: .abbreviated, time: .shortened))")
+                    if let updatedAt = bill.plaidUpdatedAt, updatedAt.timeIntervalSince1970 > 0 {
+                        Text("Balance updated \(updatedAt.formatted(date: .abbreviated, time: .shortened))")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     } else {
@@ -283,6 +284,14 @@ struct BillView: View {
                 if isRefreshingCard {
                     ProgressView().accessibilityLabel("Updating card")
                 }
+            }
+            if let linkedBankAccount {
+                NavigationLink {
+                    BankAccountDataView(account: linkedBankAccount)
+                } label: {
+                    Label("Bank Details", systemImage: "building.columns")
+                }
+                .font(.subheadline)
             }
             Text(isRefreshingCard ? "Updating card…" : (cardRefreshMessage ?? "Pull to refresh from the latest Mac bank sync."))
                 .font(.caption)
@@ -305,6 +314,9 @@ struct BillView: View {
         do {
             let previousUpdate = bill.plaidUpdatedAt
             let updatedAt = try await LinkedCardRefreshService.refresh(bill, context: modelContext)
+            let snapshotContext = ModelContext(try PlaidSyncContainerFactory.make())
+            linkedBankAccount = try snapshotContext.fetch(FetchDescriptor<PlaidAccountSnapshot>())
+                .first(where: { $0.accountID == bill.plaidAccountID }).map(PlaidAccountValue.init)
             if Date().timeIntervalSince(updatedAt) > 2 * 60 * 60 {
                 cardRefreshMessage = "Latest saved details loaded. Open MoneyMap on your Mac for newer bank data."
             } else {
@@ -357,6 +369,16 @@ struct BillView: View {
             activity.appEntityIdentifier = EntityIdentifier(for: entity)
         }
         .onAppear {
+            if isLinkedCard {
+                do {
+                    let snapshotContext = ModelContext(try PlaidSyncContainerFactory.make())
+                    try LinkedCardRefreshService.reconcile(snapshotContext: snapshotContext, context: modelContext)
+                    linkedBankAccount = try snapshotContext.fetch(FetchDescriptor<PlaidAccountSnapshot>())
+                        .first(where: { $0.accountID == bill.plaidAccountID }).map(PlaidAccountValue.init)
+                } catch {
+                    cardRefreshMessage = error.localizedDescription
+                }
+            }
             MoneyMapIntentDonations.donateOpenBill(bill)
             refreshDisplayTransactions()
             loadBillMeta()
@@ -400,9 +422,11 @@ struct BillView: View {
                         }
                     }
 
-                    Section {
-                        Button(MoneyMapAction.importTransactions.title, systemImage: MoneyMapAction.importTransactions.systemImage) {
-                            showingImporter = true
+                    if bill.canImportTransactionsManually {
+                        Section {
+                            Button(MoneyMapAction.importTransactions.title, systemImage: MoneyMapAction.importTransactions.systemImage) {
+                                showingImporter = true
+                            }
                         }
                     }
                     Section {
@@ -757,7 +781,7 @@ struct BillView: View {
     }
 
     private var dueDateText: String {
-        bill.dueDate.map(MoneyMapFormatters.mediumDateString(for:)) ?? "No date"
+        bill.displayDueDate.map(MoneyMapFormatters.mediumDateString(for:)) ?? "No date"
     }
 
     private var amountMetricTitle: String {
@@ -787,7 +811,8 @@ struct BillView: View {
             return bill.lifecycleState.icon
         }
 
-        switch bill.status {
+        if bill.bankReportedOverdue == false { return "checkmark.circle.fill" }
+        switch bill.effectiveStatus {
         case .paid:
             return "checkmark.circle.fill"
         case .overdue:
@@ -814,7 +839,7 @@ struct BillView: View {
         if bill.category == .creditCard {
             return MoneyMapAction.makePayment.systemImage
         }
-        if bill.lifecycleState == .active && bill.status != .paid {
+        if bill.lifecycleState == .active && bill.effectiveStatus != .paid {
             return "checkmark.circle"
         }
         return statusIcon
@@ -846,7 +871,7 @@ struct BillView: View {
             return "Record a payment when you make one to keep the balance current."
         }
 
-        if bill.status == .paid {
+        if bill.effectiveStatus == .paid {
             return "Paid for this cycle. Adjust the payment date if the record is off."
         }
 
@@ -862,7 +887,7 @@ struct BillView: View {
             return "Mark this bill paid after you make the payment."
         }
 
-        if bill.status == .overdue {
+        if bill.effectiveStatus == .overdue {
             return "Overdue. Open the pay link, then mark it paid when you're done."
         }
 
@@ -1754,7 +1779,7 @@ struct BillView: View {
 
     private var canManuallyMarkPaid: Bool {
         bill.lifecycleState == .active &&
-            bill.status != .paid &&
+            bill.effectiveStatus != .paid &&
             bill.paymentMode != .autopay &&
             bill.paymentMode != .inPerson
     }

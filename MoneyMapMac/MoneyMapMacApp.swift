@@ -10,6 +10,8 @@ import SwiftUI
 
 @main
 struct MoneyMapMacApp: App {
+    @NSApplicationDelegateAdaptor(MacBackgroundLifecycle.self) private var lifecycle
+    @AppStorage(MacBackgroundLifecycle.keepRunningKey) private var keepRunning = true
     private let modelContainer: ModelContainer
     private let coordinator: MacPlaidSyncCoordinator
 
@@ -38,17 +40,43 @@ struct MoneyMapMacApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
-            MacBankSyncDashboardView(coordinator: coordinator)
+        Window("MoneyMap", id: "main") {
+            MacWorkspaceRoot(coordinator: coordinator, lifecycle: lifecycle)
         }
         .modelContainer(modelContainer)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .appTermination) {
+                Button(keepRunning ? "Close Window & Keep Syncing" : "Quit MoneyMap") { lifecycle.closeWorkspaceOrQuit() }
+                    .keyboardShortcut("q")
+                if keepRunning {
+                    Button("Quit MoneyMap Completely") { lifecycle.quitCompletely() }
+                        .keyboardShortcut("q", modifiers: [.command, .option])
+                }
+            }
         }
 
+        MenuBarExtra {
+            MacMenuBarView(coordinator: coordinator, lifecycle: lifecycle).modelContainer(modelContainer)
+        } label: { MacMenuBarIcon() }
+        .menuBarExtraStyle(.window)
+
         Settings {
-            MacBankSyncSettingsView()
+            MacBankSyncSettingsView(coordinator: coordinator)
                 .modelContainer(modelContainer)
         }
+    }
+}
+
+private struct MacWorkspaceRoot: View {
+    @Environment(\.openWindow) private var openWindow
+    @ObservedObject var coordinator: MacPlaidSyncCoordinator
+    @ObservedObject var lifecycle: MacBackgroundLifecycle
+    var body: some View {
+        MacBankSyncDashboardView(coordinator: coordinator)
+            .background(MacWorkspaceWindowBridge(lifecycle: lifecycle, openWindow: { openWindow(id: "main") }))
+            .toolbar {
+                ToolbarItem { Button { lifecycle.moveToMenuBar() } label: { Label("Move to Menu Bar", systemImage: "menubar.rectangle") }.help("Hide the Dock icon and keep bank sync running") }
+            }
     }
 }

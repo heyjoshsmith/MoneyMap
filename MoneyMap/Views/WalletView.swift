@@ -10,6 +10,7 @@ import SwiftUI
 import TipKit
 
 struct WalletView: View {
+    @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var deepLinkManager: DeepLinkManager
     @Query private var bills: [Bill]
     @Query(sort: \Transaction.transactionDate, order: .reverse) private var transactions: [Transaction]
@@ -120,6 +121,10 @@ struct WalletView: View {
         }
         .onChange(of: bills.count) { _, _ in
             consumeDeepLinks()
+            scheduleRecurringReviewRefresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppRefreshEvents.billsDidChange)) { _ in
+            refreshTransactionSummaryCache()
             scheduleRecurringReviewRefresh()
         }
         .onChange(of: transactions.count) { _, _ in
@@ -693,7 +698,7 @@ struct WalletView: View {
 
         let unpaidBills = activeBills.filter { $0.status != .paid }
         let needsAttention = activeBills.filter { bill in
-            bill.status != .paid && billNeedsAttentionPreview(bill)
+            !bill.displayPaymentIsPaid && billNeedsAttentionPreview(bill)
         }
         if !needsAttention.isEmpty {
             if !recurringReviewSuggestions.isEmpty {
@@ -826,8 +831,8 @@ struct WalletView: View {
 
     private func billNeedsAttentionPreview(_ bill: Bill) -> Bool {
         guard bill.lifecycleState == .active else { return false }
-        guard bill.status != .paid else { return false }
-        guard let dueDate = bill.dueDate else { return true }
+        guard !bill.displayPaymentIsPaid else { return false }
+        guard let dueDate = bill.displayDueDate else { return true }
 
         let today = Calendar.current.startOfDay(for: .now)
         let dueDay = Calendar.current.startOfDay(for: dueDate)
@@ -965,6 +970,7 @@ struct WalletView: View {
         do {
             let context = ModelContext(plaidContainer)
             try await PlaidCloudSyncService.pull(context: context)
+            try LinkedCardRefreshService.reconcile(snapshotContext: context, context: modelContext)
             loadPlaidSnapshots(context: context)
             let macRefreshOutcome = await requestMacRefreshIfNeeded(context: context)
             let summary = makeRefreshSummary(context: context, macRefreshOutcome: macRefreshOutcome)
@@ -1127,6 +1133,7 @@ struct WalletView: View {
         case .completed:
             let context = ModelContext(plaidContainer)
             try await PlaidCloudSyncService.pull(context: context)
+            try LinkedCardRefreshService.reconcile(snapshotContext: context, context: modelContext)
             loadPlaidSnapshots(context: context)
             let outcome = WalletMacRefreshOutcome.completed(
                 ageLabel: currentMacSyncAgeLabel(context: context),
@@ -1844,7 +1851,13 @@ private struct WalletCardRow: View {
 }
 
 private struct WalletCardsView: View {
+    @Environment(\.modelContext) private var modelContext
     let cards: [Bill]
+    @State private var billToEdit: Bill?
+    @State private var alertValue = ""
+    @State private var editingBalance = false
+    @State private var editingLimit = false
+    @State private var makingPayment = false
 
     var body: some View {
         List {
@@ -1855,25 +1868,117 @@ private struct WalletCardsView: View {
                     description: Text("Cards you add manually or connect through Plaid will appear here.")
                 )
             } else {
-                Section {
-                    ForEach(cards) { card in
-                        NavigationLink {
-                            BillView(bill: card)
-                        } label: {
-                            WalletCardRow(card: card)
-                        }
-                    }
-                } header: {
-                    Text("\(cards.count) Card\(cards.count == 1 ? "" : "s")")
-                }
-                .listRowBackground(MoneyMapDesign.surfaceBackground)
+                CreditCardSection(
+                    bills: cards,
+                    billToEdit: $billToEdit,
+                    alertValue: $alertValue,
+                    editingBalance: $editingBalance,
+                    editingLimit: $editingLimit,
+                    makingPayment: $makingPayment
+                )
             }
         }
         .navigationTitle("Cards")
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(MoneyMapDesign.groupedBackground)
+        .alert(billToEdit?.name ?? "Current Balance", isPresented: $editingBalance) {
+            TextField(balancePlaceholder, text: $alertValue)
+                .keyboardType(.decimalPad)
+            Button("Cancel", role: .cancel) { }
+            Button("Done") {
+                if billToEdit?.hasLinkedBankData != true { billToEdit?.currentCreditCardDetails?.cardBalance = Double(alertValue) ?? 0 }
+                saveBillChanges()
+                editingBalance = false
+                alertValue.removeAll()
+            }
+        } message: {
+            Text("What is your current balance?")
+        }
+        .alert(billToEdit?.name ?? "Current Limit", isPresented: $editingLimit) {
+            TextField(limitPlaceholder, text: $alertValue)
+                .keyboardType(.decimalPad)
+            Button("Cancel", role: .cancel) { }
+            Button("Done") {
+                if billToEdit?.hasLinkedBankData != true { billToEdit?.currentCreditCardDetails?.creditLimit = Double(alertValue) ?? 0 }
+                saveBillChanges()
+                editingLimit = false
+                alertValue.removeAll()
+            }
+        } message: {
+            Text("What is your current limit?")
+        }
+        .alert(paymentTitle, isPresented: $makingPayment) {
+            TextField(paymentPlaceholder, text: $alertValue)
+                .keyboardType(.decimalPad)
+            Button("Cancel", role: .cancel) { }
+            Button("Done") {
+                if let bill = billToEdit {
+                    let amount = Double(alertValue) ?? 0
+                    let previousBalance = bill.currentCreditCardDetails?.cardBalance
+                    let previousDatePaid = bill.datePaid
+                    let previousDueDate = bill.dueDate
+                    let previousStatus = bill.status
+                    bill.makePayment(of: amount)
+                    AuditService.logBillPayment(
+                        bill: bill,
+                        previousBalance: previousBalance,
+                        previousDatePaid: previousDatePaid,
+                        previousDueDate: previousDueDate,
+                        previousStatus: previousStatus,
+                        amount: amount,
+                        context: modelContext
+                    )
+                    try? modelContext.save()
+                    AppRefreshEvents.notifyBillsDidChange()
+                    MoneyMapIntentDonations.donateMarkBillPaid(bill, paymentAmount: amount)
+                }
+                makingPayment = false
+                alertValue.removeAll()
+            }
+        } message: {
+            Text("How much would you like to pay off this bill?")
+        }
+
     }
+
+    private func saveBillChanges() {
+        try? modelContext.save()
+        AppRefreshEvents.notifyBillsDidChange()
+    }
+
+    private var paymentPlaceholder: String {
+        if let payment = billToEdit?.currentCreditCardDetails?.recommendedPayment {
+            return "Recommended: \(payment.currency)"
+        } else {
+            return "Enter Payment"
+        }
+    }
+
+    private var balancePlaceholder: String {
+        if let balance = billToEdit?.currentCreditCardDetails?.cardBalance {
+            return balance.currency
+        } else {
+            return "Enter Balance"
+        }
+    }
+
+    private var limitPlaceholder: String {
+        if let balance = billToEdit?.currentCreditCardDetails?.creditLimit {
+            return balance.currency
+        } else {
+            return "Enter Balance"
+        }
+    }
+
+    private var paymentTitle: String {
+
+        if let billToEdit, let name = billToEdit.name {
+            return name
+        }
+        return "Payment Amount"
+    }
+
 }
 
 private struct WalletTransactionRow: View {
@@ -1900,10 +2005,11 @@ private struct WalletTransactionRow: View {
 
             Spacer()
 
-            Text(MoneyMapFormatters.currencyString(for: transaction.amountUSD ?? 0))
+            Text(transaction.displayAmountText)
+                .strikethrough(transaction.plaidBankRemovedAt != nil)
                 .font(.subheadline.weight(.semibold))
                 .monospacedDigit()
-                .foregroundStyle((transaction.amountUSD ?? 0) < 0 ? MoneyMapDesign.calmGreen : .primary)
+                .foregroundStyle((transaction.displayAmount ?? 0) < 0 ? MoneyMapDesign.calmGreen : .primary)
         }
         .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1926,6 +2032,7 @@ private struct WalletTransactionRow: View {
     }
 
     private var detail: String {
+        if transaction.plaidBankRemovedAt != nil { return "Removed by bank · excluded from totals" }
         let date = (transaction.transactionDate ?? transaction.clearingDate ?? transaction.plaidImportedAt)
             .map(MoneyMapFormatters.mediumDateString(for:)) ?? "Unknown date"
         let category = transaction.category ?? "Uncategorized"
@@ -2037,19 +2144,17 @@ struct WalletTransactionsView: View {
     private let noTypeFilterValue = "__moneymap_no_type__"
     private let noCategoryFilterValue = "__moneymap_no_category__"
 
-    private var sortedTransactions: [Transaction] {
-        transactions.sorted { lhs, rhs in
-            transactionDate(for: lhs) > transactionDate(for: rhs)
-        }
-    }
-
-    private var visibleTransactions: [Transaction] {
+    private var matchingTransactions: [Transaction] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return sortedTransactions.filter { transaction in
+        return transactions.filter { transaction in
             matchesSelectedFilters(transaction)
                 && matchesSearchTokens(transaction)
                 && (query.isEmpty || searchableText(for: transaction).localizedCaseInsensitiveContains(query))
         }
+    }
+
+    private var visibleTransactions: [Transaction] {
+        matchingTransactions.sorted { transactionDate(for: $0) > transactionDate(for: $1) }
     }
 
     private var transactionListContent: some View {
@@ -2074,7 +2179,7 @@ struct WalletTransactionsView: View {
                     description: Text("Imported Plaid and card transactions will appear here.")
                 )
                 .moneyMapListSectionBackground()
-            } else if visibleTransactions.isEmpty {
+            } else if matchingTransactions.isEmpty {
                 ContentUnavailableView(
                     "No Matching Transactions",
                     systemImage: hasActiveFilters ? "line.3.horizontal.decrease.circle" : "magnifyingglass",
@@ -2114,7 +2219,7 @@ struct WalletTransactionsView: View {
                 Button(isSelecting ? "Done" : "Select") {
                     toggleSelectionMode()
                 }
-                .disabled(visibleTransactions.isEmpty && !isSelecting)
+                .disabled(matchingTransactions.isEmpty && !isSelecting)
             }
         }
         .safeAreaBar(edge: .bottom) {
@@ -2241,10 +2346,10 @@ struct WalletTransactionsView: View {
 
     private var transactionListHeader: String {
         if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !hasActiveFilters {
-            return "\(sortedTransactions.count) Transaction\(sortedTransactions.count == 1 ? "" : "s")"
+            return "\(transactions.count) Transaction\(transactions.count == 1 ? "" : "s")"
         }
 
-        return "\(visibleTransactions.count) Match\(visibleTransactions.count == 1 ? "" : "es")"
+        return "\(matchingTransactions.count) Match\(matchingTransactions.count == 1 ? "" : "es")"
     }
 
     private var filterSummarySection: some View {
@@ -2288,7 +2393,7 @@ struct WalletTransactionsView: View {
                 Button(allVisibleTransactionsSelected ? "Clear" : "Select All") {
                     toggleSelectAllVisibleTransactions()
                 }
-                .disabled(visibleTransactions.isEmpty)
+                .disabled(matchingTransactions.isEmpty)
 
                 Spacer(minLength: 8)
 
@@ -2566,8 +2671,8 @@ struct WalletTransactionsView: View {
     }
 
     private var allVisibleTransactionsSelected: Bool {
-        !visibleTransactions.isEmpty
-            && visibleTransactions.allSatisfy { selectedTransactionIDs.contains($0.persistentModelID) }
+        !matchingTransactions.isEmpty
+            && matchingTransactions.allSatisfy { selectedTransactionIDs.contains($0.persistentModelID) }
     }
 
     private func transactionDate(for transaction: Transaction) -> Date {
@@ -2986,7 +3091,7 @@ struct WalletTransactionsView: View {
     }
 
     private func toggleSelectAllVisibleTransactions() {
-        let visibleIDs = Set(visibleTransactions.map(\.persistentModelID))
+        let visibleIDs = Set(matchingTransactions.map(\.persistentModelID))
         if allVisibleTransactionsSelected {
             selectedTransactionIDs.subtract(visibleIDs)
         } else {
@@ -2996,12 +3101,12 @@ struct WalletTransactionsView: View {
 
     private func pruneSelectionToVisibleTransactions() {
         guard isSelecting else { return }
-        selectedTransactionIDs.formIntersection(Set(visibleTransactions.map(\.persistentModelID)))
+        selectedTransactionIDs.formIntersection(Set(matchingTransactions.map(\.persistentModelID)))
     }
 
     private func pruneSelectionToExistingTransactions() {
         selectedTransactionIDs.formIntersection(Set(transactions.map(\.persistentModelID)))
-        if isSelecting && selectedTransactionIDs.isEmpty && visibleTransactions.isEmpty {
+        if isSelecting && selectedTransactionIDs.isEmpty && matchingTransactions.isEmpty {
             isSelecting = false
         }
     }
@@ -3684,6 +3789,7 @@ struct WalletTransactionDetailView: View {
         List {
             headerSection
             detailsSection
+            BankTransactionDataSection(enrichmentJSON: transaction.plaidEnrichmentJSON)
             datesSection
             sourceSection
             deleteSection
@@ -3728,11 +3834,11 @@ struct WalletTransactionDetailView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text(MoneyMapFormatters.currencyString(for: transaction.amountUSD ?? 0))
+                Text(transaction.displayAmountText)
                     .font(.largeTitle.weight(.bold))
                     .fontDesign(.rounded)
                     .monospacedDigit()
-                    .foregroundStyle((transaction.amountUSD ?? 0) < 0 ? MoneyMapDesign.calmGreen : .primary)
+                    .foregroundStyle((transaction.displayAmount ?? 0) < 0 ? MoneyMapDesign.calmGreen : .primary)
 
                 if let detail = headerDetail {
                     Text(detail)
@@ -3821,7 +3927,8 @@ struct WalletTransactionDetailView: View {
     }
 
     private var transactionStatusText: String {
-        transaction.plaidIsPending == true ? "Pending" : "Posted"
+        if transaction.plaidBankRemovedAt != nil { return "Removed by bank · excluded from totals" }
+        return transaction.plaidIsPending == true ? "Pending" : "Posted"
     }
 
     private var transactionStatusAndDateText: String? {

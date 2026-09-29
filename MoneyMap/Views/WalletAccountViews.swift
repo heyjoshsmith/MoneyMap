@@ -248,6 +248,11 @@ struct WalletAccountDetailView: View {
             headerSection
             personalizationSection
             balanceSection
+            Section {
+                NavigationLink { BankAccountDataView(account: account) } label: {
+                    Label("Bank Details", systemImage: "building.columns")
+                }
+            }
             transactionsSection
         }
         .navigationTitle(account.displayName)
@@ -637,10 +642,11 @@ private struct WalletAccountTransactionRow: View {
 
             Spacer(minLength: 8)
 
-            Text(MoneyMapFormatters.currencyString(for: transaction.amountUSD ?? 0))
+            Text(transaction.displayAmountText)
+                .strikethrough(transaction.plaidBankRemovedAt != nil)
                 .font(.subheadline.weight(.semibold))
                 .monospacedDigit()
-                .foregroundStyle((transaction.amountUSD ?? 0) < 0 ? MoneyMapDesign.calmGreen : .primary)
+                .foregroundStyle((transaction.displayAmount ?? 0) < 0 ? MoneyMapDesign.calmGreen : .primary)
         }
         .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -660,7 +666,7 @@ private struct WalletAccountTransactionRow: View {
             transaction.category?.nilIfBlank,
             transaction.type?.nilIfBlank,
             transactionDateText,
-            transaction.plaidIsPending == true ? "Pending" : nil
+            transaction.plaidBankRemovedAt != nil ? "Removed by bank · Excluded from totals" : transaction.plaidIsPending == true ? "Pending" : nil
         ]
         .compactMap { $0 }
         .joined(separator: " - ")

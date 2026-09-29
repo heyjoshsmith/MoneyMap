@@ -20,11 +20,15 @@ struct WatchBillEditor: View {
         Form {
             TextField("Name", text: $name)
             WatchAmountField(title: "Amount (USD)", amount: $amount)
-            DatePicker("Due", selection: $date, displayedComponents: .date)
+            DatePicker(bill?.hasLinkedBankData == true ? "Planned Due" : "Due", selection: $date, displayedComponents: .date)
             Picker("Category", selection: $category) { ForEach(BillCategory.allCases, id: \.self) { Text($0.name).tag($0) } }
+                .disabled(bill?.hasLinkedBankData == true)
             if category == .creditCard {
+                Group {
                 WatchAmountField(title: "Card balance (USD)", amount: $cardBalance)
                 WatchAmountField(title: "Credit limit (USD)", amount: $creditLimit)
+                }.disabled(bill?.hasLinkedBankData == true)
+                if bill?.hasLinkedBankData == true { Text("Balances and limits update from your bank.").font(.caption) }
             }
             Toggle("Repeats", isOn: $repeats)
             if repeats {
@@ -34,7 +38,7 @@ struct WatchBillEditor: View {
             Button("Save") {
                 do {
                     try WatchFinanceService.validAmount(amount)
-                    if category == .creditCard {
+                    if category == .creditCard && bill?.hasLinkedBankData != true {
                         try WatchFinanceService.validAmount(creditLimit)
                         guard cardBalance.isFinite, cardBalance >= 0 else { throw FinanceActionError.invalidAmount }
                     }
@@ -42,8 +46,8 @@ struct WatchBillEditor: View {
                     let value = bill ?? Bill(name: name, amount: amount, dueDate: date, category: category, recurrenceInterval: repeats ? interval : nil, recurrenceUnit: repeats ? recurrenceUnit : nil)
                     if bill == nil { context.insert(value) }
                     value.name = name.trimmingCharacters(in: .whitespacesAndNewlines); value.amount = amount; value.dueDate = date
-                    value.category = category; value.recurrenceInterval = repeats ? interval : nil; value.recurrenceUnit = repeats ? recurrenceUnit : nil
-                    if category == .creditCard {
+                    if !value.hasLinkedBankData { value.category = category }; value.recurrenceInterval = repeats ? interval : nil; value.recurrenceUnit = repeats ? recurrenceUnit : nil
+                    if category == .creditCard && !value.hasLinkedBankData {
                         var details = value.currentCreditCardDetails ?? CreditCardDetails(creditLimit: creditLimit, cardBalance: cardBalance)
                         details.creditLimit = creditLimit; details.cardBalance = cardBalance; value.currentCreditCardDetails = details
                     }
@@ -52,7 +56,7 @@ struct WatchBillEditor: View {
             }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             if let error { Text(error).font(.caption) }
         }.navigationTitle(bill == nil ? "New Bill" : "Edit Bill")
-            .onAppear { if let bill { original = BillActionState(bill); name = bill.name ?? ""; amount = bill.amount ?? 0; date = bill.dueDate ?? .now; category = bill.category ?? .other; repeats = bill.recurrenceInterval != nil; interval = bill.recurrenceInterval ?? 1; recurrenceUnit = bill.recurrenceUnit ?? .month; cardBalance = abs(bill.currentCreditCardDetails?.cardBalance ?? 0); creditLimit = bill.currentCreditCardDetails?.creditLimit ?? 0 } }
+            .onAppear { if let bill { original = BillActionState(bill); name = bill.name ?? ""; amount = bill.amount ?? 0; date = bill.dueDate ?? .now; category = bill.category ?? .other; repeats = bill.recurrenceInterval != nil; interval = bill.recurrenceInterval ?? 1; recurrenceUnit = bill.recurrenceUnit ?? .month; cardBalance = bill.currentCreditCardDetails?.cardBalance ?? 0; creditLimit = bill.currentCreditCardDetails?.creditLimit ?? 0 } }
     }
 }
 

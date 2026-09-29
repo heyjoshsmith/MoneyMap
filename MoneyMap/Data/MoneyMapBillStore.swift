@@ -36,10 +36,10 @@ enum MoneyMapBillStore {
 
         return try fetchBills()
             .filter {
-                guard $0.datePaid == nil, let dueDate = $0.dueDate else { return false }
+                guard !$0.displayPaymentIsPaid, let dueDate = $0.displayDueDate else { return false }
                 return Calendar.current.startOfDay(for: dueDate) >= today
             }
-            .sorted { ($0.dueDate ?? .distantFuture) < ($1.dueDate ?? .distantFuture) }
+            .sorted { ($0.displayDueDate ?? .distantFuture) < ($1.displayDueDate ?? .distantFuture) }
             .first
     }
 

@@ -24,7 +24,7 @@ fileprivate func summarize(bills: [Bill]) -> BillSummaries {
 
     // Sort by due date then name
     let sorted = bills.sorted { lhs, rhs in
-        if let l = lhs.dueDate, let r = rhs.dueDate, l != r { return l < r }
+        if let l = lhs.displayDueDate, let r = rhs.displayDueDate, l != r { return l < r }
         return (lhs.name ?? "").localizedCaseInsensitiveCompare(rhs.name ?? "") == .orderedAscending
     }
 
@@ -37,7 +37,7 @@ fileprivate func summarize(bills: [Bill]) -> BillSummaries {
         let name = bill.name ?? "Unnamed bill"
         let amount = bill.amount ?? 0
         let amountStr = MoneyMapFormatters.currencyString(for: amount)
-        let dateStr = bill.dueDate.map { MoneyMapFormatters.mediumDateString(for: $0) } ?? "no due date"
+        let dateStr = bill.displayDueDate.map { MoneyMapFormatters.mediumDateString(for: $0) } ?? "no due date"
         return (
             spoken: "\(name) \(amountStr) on \(dateStr)",
             visual: "• \(name) — \(amountStr) — due \(dateStr)"
@@ -81,7 +81,7 @@ struct UpcomingBillsIntent: AppIntent {
 
         do {
             let bills = try MoneyMapBillStore.fetchBills().filter { bill in
-                guard bill.datePaid == nil, let dueDate = bill.dueDate else { return false }
+                guard !bill.displayPaymentIsPaid, let dueDate = bill.displayDueDate else { return false }
                 return dueDate >= today && dueDate <= upper
             }
             let summaries = summarize(bills: bills)

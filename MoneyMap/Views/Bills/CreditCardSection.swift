@@ -146,6 +146,7 @@ private struct CardRowWithDelete: View {
                     billToEdit = card
                     editingBalance = true
                 }
+                .disabled(card.hasLinkedBankData)
                 .tint(MoneyMapDesign.sage)
             }
             .swipeActions(edge: .trailing) {
@@ -153,6 +154,7 @@ private struct CardRowWithDelete: View {
                     billToEdit = card
                     editingLimit = true
                 }
+                .disabled(card.hasLinkedBankData)
                 .tint(MoneyMapDesign.warningGold)
                 Button("Delete", systemImage: "trash") {
                     showingDeleteConfirmation = true
@@ -189,10 +191,12 @@ private struct CardRowWithDelete: View {
                     billToEdit = card
                     editingBalance = true
                 }
+                .disabled(card.hasLinkedBankData)
                 Button(MoneyMapAction.editLimit.title, systemImage: MoneyMapAction.editLimit.systemImage) {
                     billToEdit = card
                     editingLimit = true
                 }
+                .disabled(card.hasLinkedBankData)
                 Button("Delete", systemImage: "trash", role: .destructive) {
                     showingDeleteConfirmation = true
                 }
@@ -346,7 +350,7 @@ private struct CreditCardListRow: View {
     }
 
     private var dueText: String {
-        guard let dueDate = card.dueDate else { return "No due date" }
+        guard let dueDate = card.displayDueDate else { return "No due date" }
         return "Due \(MoneyMapFormatters.mediumDateString(for: dueDate))"
     }
 

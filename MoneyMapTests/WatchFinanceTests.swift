@@ -41,7 +41,7 @@ final class PayScheduleTests: XCTestCase {
 @MainActor final class WatchFinanceTests: XCTestCase {
     private func container() throws -> ModelContainer {
         try ModelContainer(for: Goal.self, GoalContribution.self, Bill.self, BillPaymentEntry.self, FinanceActionReceipt.self, AuditEvent.self,
-                           configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+                           configurations: ModelConfiguration(UUID().uuidString, isStoredInMemoryOnly: true, cloudKitDatabase: .none))
     }
     func testContributionRetryIsIdempotentAndUndoRestoresTotal() throws {
         let container = try container(); let context = container.mainContext

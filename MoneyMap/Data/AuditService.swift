@@ -200,12 +200,13 @@ enum AuditService {
         case .revertBillPayment:
             guard let billID = event.entityID,
                   let bill = try fetchBill(id: billID, context: context) else { return }
-            if let previousBalance = event.oldDoubleValue, bill.category == .creditCard {
+            if let previousBalance = event.oldDoubleValue, bill.category == .creditCard, !bill.hasLinkedBankData {
                 bill.currentCreditCardDetails?.cardBalance = previousBalance
             }
             bill.datePaid = event.oldDateValue
             bill.dueDate = event.oldAuxDateValue
             bill.status = status(fromRaw: event.oldStatusRaw, date: event.oldStatusDateValue)
+            bill.checkStatus()
         }
 
         event.undoneAt = Date()

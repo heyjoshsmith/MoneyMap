@@ -15,6 +15,42 @@ final class BillPaymentMatcherTests: XCTestCase {
         return calendar
     }
 
+    func testBatchRefreshMatchesIndividualSelectionWithLargeHistory() {
+        let bills = (0..<32).map { index in
+            Bill(name: "Utility vendor \(index)", amount: Double(100 + index), dueDate: date(2026, 4, 5),
+                 category: .utilities, recurrenceInterval: nil, recurrenceUnit: nil)
+        }
+        var transactions = (0..<3400).map { _ in
+            paymentTransaction(merchant: "Old merchant", amount: 10, date: date(2025, 4, 5))
+        }
+        for bill in bills {
+            let payment = paymentTransaction(merchant: "Direct", amount: bill.amount!, date: date(2026, 4, 5))
+            payment.linkedBillID = bill.id
+            transactions.append(payment)
+        }
+        let start = Date()
+        XCTAssertTrue(BillPaymentMatcher.refreshStatuses(for: bills, transactions: transactions,
+                                                        today: date(2026, 4, 6), calendar: calendar))
+        XCTAssertTrue(bills.allSatisfy { $0.status == .paid && $0.datePaid == date(2026, 4, 5) })
+        print("PERFORMANCE: 32 bills against 3432 payments: \(Date().timeIntervalSince(start)) seconds")
+    }
+
+    func testNewestDirectPaymentWinsOverNewerTextMatchAndOldHistory() {
+        let bill = Bill(name: "StreamBox", amount: 15.99, dueDate: date(2026, 4, 5),
+                        category: .streaming, recurrenceInterval: nil, recurrenceUnit: nil)
+        let old = paymentTransaction(merchant: "StreamBox", amount: 15.99, date: date(2025, 4, 5))
+        let direct = paymentTransaction(merchant: "Custom label", amount: 15.99, date: date(2026, 4, 4))
+        direct.linkedBillID = bill.id
+        let newerDirect = paymentTransaction(merchant: "Custom label", amount: 15.99, date: date(2026, 4, 5))
+        newerDirect.linkedBillID = bill.id
+        let inferred = paymentTransaction(merchant: "StreamBox", amount: 15.99, date: date(2026, 4, 6))
+        XCTAssertTrue(BillPaymentMatcher.currentCyclePaymentTransaction(
+            for: bill, in: [inferred, direct, old, newerDirect],
+            today: date(2026, 4, 6), calendar: calendar) === newerDirect)
+        XCTAssertTrue(BillPaymentMatcher.currentCyclePaymentTransaction(
+            for: bill, in: [old, inferred], today: date(2026, 4, 6), calendar: calendar) === inferred)
+    }
+
     func testCurrentCycleTransactionMarksBillPaid() {
         let bill = Bill(
             name: "StreamBox",
@@ -40,6 +76,15 @@ final class BillPaymentMatcherTests: XCTestCase {
         XCTAssertTrue(didChange)
         XCTAssertEqual(bill.status, .paid)
         XCTAssertEqual(bill.datePaid, date(2026, 4, 5))
+    }
+
+    func testBankRemovedTransactionCannotMarkBillPaidEvenIfAmountRemains() {
+        let bill = Bill(name: "StreamBox", amount: 15.99, dueDate: date(2026, 4, 5),
+                        category: .streaming, recurrenceInterval: nil, recurrenceUnit: nil)
+        let transaction = paymentTransaction(merchant: "StreamBox", amount: 15.99, date: date(2026, 4, 5))
+        transaction.plaidBankRemovedAt = date(2026, 4, 6)
+        XCTAssertNil(BillPaymentMatcher.currentCyclePaymentTransaction(
+            for: bill, in: [transaction], today: date(2026, 4, 6), calendar: calendar))
     }
 
     func testCurrentCycleMatchRequiresNameOverlap() {

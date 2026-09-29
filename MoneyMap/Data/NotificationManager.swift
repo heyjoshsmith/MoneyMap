@@ -120,7 +120,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         return bills.compactMap { bill -> BillReminderCandidate? in
             guard bill.reminderNotificationsEnabled else { return nil }
             guard bill.lifecycleState == .active else { return nil }
-            guard bill.datePaid == nil, let dueDate = bill.dueDate else { return nil }
+            guard !bill.displayPaymentIsPaid, let dueDate = bill.displayDueDate else { return nil }
             guard let reminderDate = reminderDate(for: dueDate), reminderDate > now.addingTimeInterval(60) else {
                 return nil
             }
@@ -273,12 +273,12 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         let billsDue: [Bill]
         if let nextPayday {
             billsDue = bills.filter { bill in
-                guard bill.lifecycleState == .active, bill.status != .paid, let dueDate = bill.dueDate else { return false }
+                guard bill.lifecycleState == .active, !bill.displayPaymentIsPaid, let dueDate = bill.displayDueDate else { return false }
                 return dueDate > payday && dueDate <= nextPayday
             }
         } else {
             billsDue = bills.filter { bill in
-                guard bill.lifecycleState == .active, bill.status != .paid, let dueDate = bill.dueDate else { return false }
+                guard bill.lifecycleState == .active, !bill.displayPaymentIsPaid, let dueDate = bill.displayDueDate else { return false }
                 return dueDate > payday
             }
         }

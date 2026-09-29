@@ -54,9 +54,9 @@ struct BillButton: View {
     var paymentMethods: [PaymentMethod] = []
 
     private var dueLabel: String {
-        guard let dueDate = bill.dueDate else { return "No due date" }
+        guard let dueDate = bill.displayDueDate else { return "No due date" }
         let daysUntilDue = Calendar.current.dateComponents([.day], from: Date(), to: dueDate).day ?? 0
-        if bill.status == .paid {
+        if bill.displayPaymentIsPaid {
             return "Paid"
         }
         if daysUntilDue < 0 {

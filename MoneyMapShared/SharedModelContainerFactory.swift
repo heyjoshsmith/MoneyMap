@@ -113,7 +113,7 @@ public enum MoneyMapSharedContainerFactory {
 
         if let container = try? ModelContainer(
             for: schema,
-            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+            configurations: [ModelConfiguration(UUID().uuidString, schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
         ) {
             lastReport = MoneyMapSharedContainerReport(mode: .inMemory, storeURL: nil, fallbackReason: fallbackReason)
             writeDiagnostic(lastReport)

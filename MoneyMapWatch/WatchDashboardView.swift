@@ -12,7 +12,7 @@ struct WatchDashboardView: View {
     @State private var path: [String] = []
     @State private var showSettings = false
     @State private var refreshError: String?
-    private var dueBills: [Bill] { bills.filter { $0.lifecycleState == .active && $0.datePaid == nil }.sorted(by: Bill.byDate) }
+    private var dueBills: [Bill] { bills.filter { $0.lifecycleState == .active && !$0.displayPaymentIsPaid }.sorted { ($0.displayDueDate ?? .distantFuture) < ($1.displayDueDate ?? .distantFuture) } }
     private var nextPayday: Date? { configs.compactMap { $0.nextScheduledPayday(onOrAfter: .now) }.min() }
     var body: some View {
         NavigationStack(path: $path) {
@@ -33,7 +33,7 @@ struct WatchDashboardView: View {
                     }.buttonStyle(.plain)
                     NavigationLink(value: "bills") {
                         WatchMetric(title: "Upcoming bills", value: WatchDesign.money(dueBills.prefix(5).reduce(0) { $0 + ($1.amount ?? 0) }),
-                            detail: "Next \(min(5, dueBills.count)) · \(dueBills.filter { ($0.dueDate ?? .distantFuture) < Calendar.current.startOfDay(for: .now) }.count) overdue",
+                            detail: "Next \(min(5, dueBills.count)) · \(dueBills.filter { ($0.displayDueDate ?? .distantFuture) < Calendar.current.startOfDay(for: .now) }.count) overdue",
                             symbol: "calendar", tint: WatchDesign.gold)
                     }.buttonStyle(.plain)
                     if let goal = goals.filter({ $0.remainingAmount > 0 }).sorted(by: { $0.createdDate < $1.createdDate }).first {

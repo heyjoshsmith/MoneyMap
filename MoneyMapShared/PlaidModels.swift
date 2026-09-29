@@ -10,6 +10,7 @@ import SwiftData
 
 @Model
 public class PlaidConnection: Identifiable {
+    public var enrichmentJSON: String?
     public var id: UUID = UUID()
     public var itemID: String = ""
     public var institutionID: String?
@@ -44,6 +45,7 @@ public class PlaidConnection: Identifiable {
 
 @Model
 public class PlaidAccountSnapshot: Identifiable {
+    public var enrichmentJSON: String?
     public var id: UUID = UUID()
     public var accountID: String = ""
     public var itemID: String = ""

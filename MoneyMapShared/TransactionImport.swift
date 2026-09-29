@@ -72,6 +72,22 @@ public struct TransactionCSVImportSummary: Hashable {
     }
 }
 
+public extension Bill {
+    var canImportTransactionsManually: Bool {
+        category == .creditCard
+            && (plaidAccountID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            && (plaidItemID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+}
+
+public enum TransactionCSVImportError: LocalizedError {
+    case ineligibleCard
+
+    public var errorDescription: String? {
+        "Choose a credit card that isn’t linked to Plaid. Linked cards receive transactions through bank sync."
+    }
+}
+
 public func importTransactions(fromCSVAt url: URL, to bill: Bill, context: ModelContext) throws -> Int {
     try importTransactionCSVFiles(from: [url], to: bill, context: context).importedRows
 }
@@ -119,6 +135,7 @@ private struct TransactionImportPlan {
 }
 
 private func makeImportPlan(from urls: [URL], for bill: Bill) throws -> TransactionImportPlan {
+    guard bill.canImportTransactionsManually else { throw TransactionCSVImportError.ineligibleCard }
     var knownSignatures = Set((bill.transactions ?? []).map(transactionSignature))
     var fileSummaries: [TransactionCSVImportFileSummary] = []
     var candidates: [TransactionImportCandidate] = []

@@ -23,10 +23,18 @@ struct WatchWalletView: View {
                 ForEach(accounts) { account in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(account.displayName).font(.headline)
-                        if let balance = account.availableBalance ?? account.currentBalance {
+                        let isDebt = ["credit", "loan"].contains(account.type.lowercased())
+                        if let balance = isDebt ? account.currentBalance : (account.availableBalance ?? account.currentBalance) {
                             Text(WatchDesign.money(balance, code: account.currencyCode ?? "USD")).font(.title3).privacySensitive()
                         } else { Text("Balance unavailable") }
-                        Text(account.updatedAt, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.caption2).foregroundStyle(.secondary)
+                        if PlaidAccountEnrichment.decode(account.enrichmentJSON)?.balanceSource == "cached" {
+                            Text("Cached · update unavailable").font(.caption2).foregroundStyle(WatchDesign.gold)
+                        }
+                        if account.updatedAt > Date(timeIntervalSince1970: 0) {
+                            Text(account.updatedAt, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.caption2).foregroundStyle(.secondary)
+                        } else {
+                            Text("Bank update date unavailable").font(.caption2).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 if accounts.isEmpty { Text("No linked accounts").foregroundStyle(.secondary) }
@@ -37,7 +45,7 @@ struct WatchWalletView: View {
                         VStack(alignment: .leading) {
                             Text(bill.name ?? "Card")
                             if let details = bill.currentCreditCardDetails {
-                                let utilization = abs(details.cardBalance) / max(details.creditLimit, 1)
+                                let utilization = max(details.cardBalance, 0) / max(details.creditLimit, 1)
                                 ProgressView(value: min(utilization, 1)).tint(utilization > 0.3 ? WatchDesign.gold : WatchDesign.green)
                                 Text(utilization.formatted(.percent.precision(.fractionLength(0)))).font(.caption)
                             }

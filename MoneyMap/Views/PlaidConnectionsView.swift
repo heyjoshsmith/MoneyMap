@@ -476,6 +476,7 @@ struct PlaidConnectionsView: View {
         )
         bill.plaidAccountID = suggestion.account.accountId
         bill.plaidItemID = suggestion.account.itemId
+        bill.plaidReportedCardBalance = suggestion.account.currentBalance ?? suggestion.liability.currentBalance
         bill.plaidUpdatedAt = PlaidDateParsing.dateTime(suggestion.account.updatedAt)
         bill.checkStatus()
 

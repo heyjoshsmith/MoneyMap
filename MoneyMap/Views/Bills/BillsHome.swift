@@ -16,16 +16,11 @@ struct BillsHome: View {
     @EnvironmentObject private var notificationManager: NotificationManager
     @Query private var bills: [Bill]
     @Query private var goals: [Goal]
-    @Query private var transactions: [Transaction]
+    @Query(sort: \Transaction.transactionDate, order: .reverse) private var transactions: [Transaction]
     @Query(sort: \PaymentMethod.name) private var paymentMethods: [PaymentMethod]
     @AppStorage(RecurringBillDetector.ignoredSuggestionIDsKey) private var ignoredRecurringBillSuggestionIDs = ""
     
     @State private var addingBill = false
-    @State private var editingBalance = false
-    @State private var editingLimit = false
-    @State private var billToEdit: Bill?
-    @State private var alertValue: String = ""
-    @State private var makingPayment = false
     @State private var viewingBill: Bill?
     @State private var destination: BillsNavigationTarget?
     @State private var selectedBillForEditor: Bill?
@@ -43,17 +38,6 @@ struct BillsHome: View {
             List {
                 overviewSection
                 recurringSuggestionsSection
-
-                if !bills.creditCards.isEmpty {
-                    CreditCardSection(
-                        bills: bills,
-                        billToEdit: $billToEdit,
-                        alertValue: $alertValue,
-                        editingBalance: $editingBalance,
-                        editingLimit: $editingLimit,
-                        makingPayment: $makingPayment
-                    )
-                }
 
                 if bills.withoutCreditCards.isEmpty {
                     emptyBillsSection
@@ -102,63 +86,6 @@ struct BillsHome: View {
                 case .cardUtilization:
                     CardUtilizationView()
                 }
-            }
-            .alert(billToEdit?.name ?? "Current Balance", isPresented: $editingBalance) {
-                TextField(balancePlaceholder, text: $alertValue)
-                    .keyboardType(.decimalPad)
-                Button("Cancel", role: .cancel) { }
-                Button("Done") {
-                    billToEdit?.currentCreditCardDetails?.cardBalance = Double(alertValue) ?? 0
-                    saveBillChanges()
-                    editingBalance = false
-                    alertValue.removeAll()
-                }
-            } message: {
-                Text("What is your current balance?")
-            }
-            .alert(billToEdit?.name ?? "Current Limit", isPresented: $editingLimit) {
-                TextField(limitPlaceholder, text: $alertValue)
-                    .keyboardType(.decimalPad)
-                Button("Cancel", role: .cancel) { }
-                Button("Done") {
-                    billToEdit?.currentCreditCardDetails?.creditLimit = Double(alertValue) ?? 0
-                    saveBillChanges()
-                    editingLimit = false
-                    alertValue.removeAll()
-                }
-            } message: {
-                Text("What is your current limit?")
-            }
-            .alert(paymentTitle, isPresented: $makingPayment) {
-                TextField(paymentPlaceholder, text: $alertValue)
-                    .keyboardType(.decimalPad)
-                Button("Cancel", role: .cancel) { }
-                Button("Done") {
-                    if let bill = billToEdit {
-                        let amount = Double(alertValue) ?? 0
-                        let previousBalance = bill.currentCreditCardDetails?.cardBalance
-                        let previousDatePaid = bill.datePaid
-                        let previousDueDate = bill.dueDate
-                        let previousStatus = bill.status
-                        bill.makePayment(of: amount)
-                        AuditService.logBillPayment(
-                            bill: bill,
-                            previousBalance: previousBalance,
-                            previousDatePaid: previousDatePaid,
-                            previousDueDate: previousDueDate,
-                            previousStatus: previousStatus,
-                            amount: amount,
-                            context: modelContext
-                        )
-                        try? modelContext.save()
-                        AppRefreshEvents.notifyBillsDidChange()
-                        MoneyMapIntentDonations.donateMarkBillPaid(bill, paymentAmount: amount)
-                    }
-                    makingPayment = false
-                    alertValue.removeAll()
-                }
-            } message: {
-                Text("How much would you like to pay off this bill?")
             }
             .confirmationDialog(
                 "Delete \(billPendingDelete?.name ?? "this bill")?",
@@ -265,8 +192,8 @@ struct BillsHome: View {
 
     private func billNeedsAttention(_ bill: Bill) -> Bool {
         guard bill.lifecycleState == .active else { return false }
-        guard bill.status != .paid else { return false }
-        guard let dueDate = bill.dueDate else { return true }
+        guard !bill.displayPaymentIsPaid else { return false }
+        guard let dueDate = bill.displayDueDate else { return true }
 
         let dueDay = Calendar.current.startOfDay(for: dueDate)
         if dueDay < today {
@@ -406,7 +333,7 @@ struct BillsHome: View {
         ) {
             refreshBillStatuses()
             SpotlightIndexer.reindexBills(bills)
-            SpotlightIndexer.reindexTransactions(bills.flatMap { $0.transactions ?? [] })
+            SpotlightIndexer.reindexTransactions(transactions)
             notificationManager.scheduleBillDueNotifications(for: bills)
         }
     }
@@ -565,38 +492,7 @@ struct BillsHome: View {
         AppRefreshEvents.notifyBillsDidChange()
     }
     
-    var paymentPlaceholder: String {
-        if let payment = billToEdit?.currentCreditCardDetails?.recommendedPayment {
-            return "Recommended: \(payment.currency)"
-        } else {
-            return "Enter Payment"
-        }
-    }
-    
-    var balancePlaceholder: String {
-        if let balance = billToEdit?.currentCreditCardDetails?.cardBalance {
-            return balance.currency
-        } else {
-            return "Enter Balance"
-        }
-    }
-    
-    var limitPlaceholder: String {
-        if let balance = billToEdit?.currentCreditCardDetails?.creditLimit {
-            return balance.currency
-        } else {
-            return "Enter Balance"
-        }
-    }
-        
-    var paymentTitle: String {
-        
-        if let billToEdit, let name = billToEdit.name {
-            return name
-        }
-        return "Payment Amount"
-    }
-    
+
 }
 
 private struct BillsOverviewRow: View {
@@ -909,7 +805,7 @@ private struct ManagedBillRow: View {
 
     private var canMarkPaid: Bool {
         bill.lifecycleState == .active &&
-            bill.status != .paid &&
+            !bill.displayPaymentIsPaid &&
             bill.paymentMode != .autopay &&
             bill.paymentMode != .inPerson
     }
@@ -927,20 +823,20 @@ struct BillStateRow: View {
         if bill.lifecycleState != .active {
             return bill.lifecycleState.title
         }
-        if bill.status == .paid {
+        if bill.displayPaymentIsPaid {
             return "Paid"
         }
-        guard bill.dueDate != nil else {
+        guard bill.displayDueDate != nil else {
             return "Needs Date"
         }
-        return bill.status?.name ?? "Needs Review"
+        return bill.effectiveStatus?.name ?? "Needs Review"
     }
 
     private var statusImage: String {
         if bill.lifecycleState != .active {
             return bill.lifecycleState.icon
         }
-        switch bill.status {
+        switch bill.effectiveStatus {
         case .paid:
             return "checkmark.circle.fill"
         case .overdue:
@@ -957,14 +853,14 @@ struct BillStateRow: View {
             return bill.lifecycleState == .paused ? "Paused until resumed" : "Canceled and kept for history"
         }
 
-        if bill.status == .paid {
+        if bill.displayPaymentIsPaid {
             if let datePaid = bill.datePaid {
                 return "Paid \(MoneyMapFormatters.mediumDateString(for: datePaid))"
             }
             return "Marked paid"
         }
 
-        guard let dueDate = bill.dueDate else {
+        guard let dueDate = bill.displayDueDate else {
             return "No due date"
         }
 

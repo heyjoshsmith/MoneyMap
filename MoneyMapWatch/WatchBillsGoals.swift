@@ -9,11 +9,11 @@ struct WatchBillsView: View {
     private var visible: [Bill] {
         bills.filter { bill in
             switch filter {
-            case "Paid": return bill.datePaid != nil
+            case "Paid": return bill.displayPaymentIsPaid
             case "All": return true
-            default: return bill.lifecycleState == .active && bill.datePaid == nil
+            default: return bill.lifecycleState == .active && !bill.displayPaymentIsPaid
             }
-        }
+        }.sorted { ($0.displayDueDate ?? .distantFuture) < ($1.displayDueDate ?? .distantFuture) }
     }
     var body: some View {
         List {
@@ -23,7 +23,7 @@ struct WatchBillsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(bill.name ?? "Bill").font(.headline)
                         Text(WatchDesign.money(bill.amount ?? 0)).font(.title3.monospacedDigit()).privacySensitive()
-                        Text(bill.lifecycleState == .active ? (bill.dueDate?.daysUntil ?? "No due date") : bill.lifecycleState.title)
+                        Text(bill.lifecycleState == .active ? (bill.displayDueDate?.daysUntil ?? "No due date") : bill.lifecycleState.title)
                             .font(.caption).foregroundStyle(WatchDesign.gold)
                     }
                 }
@@ -48,14 +48,14 @@ struct WatchBillDetailView: View {
     var body: some View {
         List {
             WatchMetric(title: bill.name ?? "Bill", value: WatchDesign.money(bill.amount ?? 0),
-                detail: bill.dueDate?.formatted(date: .abbreviated, time: .omitted), symbol: bill.category?.icon ?? "calendar", tint: WatchDesign.gold)
+                detail: bill.displayDueDate?.formatted(date: .abbreviated, time: .omitted), symbol: bill.category?.icon ?? "calendar", tint: WatchDesign.gold)
                 .listRowInsets(EdgeInsets())
-            if let balance = bill.currentCreditCardDetails?.cardBalance { Text("Balance \(WatchDesign.money(abs(balance)))").privacySensitive() }
+            if let balance = bill.currentCreditCardDetails?.cardBalance { Text("Balance \(WatchDesign.money(balance))").privacySensitive() }
             Text(bill.displayStatusName).font(.caption)
-            if bill.lifecycleState == .active && bill.datePaid == nil {
+            if bill.lifecycleState == .active && !bill.displayPaymentIsPaid {
                 WatchAmountField(title: "Payment amount", amount: $amount)
                 Button("Record Payment", systemImage: "checkmark.circle") { prepare(.payment) }
-                DatePicker("New due date", selection: $date, displayedComponents: .date)
+                DatePicker(bill.hasLinkedBankData ? "Planned due date" : "New due date", selection: $date, displayedComponents: .date)
                 Button("Delay") { prepare(.delay) }
                 Button("Skip Occurrence") { prepare(.skip) }.disabled(bill.recurrenceInterval == nil)
             }

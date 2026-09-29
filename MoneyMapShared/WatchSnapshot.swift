@@ -31,7 +31,7 @@ enum WatchSnapshotStore {
     }
     @MainActor static func publish(context: ModelContext, reloadWidgets: Bool = true) throws {
         let allBills = try context.fetch(FetchDescriptor<Bill>()).sorted(by: Bill.byDate)
-        let bills = allBills.filter { $0.lifecycleState == .active && $0.datePaid == nil }
+        let bills = allBills.filter { $0.lifecycleState == .active && !$0.displayPaymentIsPaid }
         let goals = try context.fetch(FetchDescriptor<Goal>())
         let accounts = try context.fetch(FetchDescriptor<ManualSavingsAccount>())
         let config = try context.fetch(FetchDescriptor<PaydayConfig>()).first
@@ -43,14 +43,14 @@ enum WatchSnapshotStore {
             items.append(.init(id: "payday", kind: "payday", title: "Payday", amount: config?.amountPerPayday, date: next,
                 progress: total > 0 ? min(max(Date().timeIntervalSince(previous) / total, 0), 1) : 0, route: "plan"))
         }
-        let upcoming = bills.filter { ($0.dueDate ?? .distantFuture) <= (next ?? Calendar.current.date(byAdding: .day, value: 7, to: .now)!) }
+        let upcoming = bills.filter { ($0.displayDueDate ?? .distantFuture) <= (next ?? Calendar.current.date(byAdding: .day, value: 7, to: .now)!) }
         items.append(.init(id: "today", kind: "today", title: "Bills before payday", amount: upcoming.reduce(0) { $0 + ($1.amount ?? 0) }, count: upcoming.count, route: "bills"))
         let unpaidIDs = Set(bills.map(\.id))
         for bill in bills + allBills.filter({ !unpaidIDs.contains($0.id) }) {
-            items.append(.init(id: bill.id.uuidString, kind: "bill", title: bill.name ?? "Bill", amount: bill.amount, date: bill.dueDate, status: bill.datePaid != nil ? "Paid" : bill.lifecycleState.title, route: "bill/\(bill.id)"))
+            items.append(.init(id: bill.id.uuidString, kind: "bill", title: bill.name ?? "Bill", amount: bill.amount, date: bill.displayDueDate, status: bill.displayStatusName, route: "bill/\(bill.id)"))
             if let details = bill.currentCreditCardDetails {
-                items.append(.init(id: "card/\(bill.id)", kind: "card", title: bill.name ?? "Card", amount: abs(details.cardBalance),
-                    progress: abs(details.cardBalance) / max(details.creditLimit, 1), route: "bill/\(bill.id)"))
+                items.append(.init(id: "card/\(bill.id)", kind: "card", title: bill.name ?? "Card", amount: details.cardBalance,
+                    progress: max(details.cardBalance, 0) / max(details.creditLimit, 1), route: "bill/\(bill.id)"))
             }
         }
         for goal in goals {

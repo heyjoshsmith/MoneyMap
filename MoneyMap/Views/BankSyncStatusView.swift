@@ -34,6 +34,7 @@ enum BankSyncStatusMode {
 }
 
 struct PlaidConnectionValue: Identifiable, Hashable {
+    let enrichmentJSON: String?
     let id: UUID
     let itemID: String
     let institutionID: String?
@@ -43,6 +44,7 @@ struct PlaidConnectionValue: Identifiable, Hashable {
     let errorMessage: String?
 
     init(_ connection: PlaidConnection) {
+        enrichmentJSON = connection.enrichmentJSON
         id = connection.id
         itemID = connection.itemID
         institutionID = connection.institutionID
@@ -59,6 +61,7 @@ struct PlaidConnectionValue: Identifiable, Hashable {
 }
 
 struct PlaidAccountValue: Identifiable, Hashable {
+    let enrichmentJSON: String?
     let id: UUID
     let accountID: String
     let itemID: String
@@ -74,6 +77,7 @@ struct PlaidAccountValue: Identifiable, Hashable {
     let updatedAt: Date
 
     init(_ account: PlaidAccountSnapshot) {
+        enrichmentJSON = account.enrichmentJSON
         id = account.id
         accountID = account.accountID
         itemID = account.itemID
@@ -157,6 +161,7 @@ struct BankSyncStatusView: View {
     private var settingsContent: some View {
         List {
             bankSyncHeroSection
+            bankDataAvailabilitySection
 
             Section {
                 NavigationLink {
@@ -178,21 +183,7 @@ struct BankSyncStatusView: View {
             }
             .moneyMapListSectionBackground()
 
-            Section {
-                if activeConnectionSnapshots.isEmpty {
-                    Label("No banks have synced from the Mac yet.", systemImage: "desktopcomputer")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(activeConnectionSnapshots) { connection in
-                        PlaidConnectionSummaryRow(connection: connection)
-                    }
-                }
-            } header: {
-                Text("Connected Banks")
-            } footer: {
-                Text("Add or remove banks from MoneyMap for Mac. This phone receives synced snapshots only.")
-            }
-            .moneyMapListSectionBackground()
+
         }
         .navigationTitle("Bank Sync")
         .listStyle(.insetGrouped)
@@ -200,6 +191,29 @@ struct BankSyncStatusView: View {
         .refreshable {
             await refreshAndImportBankSync()
         }
+    }
+
+    private var bankDataAvailabilitySection: some View {
+        Section {
+            if activeConnectionSnapshots.isEmpty {
+                Label("No banks have synced from the Mac yet.", systemImage: "desktopcomputer")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(activeConnectionSnapshots) { connection in
+                let bankAccounts = activeAccountSnapshots.filter { $0.itemID == connection.itemID }
+                NavigationLink {
+                    BankConnectionDataView(connection: connection, accounts: bankAccounts, onReconnectCompleted: { await refreshAndImportBankSync() })
+                        .modelContainer(mainModelContext.container)
+                } label: {
+                    BankConnectionDataRow(connection: connection, accountCount: bankAccounts.count)
+                }
+            }
+        } header: {
+            Text("Connected Banks")
+        } footer: {
+            Text("Select a bank to view accounts and data access. Manage connections on your Mac.")
+        }
+        .moneyMapListSectionBackground()
     }
 
     private var bankSyncHeroSection: some View {
@@ -438,8 +452,11 @@ struct BankSyncStatusView: View {
     }
 
     private func loadSnapshotValues() {
-        connectionSnapshots = connections.map(PlaidConnectionValue.init)
-        accountSnapshots = accounts.map(PlaidAccountValue.init)
+        // Read the context immediately after a pull; @Query may still contain the previous result.
+        connectionSnapshots = ((try? plaidModelContext.fetch(FetchDescriptor<PlaidConnection>())) ?? connections)
+            .map(PlaidConnectionValue.init)
+        accountSnapshots = ((try? plaidModelContext.fetch(FetchDescriptor<PlaidAccountSnapshot>())) ?? accounts)
+            .map(PlaidAccountValue.init)
     }
 
     private func accountDetail(_ account: PlaidAccountSnapshot) -> String {
@@ -483,6 +500,7 @@ struct BankSyncStatusView: View {
 
         do {
             try await PlaidCloudSyncService.pull(context: plaidModelContext)
+            try LinkedCardRefreshService.reconcile(snapshotContext: plaidModelContext, context: mainModelContext)
             loadSnapshotValues()
             await loadMacRefreshCommand()
             cloudStatusMessage = "Checked the latest Mac snapshot in iCloud."
@@ -551,7 +569,6 @@ struct BankSyncStatusView: View {
 
         do {
             let readyItems = try plaidModelContext.fetch(FetchDescriptor<PlaidTransactionReviewItem>())
-                .filter { $0.status == .ready }
             let bills = try mainModelContext.fetch(FetchDescriptor<Bill>())
             let summary = try PlaidLocalSyncImporter.importReviewedItems(
                 readyItems,
@@ -575,6 +592,10 @@ struct BankSyncStatusView: View {
                 importStatusMessage = "Imported \(summary.importedCount) transaction\(summary.importedCount == 1 ? "" : "s") from the Mac snapshot\(macSyncTimestampSuffix(importedThrough)). Skipped \(summary.skippedCount) duplicate\(summary.skippedCount == 1 ? "" : "s")."
             }
 
+            if summary.updatedCount > 0 || summary.removedCount > 0 {
+                importStatusMessage = "\(importStatusMessage ?? "") Updated \(summary.updatedCount) transactions and removed \(summary.removedCount) from totals."
+                AppRefreshEvents.notifyBillsDidChange()
+            }
             if settlementSummary.paidCardCount > 0 {
                 importStatusMessage = "\(importStatusMessage ?? "") Confirmed \(settlementSummary.paidCardCount) pending card payment\(settlementSummary.paidCardCount == 1 ? "" : "s")."
                 AppRefreshEvents.notifyBillsDidChange()
@@ -636,6 +657,7 @@ struct BankSyncStatusView: View {
             return false
         case .completed:
             try await PlaidCloudSyncService.pull(context: plaidModelContext)
+            try LinkedCardRefreshService.reconcile(snapshotContext: plaidModelContext, context: mainModelContext)
             loadSnapshotValues()
             let importedThrough = lastSyncAt
             await importReadyTransactions(importedThrough: importedThrough)
@@ -839,6 +861,156 @@ private struct BankSyncFeatureRow: View {
         }
         .padding(.vertical, 3)
         .accessibilityElement(children: .combine)
+    }
+}
+
+struct BankConnectionDataRow: View {
+    let connection: PlaidConnectionValue
+    let accountCount: Int
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "building.columns.fill")
+                .font(.title3)
+                .foregroundStyle(MoneyMapDesign.calmGreen)
+                .frame(width: 36, height: 36)
+                .background(MoneyMapDesign.calmGreen.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(connection.institutionName ?? "Bank")
+                    .font(.headline)
+                Text("\(accountCount) account\(accountCount == 1 ? "" : "s")")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                if connection.errorMessage != nil {
+                    Text("Sync needs attention")
+                        .font(.caption)
+                        .foregroundStyle(MoneyMapDesign.attentionRed)
+                } else if PlaidConnectionEnrichment.decode(connection.enrichmentJSON)?.productStatuses.contains(where: {
+                    $0.diagnosticMessage?.contains("ADDITIONAL_CONSENT_REQUIRED") == true
+                }) == true {
+                    Text("More data needs permission")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct BankConnectionDataView: View {
+    let connection: PlaidConnectionValue
+    let accounts: [PlaidAccountValue]
+    let onReconnectCompleted: () async -> Void
+    @State private var showingReconnect = false
+    @State private var refreshedConnection: PlaidConnectionValue?
+    @State private var refreshedAccounts: [PlaidAccountValue]?
+    @State private var snapshotRefreshError: String?
+    private var currentConnection: PlaidConnectionValue { refreshedConnection ?? connection }
+    private var currentAccounts: [PlaidAccountValue] { refreshedAccounts ?? accounts }
+
+    private var statuses: [PlaidProductSyncStatus] {
+        (PlaidConnectionEnrichment.decode(currentConnection.enrichmentJSON)?.productStatuses ?? []).filter { status in
+            if ["holdings", "investment_transactions"].contains(status.product) {
+                return currentAccounts.contains { $0.type == "investment" } || status.state == "available"
+            }
+            return true
+        }
+    }
+
+    var body: some View {
+        List {
+            Section {
+                PlaidConnectionSummaryRow(connection: currentConnection)
+                Button { showingReconnect = true } label: {
+                    Label("Reconnect Bank", systemImage: "arrow.triangle.2.circlepath")
+                }
+            }
+            .moneyMapListSectionBackground()
+            if let snapshotRefreshError {
+                Section { Text(snapshotRefreshError).font(.footnote).foregroundStyle(.secondary) }
+            }
+            Section("Accounts") {
+                ForEach(currentAccounts) { account in
+                    NavigationLink {
+                        BankAccountDataView(account: account)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(account.displayName)
+                            if let lastFour = account.lastFourLabel {
+                                Text(lastFour).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+            .moneyMapListSectionBackground()
+            Section("Data Access") {
+                if statuses.isEmpty {
+                    Text("Refresh from your Mac to check available data.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(statuses, id: \.product) { status in
+                    DisclosureGroup {
+                        if let message = status.message {
+                            Text(message).font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        Text("Checked \(status.updatedAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if let diagnostic = status.diagnosticMessage {
+                            DisclosureGroup("Technical Details") {
+                                Text(diagnostic).font(.caption).textSelection(.enabled)
+                            }
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(productTitle(status.product))
+                            Text(status.state == "available" ? "Available" : status.state == "failed" ? "Needs attention" : "Not available")
+                                .font(.caption)
+                                .foregroundStyle(status.state == "available" ? MoneyMapDesign.calmGreen : .secondary)
+                        }
+                    }
+                }
+            }
+            .moneyMapListSectionBackground()
+        }
+        .sheet(isPresented: $showingReconnect) {
+            BankReconnectView(itemID: connection.itemID, bankName: currentConnection.institutionName ?? "Bank", onCompleted: {
+                await onReconnectCompleted()
+                refreshConnectionSnapshots()
+            })
+        }
+        .navigationTitle(currentConnection.institutionName ?? "Bank")
+        .navigationBarTitleDisplayMode(.inline)
+        .listStyle(.insetGrouped)
+        .moneyMapGroupedListBackground()
+    }
+
+    private func refreshConnectionSnapshots() {
+        do {
+            let container = try PlaidSyncContainerFactory.make()
+            let context = ModelContext(container)
+            let itemID = connection.itemID
+            let latest = try context.fetch(FetchDescriptor<PlaidConnection>(predicate: #Predicate { $0.itemID == itemID }))
+            refreshedConnection = latest.first.map(PlaidConnectionValue.init)
+            let snapshots = try context.fetch(FetchDescriptor<PlaidAccountSnapshot>(predicate: #Predicate { $0.itemID == itemID }))
+            refreshedAccounts = snapshots.map(PlaidAccountValue.init)
+            snapshotRefreshError = nil
+        } catch {
+            snapshotRefreshError = "Return to Bank Sync to check the latest details. \(error.localizedDescription)"
+        }
+    }
+
+    private func productTitle(_ product: String) -> String {
+        switch product {
+        case "balance": "Balances"
+        case "liabilities": "Card & Loan Details"
+        case "recurring": "Recurring Payments & Income"
+        case "holdings": "Investment Holdings"
+        case "investment_transactions": "Investment Activity"
+        case "transactions": "Transactions"
+        default: product.replacingOccurrences(of: "_", with: " ").capitalized
+        }
     }
 }
 
@@ -1793,6 +1965,7 @@ private struct PlaidCardUpgradeView: View {
                 plaidInstitutionID: connection(for: account)?.institutionID,
                 plaidUpdatedAt: account.updatedAt
             )
+            upgrade(bill, with: account)
             mainModelContext.insert(bill)
             bills.append(bill)
             try attachExistingTransactions(for: account.accountID, to: bill)
@@ -1815,11 +1988,16 @@ private struct PlaidCardUpgradeView: View {
 
         do {
             let name = bill.name ?? "Card"
+            let lastBankDetails = bill.currentCreditCardDetails
             bill.plaidAccountID = nil
             bill.plaidItemID = nil
             bill.plaidInstitutionID = nil
-            bill.plaidUpdatedAt = .now
+            bill.plaidUpdatedAt = nil
+            bill.plaidReportedCardBalance = nil
+            bill.plaidEnrichmentJSON = nil
             bill.plaidUnavailable = false
+            bill.currentCreditCardDetails = lastBankDetails
+            bill.checkStatus()
             syncPaymentMethods()
             try mainModelContext.save()
             withAnimation {
@@ -1840,6 +2018,9 @@ private struct PlaidCardUpgradeView: View {
         bill.plaidUpdatedAt = account.updatedAt
         bill.plaidUnavailable = false
         bill.currentCreditCardDetails = creditCardDetails(from: account, existing: bill.currentCreditCardDetails)
+        bill.plaidReportedCardBalance = account.currentBalance
+        bill.plaidEnrichmentJSON = account.enrichmentJSON
+        bill.checkStatus()
 
         if (bill.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             bill.name = account.displayName
@@ -1855,13 +2036,17 @@ private struct PlaidCardUpgradeView: View {
 
     private func creditCardDetails(from account: PlaidAccountValue, existing: CreditCardDetails?) -> CreditCardDetails {
         let currentBalance = account.currentBalance ?? existing?.cardBalance ?? 0
-        let estimatedLimit = estimatedCreditLimit(for: account, existing: existing)
+        let enrichment = PlaidAccountEnrichment.decode(account.enrichmentJSON)
+        let credit = enrichment?.creditLiability
+        let purchaseAPR = credit?["aprs"]?.array?.compactMap(\.object)
+            .first(where: { $0["apr_type"]?.string == "purchase_apr" })?["apr_percentage"]?.number
+        let estimatedLimit = enrichment?.creditLimit ?? estimatedCreditLimit(for: account, existing: existing)
         return CreditCardDetails(
             creditLimit: estimatedLimit,
             cardBalance: currentBalance,
-            annualPercentageRate: existing?.annualPercentageRate,
-            minimumPayment: existing?.minimumPayment,
-            statementBalance: existing?.statementBalance,
+            annualPercentageRate: purchaseAPR ?? existing?.annualPercentageRate,
+            minimumPayment: credit?["minimum_payment_amount"]?.number ?? existing?.minimumPayment,
+            statementBalance: credit?["last_statement_balance"]?.number ?? existing?.statementBalance,
             issuerName: account.institutionName ?? existing?.issuerName,
             lastFourDigits: account.mask ?? existing?.lastFourDigits,
             statementClosingDate: existing?.statementClosingDate,

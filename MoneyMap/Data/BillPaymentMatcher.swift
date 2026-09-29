@@ -15,6 +15,7 @@ enum BillPaymentMatcher {
         calendar: Calendar = .current
     ) -> Bool {
         var didChange = false
+        let candidates = preparedPayments(transactions, relatedTransactions: bills.flatMap { $0.transactions ?? [] })
 
         for bill in bills {
             let previousDueDate = bill.dueDate
@@ -23,7 +24,7 @@ enum BillPaymentMatcher {
 
             if let payment = currentCyclePaymentTransaction(
                 for: bill,
-                in: transactions,
+                candidates: candidates,
                 today: today,
                 calendar: calendar
             ) {
@@ -77,52 +78,65 @@ enum BillPaymentMatcher {
         today: Date = .now,
         calendar: Calendar = .current
     ) -> Transaction? {
-        guard bill.lifecycleState == .active,
-              bill.category != .creditCard,
-              bill.status != .paid,
-              let dueDate = bill.dueDate else {
-            return nil
-        }
+        currentCyclePaymentTransaction(
+            for: bill,
+            candidates: preparedPayments(transactions, relatedTransactions: bill.transactions ?? []),
+            today: today,
+            calendar: calendar
+        )
+    }
 
+    private struct PreparedPayment {
+        let transaction: Transaction
+        let date: Date
+        let linkedBillID: UUID?
+        let creditCardID: UUID?
+        let canInfer: Bool
+    }
+
+    private static func preparedPayments(_ transactions: [Transaction], relatedTransactions: [Transaction]) -> [PreparedPayment] {
+        var seen = Set<ObjectIdentifier>()
+        let inferable = Set(transactions.map(ObjectIdentifier.init))
+        return (transactions + relatedTransactions).compactMap { transaction in
+            guard seen.insert(ObjectIdentifier(transaction)).inserted,
+                  isPaymentCandidate(transaction),
+                  let date = transactionDate(for: transaction) else { return nil }
+            return PreparedPayment(transaction: transaction, date: date,
+                                   linkedBillID: transaction.linkedBillID,
+                                   creditCardID: transaction.creditCard?.id,
+                                   canInfer: inferable.contains(ObjectIdentifier(transaction)))
+        }
+    }
+
+    private static func currentCyclePaymentTransaction(
+        for bill: Bill,
+        candidates: [PreparedPayment],
+        today: Date,
+        calendar: Calendar
+    ) -> Transaction? {
+        guard bill.lifecycleState == .active, bill.category != .creditCard,
+              bill.status != .paid, let dueDate = bill.dueDate else { return nil }
         let dueDay = calendar.startOfDay(for: dueDate)
         let todayDay = calendar.startOfDay(for: today)
         let windowStart = calendar.date(byAdding: .day, value: -3, to: dueDay) ?? dueDay
-        let graceDays = max(bill.gracePeriodDays ?? 0, 3)
-        let windowEnd = calendar.date(byAdding: .day, value: graceDays, to: dueDay) ?? dueDay
-
-        if let directlyLinkedPayment = connectedTransactions(for: bill, in: transactions)
-            .filter({ transaction in
-                guard isPaymentCandidate(transaction),
-                      let date = transactionDate(for: transaction) else {
-                    return false
-                }
-
-                let transactionDay = calendar.startOfDay(for: date)
-                return transactionDay >= windowStart &&
-                    transactionDay <= min(windowEnd, todayDay)
-            })
-            .sorted(by: mostRecentFirst)
-            .first {
-            return directlyLinkedPayment
+        let windowEnd = calendar.date(byAdding: .day, value: max(bill.gracePeriodDays ?? 0, 3), to: dueDay) ?? dueDay
+        let lastDay = min(windowEnd, todayDay)
+        guard let endExclusive = calendar.date(byAdding: .day, value: 1, to: lastDay) else { return nil }
+        let billTexts = billMatchTexts(for: bill)
+        var direct: PreparedPayment?
+        var inferred: PreparedPayment?
+        for candidate in candidates {
+            guard candidate.date >= windowStart, candidate.date < endExclusive else { continue }
+            if candidate.linkedBillID == bill.id || candidate.creditCardID == bill.id {
+                if direct == nil || candidate.date > direct!.date { direct = candidate }
+            } else if candidate.canInfer, direct == nil,
+                      (inferred == nil || candidate.date > inferred!.date),
+                      amountMatches(bill: bill, transaction: candidate.transaction),
+                      textMatches(billTexts: billTexts, transaction: candidate.transaction) {
+                inferred = candidate
+            }
         }
-
-        return transactions
-            .filter { transaction in
-                guard isPaymentCandidate(transaction),
-                      amountMatches(bill: bill, transaction: transaction),
-                      textMatches(bill: bill, transaction: transaction),
-                      let date = transactionDate(for: transaction) else {
-                    return false
-                }
-
-                let transactionDay = calendar.startOfDay(for: date)
-                return transactionDay >= windowStart &&
-                    transactionDay <= min(windowEnd, todayDay)
-            }
-            .sorted { lhs, rhs in
-                (transactionDate(for: lhs) ?? .distantPast) > (transactionDate(for: rhs) ?? .distantPast)
-            }
-            .first
+        return (direct ?? inferred)?.transaction
     }
 
     static func connectedTransactions(for bill: Bill, in transactions: [Transaction]) -> [Transaction] {
@@ -158,6 +172,7 @@ enum BillPaymentMatcher {
 
     private static func isPaymentCandidate(_ transaction: Transaction) -> Bool {
         guard transaction.plaidIsPending != true,
+              transaction.plaidBankRemovedAt == nil,
               let amount = transaction.amountUSD,
               amount > 0,
               transactionDate(for: transaction) != nil else {
@@ -196,7 +211,10 @@ enum BillPaymentMatcher {
     }
 
     private static func textMatches(bill: Bill, transaction: Transaction) -> Bool {
-        let billTexts = billMatchTexts(for: bill)
+        textMatches(billTexts: billMatchTexts(for: bill), transaction: transaction)
+    }
+
+    private static func textMatches(billTexts: [String], transaction: Transaction) -> Bool {
         guard !billTexts.isEmpty else { return false }
 
         return transactionMatchTexts(for: transaction).contains { transactionText in

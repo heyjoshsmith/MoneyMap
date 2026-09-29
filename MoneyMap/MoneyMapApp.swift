@@ -13,6 +13,7 @@ import TipKit
 
 @main
 struct MoneyMapApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var notificationManager = NotificationManager()
     @StateObject private var paydayManager: PaydayManager
     @State private var sceneRouter = MoneyMapSceneRouter()
@@ -32,6 +33,11 @@ struct MoneyMapApp: App {
                 .environmentObject(paydayManager)
                 .environmentObject(notificationManager)
                 .modelContainer(modelContainer)
+                .task(id: scenePhase) {
+                    if scenePhase == .active {
+                        await BackgroundTransactionSyncManager.refreshOnActivation(modelContainer: modelContainer)
+                    }
+                }
                 .task {
                     guard !didConfigureServices else { return }
                     didConfigureServices = true

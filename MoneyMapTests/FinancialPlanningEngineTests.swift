@@ -9,6 +9,31 @@ import XCTest
 @testable import MoneyMap
 
 final class FinancialPlanningEngineTests: XCTestCase {
+    func testDuplicateAccountSnapshotsDoNotCrashOrDoubleAllocation() {
+        let card = Bill(name: "Linked", amount: 100, dueDate: .now, category: .creditCard,
+                        recurrenceInterval: 1, recurrenceUnit: .month,
+                        creditCardDetails: CreditCardDetails(creditLimit: 1000, cardBalance: 100, minimumPayment: 25),
+                        plaidAccountID: "bank-card")
+        let account = CreditCardPlanningAccount(accountID: "bank-card", currentBalance: 100, availableBalance: nil)
+        let single = FinancialPlanningEngine.recommendPaycheckPlan(availableCash: 200, goals: [], bills: [card], nextPayday: nil, creditAccounts: [account])
+        let duplicate = FinancialPlanningEngine.recommendPaycheckPlan(availableCash: 200, goals: [], bills: [card], nextPayday: nil, creditAccounts: [account, account])
+        XCTAssertEqual(duplicate.unallocatedCash, single.unallocatedCash)
+        XCTAssertEqual(duplicate.creditCardPayments.count, single.creditCardPayments.count)
+    }
+
+    func testBankZeroAndCreditBalanceDoNotBecomeDebtFromLocalStatement() {
+        let card = Bill(name: "Linked", amount: 100, dueDate: .now, category: .creditCard,
+                        recurrenceInterval: 1, recurrenceUnit: .month,
+                        creditCardDetails: CreditCardDetails(creditLimit: 1000, cardBalance: 700, minimumPayment: 50, statementBalance: 800),
+                        plaidAccountID: "bank-card")
+        for balance in [0.0, -25.0] {
+            card.plaidReportedCardBalance = balance
+            let plan = FinancialPlanningEngine.recommendPaycheckPlan(availableCash: 500, goals: [], bills: [card], nextPayday: nil)
+            XCTAssertTrue(plan.creditCardPayments.isEmpty)
+            XCTAssertEqual(plan.unallocatedCash, 500)
+        }
+    }
+
     func testPaycheckCashResolverUsesManualAmountInManualMode() {
         let account = PlaidAccountSnapshot(
             accountID: "account-1",
@@ -622,7 +647,7 @@ final class FinancialPlanningEngineTests: XCTestCase {
             merchant: "Rewards Card",
             category: "Payment",
             type: "Debit",
-            amountUSD: -125,
+            amountUSD: 125,
             purchasedBy: nil,
             plaidTransactionID: "tx-1",
             plaidAccountID: "checking-1"
@@ -637,6 +662,23 @@ final class FinancialPlanningEngineTests: XCTestCase {
         XCTAssertEqual(matches.count, 1)
         XCTAssertEqual(matches.first?.transactionID, "tx-1")
         XCTAssertEqual(matches.first?.itemID, item.id)
+
+        transaction.amountUSD = -125
+        XCTAssertTrue(ExtraMoneyPlanMatcher.likelyMatches(plans: [plan], items: [item], transactions: [transaction]).isEmpty)
+        transaction.amountUSD = 125
+        transaction.transactionDescription = "GROCERY PURCHASE"
+        transaction.merchant = "Market"
+        transaction.category = "Groceries"
+        XCTAssertTrue(ExtraMoneyPlanMatcher.likelyMatches(plans: [plan], items: [item], transactions: [transaction]).isEmpty)
+        transaction.transactionDescription = "CARD PAYMENT"
+        transaction.merchant = "Different Card"
+        transaction.category = "Payment"
+        XCTAssertTrue(ExtraMoneyPlanMatcher.likelyMatches(plans: [plan], items: [item], transactions: [transaction]).isEmpty)
+        transaction.merchant = "Rewards Card"
+        let settledItem = ExtraMoneyPlanItem(planID: UUID(), kind: .creditCardPayment,
+                                            targetName: "Rewards Card", amount: 125)
+        settledItem.matchedTransactionIDText = "tx-1"
+        XCTAssertTrue(ExtraMoneyPlanMatcher.likelyMatches(plans: [plan], items: [item, settledItem], transactions: [transaction]).isEmpty)
     }
 
     func testPendingPlanSettlementWaitsForPostedBankDebit() {
@@ -683,7 +725,7 @@ final class FinancialPlanningEngineTests: XCTestCase {
             merchant: "Rewards Card",
             category: "Payment",
             type: "Pending",
-            amountUSD: -125,
+            amountUSD: 125,
             purchasedBy: nil,
             plaidTransactionID: "tx-pending",
             plaidAccountID: "checking-1",
@@ -747,7 +789,7 @@ final class FinancialPlanningEngineTests: XCTestCase {
             merchant: "Rewards Card",
             category: "Payment",
             type: "Posted",
-            amountUSD: -125,
+            amountUSD: 125,
             purchasedBy: nil,
             plaidTransactionID: "tx-posted",
             plaidAccountID: "checking-1",
@@ -770,6 +812,55 @@ final class FinancialPlanningEngineTests: XCTestCase {
         XCTAssertEqual(card.status, .paid)
         XCTAssertEqual(plan.status, .completed)
         XCTAssertEqual(plan.completedAt, createdAt)
+    }
+
+    func testBankVerifiedPlanPaymentPreservesLatestLinkedBalanceAndManualPaidChoice() {
+        let now = Date()
+        let manualPaidDate = now.addingTimeInterval(-86_400)
+        let card = Bill(name: "Linked card", amount: 25, dueDate: now, category: .creditCard,
+                        recurrenceInterval: 1, recurrenceUnit: .month,
+                        creditCardDetails: CreditCardDetails(creditLimit: 1_000, cardBalance: 475),
+                        plaidAccountID: "card-account", plaidUpdatedAt: now)
+        card.datePaid = manualPaidDate
+        card.status = .paid
+        let plan = ExtraMoneyPlan(source: .linkedAccount, sourceAccountID: "checking",
+                                  sourceAccountName: "Checking", startingBalance: 600, alreadyAllocated: 0,
+                                  available: 125, plannedCardAmount: 125, plannedGoalAmount: 0,
+                                  unallocatedAmount: 0, strategyRaw: PaycheckAllocationStrategy.balanced.rawValue,
+                                  payoffStrategyRaw: CreditCardPayoffStrategy.balanced.rawValue, appliedAt: now)
+        plan.createdAt = now
+        let item = ExtraMoneyPlanItem(planID: plan.id, kind: .creditCardPayment,
+                                      targetID: card.id, targetName: "Linked card", amount: 125)
+        let transaction = Transaction(transactionDate: now, clearingDate: nil,
+                                      transactionDescription: "CARD PAYMENT", merchant: "Linked card",
+                                      category: "Payment", type: "Posted", amountUSD: 125, purchasedBy: nil,
+                                      plaidTransactionID: "bank-payment", plaidAccountID: "checking", plaidIsPending: false)
+        transaction.plaidBankRemovedAt = now
+        let removedSummary = ExtraMoneyPlanSettlementService.settlePendingPayments(
+            plans: [plan], items: [item], bills: [card], transactions: [transaction], now: now)
+        XCTAssertEqual(removedSummary.paidCardCount, 0)
+        XCTAssertNil(item.matchedTransactionIDText)
+        transaction.plaidBankRemovedAt = nil
+        let summary = ExtraMoneyPlanSettlementService.settlePendingPayments(
+            plans: [plan], items: [item], bills: [card], transactions: [transaction], now: now)
+        XCTAssertEqual(summary.paidCardCount, 1)
+        XCTAssertEqual(card.currentCreditCardDetails?.cardBalance, 475)
+        XCTAssertEqual(card.paymentEntries?.count, 1)
+        XCTAssertEqual(card.paymentEntries?.first?.amount, 125)
+        XCTAssertEqual(card.paymentEntries?.first?.id, item.id)
+        XCTAssertEqual(card.datePaid, manualPaidDate)
+        XCTAssertEqual(card.status, .paid)
+
+        // Repeated sync and subsequent bank removal cannot erase a manual paid choice.
+        transaction.plaidBankRemovedAt = now
+        transaction.amountUSD = nil
+        let repeatSummary = ExtraMoneyPlanSettlementService.settlePendingPayments(
+            plans: [plan], items: [item], bills: [card], transactions: [transaction], now: now)
+        XCTAssertEqual(repeatSummary.paidCardCount, 0)
+        XCTAssertEqual(card.paymentEntries?.count, 1)
+        XCTAssertEqual(card.currentCreditCardDetails?.cardBalance, 475)
+        XCTAssertEqual(card.datePaid, manualPaidDate)
+        XCTAssertEqual(card.status, .paid)
     }
 
     func testUnappliedSavedPlanDoesNotSettleFromBankDebit() {
@@ -815,7 +906,7 @@ final class FinancialPlanningEngineTests: XCTestCase {
             merchant: "Rewards Card",
             category: "Payment",
             type: "Posted",
-            amountUSD: -125,
+            amountUSD: 125,
             purchasedBy: nil,
             plaidTransactionID: "tx-posted",
             plaidAccountID: "checking-1",

@@ -50,9 +50,7 @@ struct ContentView: View {
             SwiftUI.Tab("Goals", systemImage: "target", value: Tab.goals) {
                 GoalsView()
             }
-            SwiftUI.Tab("Ask", systemImage: "sparkles", value: Tab.ask, role: .search) {
-                MoneyMapAssistantView()
-            }
+
         }
         .onChange(of: initialWindowContent, initial: true) { _, content in
             guard !didApplyInitialContent, let content else { return }
@@ -100,6 +98,9 @@ struct ContentView: View {
         }
         .onChange(of: goalNotificationSignature) { _, _ in
             syncGoalNotifications()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppRefreshEvents.billsDidChange)) { _ in
+            scheduleIndexAndNotificationRefresh()
         }
         .onChange(of: searchIndexRefreshSignature) { _, _ in
             scheduleIndexAndNotificationRefresh()
@@ -275,7 +276,7 @@ struct ContentView: View {
     }
     
     enum Tab: String, CaseIterable, Identifiable {
-        case today, wallet, plan, goals, ask
+        case today, wallet, plan, goals
         var id: Self { return self }
     }
 }

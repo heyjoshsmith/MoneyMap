@@ -135,7 +135,7 @@ private enum WidgetStore {
 
         let summaries: [WidgetBillSummary] = bills
             .compactMap { bill -> WidgetBillSummary? in
-                guard bill.datePaid == nil, let dueDate = bill.dueDate else { return nil }
+                guard bill.lifecycleState == .active, !bill.displayPaymentIsPaid, let dueDate = bill.displayDueDate else { return nil }
                 return WidgetBillSummary(
                     id: bill.id,
                     name: bill.name ?? "Bill",

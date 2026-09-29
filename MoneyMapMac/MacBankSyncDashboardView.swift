@@ -1,1217 +1,459 @@
-//
-//  MacBankSyncDashboardView.swift
-//  MoneyMapMac
-//
-//  Created by Codex on 7/6/26.
-//
-
 import ServiceManagement
 import SwiftData
 import SwiftUI
 
+private enum MacWorkspace: String, CaseIterable, Identifiable {
+    case overview = "Overview", banks = "Banks", activity = "Activity"
+    var id: String { rawValue }
+    var symbol: String {
+        switch self { case .overview: "house"; case .banks: "building.columns"; case .activity: "clock.arrow.circlepath" }
+    }
+}
+
 struct MacBankSyncDashboardView: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(\.modelContext) private var context
     @Query(sort: \PlaidConnection.updatedAt, order: .reverse) private var connections: [PlaidConnection]
     @Query(sort: \PlaidAccountSnapshot.accountName) private var accounts: [PlaidAccountSnapshot]
-    @Query(sort: \PlaidTransactionReviewItem.updatedAt, order: .reverse) private var reviewItems: [PlaidTransactionReviewItem]
-    @Query(sort: \PlaidSuggestion.updatedAt, order: .reverse) private var suggestions: [PlaidSuggestion]
-
+    @Query(sort: \PlaidTransactionReviewItem.updatedAt, order: .reverse) private var transactions: [PlaidTransactionReviewItem]
     @ObservedObject var coordinator: MacPlaidSyncCoordinator
-    @State private var credentialEditor = PlaidCredentialEditorState()
-    @State private var launchAtLogin = false
-    @State private var launchAtLoginMessage: String?
-    @State private var credentialStatusMessage: String?
-    @State private var credentialErrorMessage: String?
-    @State private var showingCredentialSettings = false
-    @State private var showingAdvancedDetails = false
-    @State private var connectionPendingRemoval: PlaidConnection?
-    @AppStorage(MacBankSyncPreferences.automaticRefreshEnabledKey) private var automaticRefreshEnabled = true
-    @AppStorage(MacBankSyncPreferences.refreshIntervalMinutesKey) private var refreshIntervalMinutes = 60
+    @State private var destination: MacWorkspace? = .overview
+    @State private var selectedBank: String?
+    @State private var workflow = false
+    @State private var reconnectID: String?
+    @State private var upgradeAccess = false
+    @State private var setup = false
+    @AppStorage("plaid.credentialsSaved") private var hasService = false
+    @State private var phoneGuide = false
+    @State private var removal: PlaidConnection?
+
+    private var bank: PlaidConnection? { connections.first { $0.itemID == selectedBank } }
+    private var attentionCount: Int { connections.filter { $0.errorMessage != nil || $0.status == "needs_attention"  }.count }
+    private var upgradeCount: Int { connections.filter { !needsReconnect($0) && needsConsent($0) }.count }
+    private var lastSync: Date? { connections.allSatisfy { $0.lastSyncAt != nil } ? connections.compactMap(\.lastSyncAt).min() : nil }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                statusOverviewCard
-                nextActionCard
-                credentialsDisclosureCard
-                connectionsCard
-                phoneSyncCard
-                advancedDetailsCard
+        NavigationSplitView {
+            List(selection: $destination) {
+                Section("MoneyMap") {
+                    ForEach(MacWorkspace.allCases) { item in
+                        Label(item.rawValue, systemImage: item.symbol).tag(item)
+                    }
+                }
             }
-            .padding(28)
-            .frame(maxWidth: 860, alignment: .leading)
+            .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 240)
+            .safeAreaInset(edge: .bottom) {
+                SettingsLink { Label("Settings", systemImage: "gearshape") }
+                    .buttonStyle(.plain).padding().frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } detail: {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    switch destination ?? .overview {
+                    case .overview: overview
+                    case .banks: if let bank { bankDetail(bank) } else { banks }
+                    case .activity: activity
+                    }
+                }
+                .padding(32).frame(maxWidth: 900, alignment: .leading).frame(maxWidth: .infinity)
+            }
+            .macWorkspaceCanvas()
+            .navigationTitle(destination?.rawValue ?? "MoneyMap")
+            .toolbar {
+                ToolbarItemGroup {
+                    if coordinator.isWorking { ProgressView().controlSize(.small).accessibilityLabel("Updating bank data") }
+                    Button { Task { await coordinator.syncAll(context: context) } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                        .disabled(coordinator.isWorking || connections.isEmpty).help("Refresh your banks and send updates to iPhone")
+                    Button { beginConnection() } label: { Label("Add Bank", systemImage: "plus") }
+                        .disabled(coordinator.isWorking)
+                }
+            }
         }
-        .frame(minWidth: 780, minHeight: 620)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .onAppear {
-            credentialEditor.loadStatus(hasConnections: !connections.isEmpty)
-            launchAtLogin = LaunchAtLoginController.isEnabled
-            showingCredentialSettings = !credentialEditor.hasStoredCredentials
+        .groupBoxStyle(MacWorkspaceGroupStyle())
+        .frame(minWidth: 820, minHeight: 600)
+        .onAppear { refreshServiceStatus() }
+        .onChange(of: destination) { _, _ in selectedBank = nil }
+        .sheet(isPresented: $phoneGuide) { MacPhoneUpdateFlow(coordinator: coordinator) }
+        .sheet(isPresented: $workflow) {
+            MacBankConnectionFlow(coordinator: coordinator, reconnectID: reconnectID, upgradeAccess: upgradeAccess)
         }
-        .confirmationDialog(
-            removeConnectionTitle,
-            isPresented: removeConnectionConfirmationBinding,
-            titleVisibility: .visible,
-            presenting: connectionPendingRemoval
-        ) { connection in
+        .sheet(isPresented: $setup, onDismiss: { refreshServiceStatus() }) {
+            MacServiceSetupFlow(coordinator: coordinator)
+        }
+        .confirmationDialog("Remove this bank?", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }), presenting: removal) { connection in
             Button("Remove from MoneyMap", role: .destructive) {
-                Task { await coordinator.removeConnection(itemID: connection.itemID, context: modelContext) }
-                connectionPendingRemoval = nil
-            }
-            Button("Cancel", role: .cancel) {
-                connectionPendingRemoval = nil
+                Task { await coordinator.removeConnection(itemID: connection.itemID, context: context) }
+                selectedBank = nil; removal = nil
             }
         } message: { connection in
-            Text("This removes \(connection.institutionName ?? "this bank") from MoneyMap on this Mac and from the iPhone sync snapshot. It does not close your bank account.")
+            Text("Remove \(connection.institutionName ?? "this bank") and its synced accounts from MoneyMap? Your bank account stays open.")
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("MoneyMap for Mac")
-                .font(.largeTitle.weight(.semibold))
-            Text("Connect banks here, keep credentials on this Mac, and send safe snapshots to your iPhone.")
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var statusOverviewCard: some View {
-        GroupBox {
-            HStack(alignment: .top, spacing: 20) {
-                Image(systemName: primaryStatus.systemImage)
-                    .font(.title2)
-                    .foregroundStyle(primaryStatus.color)
-                    .frame(width: 34)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(primaryStatus.title)
-                        .font(.headline)
-                    Text(primaryStatus.detail)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 20)
-
-                HStack(spacing: 20) {
-                    MetricTile(title: "Banks", value: "\(connections.count)", symbol: "building.columns")
-                    MetricTile(title: "Accounts", value: "\(accounts.count)", symbol: "creditcard")
-                    MetricTile(title: "Ready", value: "\(readyReviewItems.count + readySuggestions.count)", symbol: "tray.full")
-                }
-                .frame(maxWidth: 320)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(4)
-        }
-    }
-
-    private var nextActionCard: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: nextActionSystemImage)
-                        .font(.title2)
-                        .foregroundStyle(Color.accentColor)
-                        .frame(width: 32)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(nextActionTitle)
-                            .font(.headline)
-                        Text(nextActionDetail)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer()
-
-                    if coordinator.isWorking {
-                        ProgressView()
-                    }
-                }
-
-                if let statusMessage = coordinator.statusMessage {
-                    Label(statusMessage, systemImage: "checkmark.circle")
-                        .foregroundStyle(.secondary)
-                }
-
-                if let errorMessage = coordinator.errorMessage {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                        .textSelection(.enabled)
-                }
-
-                HStack {
-                    nextActionButtons
-                    Spacer()
-                }
-            }
-            .padding(4)
-        } label: {
-            Label("Next Step", systemImage: "arrow.forward.circle")
-        }
-    }
-
-    @ViewBuilder
-    private var nextActionButtons: some View {
-        if !credentialEditor.hasStoredCredentials {
-            Button {
-                showingCredentialSettings = true
-            } label: {
-                Label("Add Credentials", systemImage: "key")
-            }
-            .buttonStyle(.borderedProminent)
-
-            Button {
-                openPlaidSignup()
-            } label: {
-                Label("Create Plaid Account", systemImage: "person.crop.circle.badge.plus")
-            }
-        } else if coordinator.pendingLinkSession != nil {
-            Button {
-                Task { await coordinator.finishHostedLinkConnection(context: modelContext) }
-            } label: {
-                Label("Finish Bank Connection", systemImage: "checkmark.circle")
-            }
-            .disabled(coordinator.isWorking)
-            .buttonStyle(.borderedProminent)
-
-            Button {
-                coordinator.openPendingLinkSession()
-            } label: {
-                Label("Open Link Again", systemImage: "safari")
-            }
-            .disabled(coordinator.isWorking)
-
-            Button {
-                coordinator.cancelPendingLinkSession()
-            } label: {
-                Label("Start Over", systemImage: "xmark.circle")
-            }
-            .disabled(coordinator.isWorking)
-        } else if connections.isEmpty {
-            Button {
-                Task { await coordinator.startHostedLinkConnection() }
-            } label: {
-                Label("Connect Bank", systemImage: "link.badge.plus")
-            }
-            .disabled(coordinator.isWorking)
-            .buttonStyle(.borderedProminent)
-
-            if credentialEditor.environment == .sandbox {
-                Button {
-                    Task { await coordinator.createSandboxConnection(context: modelContext) }
-                } label: {
-                    Label("Create Sandbox Test Bank", systemImage: "testtube.2")
-                }
-                .disabled(coordinator.isWorking)
-            }
-        } else {
-            Button {
-                Task { await coordinator.syncAll(context: modelContext) }
-            } label: {
-                Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
-            }
-            .disabled(coordinator.isWorking)
-            .buttonStyle(.borderedProminent)
-
-            Button {
-                Task { await coordinator.startHostedLinkConnection() }
-            } label: {
-                Label("Add Another Bank", systemImage: "link.badge.plus")
-            }
-            .disabled(coordinator.isWorking)
-        }
-    }
-
-    private var credentialsDisclosureCard: some View {
-        GroupBox {
-            DisclosureGroup(isExpanded: $showingCredentialSettings) {
-                VStack(alignment: .leading, spacing: 18) {
-                    setupGuideContent
-                    Divider()
-                    credentialFieldsContent
-                    Divider()
-                    launchAtLoginContent
-                    Divider()
-                    automaticRefreshContent
-                }
-                .padding(.top, 12)
-            } label: {
-                HStack {
-                    Label(
-                        credentialEditor.hasStoredCredentials ? "Plaid credentials saved" : "Plaid credentials needed",
-                        systemImage: credentialEditor.hasStoredCredentials ? "checkmark.seal" : "key"
-                    )
-                    Spacer()
-                    Text(credentialEditor.environment.displayName)
-                        .foregroundStyle(.secondary)
-                }
-                .font(.headline)
-            }
-            .padding(4)
-        } label: {
-            Label("Setup", systemImage: "gearshape")
-        }
-    }
-
-    private var setupGuideContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("First-time setup")
-                .font(.headline)
-
-            GuidedPlaidStep(
-                number: 1,
-                title: "Create a Plaid developer account",
-                detail: "Sandbox is for fake test banks. Production is what you use for your real accounts."
-            )
-            GuidedPlaidStep(
-                number: 2,
-                title: "Copy your API keys",
-                detail: "Plaid shows one Client ID, plus separate Sandbox and Production secrets."
-            )
-            GuidedPlaidStep(
-                number: 3,
-                title: "Save the matching secret here",
-                detail: "MoneyMap keeps credentials in this Mac's Keychain and lets you switch environments without pasting again."
-            )
-
-            HStack {
-                Button {
-                    openPlaidSignup()
-                } label: {
-                    Label("Create Plaid Account", systemImage: "person.crop.circle.badge.plus")
-                }
-
-                Button {
-                    openPlaidAPIKeys()
-                } label: {
-                    Label("Open API Keys", systemImage: "key.viewfinder")
-                }
-            }
-        }
-    }
-
-    private var credentialFieldsContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Picker("Environment", selection: $credentialEditor.environment) {
-                ForEach(PlaidCredentialEnvironment.allCases) { environment in
-                    Text(environment.displayName).tag(environment)
-                }
-            }
-            .pickerStyle(.segmented)
-            .onChange(of: credentialEditor.environment) { oldValue, newValue in
-                credentialEditor.selectEnvironment(newValue, previousEnvironment: oldValue)
-                credentialStatusMessage = nil
-                credentialErrorMessage = nil
-            }
-
-            TextField("Plaid Client ID", text: $credentialEditor.clientID)
-                .textFieldStyle(.roundedBorder)
-                .textContentType(.username)
-
-            SecureField("\(credentialEditor.environment.displayName) Secret", text: $credentialEditor.secret)
-                .textFieldStyle(.roundedBorder)
-                .textContentType(.password)
-
-            HStack(spacing: 12) {
-                ForEach(PlaidCredentialEnvironment.allCases) { environment in
-                    PlaidCredentialSlotStatus(
-                        environment: environment,
-                        isSaved: credentialEditor.hasSavedSecret(for: environment)
-                    )
-                }
-            }
-
-            if let credentialStatusMessage {
-                Label(credentialStatusMessage, systemImage: "checkmark.circle")
-                    .foregroundStyle(.secondary)
-            }
-
-            if let credentialErrorMessage {
-                Label(credentialErrorMessage, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.red)
-                    .textSelection(.enabled)
-            }
-
-            HStack {
-                if credentialEditor.hasStoredCredentials {
-                    Button {
-                        loadCredentialValues()
-                    } label: {
-                        Label("Load Saved", systemImage: "key.viewfinder")
-                    }
-                    .disabled(coordinator.isWorking)
-                }
-
-                Button {
-                    saveCredentials()
-                } label: {
-                    Label("Save", systemImage: "checkmark")
-                }
-                .disabled(!credentialEditor.canSave || coordinator.isWorking)
-
-                Button {
-                    if saveCredentials() {
-                        Task { await coordinator.validateCredentials() }
-                    }
-                } label: {
-                    Label("Save and Test", systemImage: "network")
-                }
-                .disabled(!credentialEditor.canSave || coordinator.isWorking)
-                .buttonStyle(.borderedProminent)
-            }
-        }
-    }
-
-    private var launchAtLoginContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Toggle("Open MoneyMap for Mac at login", isOn: $launchAtLogin)
-                .onChange(of: launchAtLogin) { _, newValue in
-                    updateLaunchAtLogin(newValue)
-                }
-
-            Text("Leave this on if you want bank data to keep refreshing from this Mac.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            if let launchAtLoginMessage {
-                Label(launchAtLoginMessage, systemImage: "info.circle")
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var automaticRefreshContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Toggle("Refresh bank data automatically", isOn: $automaticRefreshEnabled)
-
-            Picker("Refresh every", selection: $refreshIntervalMinutes) {
-                Text("30 min").tag(30)
-                Text("1 hour").tag(60)
-                Text("3 hours").tag(180)
-                Text("6 hours").tag(360)
-            }
-            .pickerStyle(.segmented)
-            .disabled(!automaticRefreshEnabled)
-
-            Label("iPhone refresh requests are checked while this app is open.", systemImage: "iphone.gen3")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var storageStatusCard: some View {
-        let report = PlaidSyncContainerFactory.lastReport
-
-        return GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
-                Label(report.mode.displayName, systemImage: report.mode == .cloudKit ? "icloud" : "externaldrive.badge.exclamationmark")
-                    .font(.headline)
-                    .foregroundStyle(report.mode == .cloudKit ? Color.primary : Color.orange)
-
-                if let storeURL = report.storeURL {
-                    Text(storeURL.path)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-
-                if let fallbackReason = report.fallbackReason {
-                    Text(fallbackReason)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(4)
-        } label: {
-            Label("Storage", systemImage: "externaldrive.connected.to.line.below")
-        }
-    }
-
-    private var credentialsCard: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 16) {
-                Picker("Environment", selection: $credentialEditor.environment) {
-                    ForEach(PlaidCredentialEnvironment.allCases) { environment in
-                        Text(environment.displayName).tag(environment)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .onChange(of: credentialEditor.environment) { oldValue, newValue in
-                    credentialEditor.selectEnvironment(newValue, previousEnvironment: oldValue)
-                    credentialStatusMessage = nil
-                    credentialErrorMessage = nil
-                }
-
-                TextField("Plaid Client ID", text: $credentialEditor.clientID)
-                    .textFieldStyle(.roundedBorder)
-                    .textContentType(.username)
-
-                SecureField("\(credentialEditor.environment.displayName) Secret", text: $credentialEditor.secret)
-                    .textFieldStyle(.roundedBorder)
-                    .textContentType(.password)
-
-                HStack(spacing: 12) {
-                    ForEach(PlaidCredentialEnvironment.allCases) { environment in
-                        PlaidCredentialSlotStatus(
-                            environment: environment,
-                            isSaved: credentialEditor.hasSavedSecret(for: environment)
-                        )
-                    }
-                }
-
-                Text("MoneyMap stores one shared Client ID and separate Sandbox and Production secrets in Keychain. Switching environments reloads that environment's saved secret.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if let credentialStatusMessage {
-                    Label(credentialStatusMessage, systemImage: "checkmark.circle")
-                        .foregroundStyle(.secondary)
-                }
-
-                if let credentialErrorMessage {
-                    Label(credentialErrorMessage, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                        .textSelection(.enabled)
-                }
-
-                HStack {
-                    Button {
-                        openPlaidDashboard()
-                    } label: {
-                        Label("Open Plaid Dashboard", systemImage: "safari")
-                    }
-
-                    Spacer()
-
-                    Button {
-                        saveCredentials()
-                    } label: {
-                        Label("Save", systemImage: "checkmark")
-                    }
-                    .disabled(!credentialEditor.canSave || coordinator.isWorking)
-
-                    Button {
-                        if saveCredentials() {
-                            Task { await coordinator.validateCredentials() }
-                        }
-                    } label: {
-                        Label("Save and Test", systemImage: "network")
-                    }
-                    .disabled(!credentialEditor.canSave || coordinator.isWorking)
-                    .buttonStyle(.borderedProminent)
-                }
-            }
-            .padding(4)
-        } label: {
-            Label("Plaid Credentials", systemImage: "key")
-        }
-    }
-
-    private var setupGuideCard: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top, spacing: 14) {
-                    Image(systemName: credentialEditor.hasStoredCredentials ? "checkmark.seal.fill" : "person.badge.key")
-                        .font(.title2)
-                        .foregroundStyle(credentialEditor.hasStoredCredentials ? .green : .accentColor)
-                        .frame(width: 32)
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(credentialEditor.hasStoredCredentials ? "Plaid setup is saved" : "Get your Plaid credentials")
-                            .font(.headline)
-                        Text("Plaid gives you a Client ID and an environment secret after you create a developer account. MoneyMap stores them only in this Mac's Keychain.")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 12) {
-                    GuidedPlaidStep(
-                        number: 1,
-                        title: "Create a Plaid developer account",
-                        detail: "Use Plaid's signup page. Sandbox is for fake test banks; Production is where Plaid now lets you test with real accounts."
-                    )
-                    GuidedPlaidStep(
-                        number: 2,
-                        title: "Open Team Settings, then API",
-                        detail: "Copy the Client ID and the secret for the environment you want to use."
-                    )
-                    GuidedPlaidStep(
-                        number: 3,
-                        title: "Paste and test in MoneyMap",
-                        detail: "Choose Sandbox for fake banks or Production for your real accounts, paste the matching secret, then choose Save and Test."
-                    )
-                    GuidedPlaidStep(
-                        number: 4,
-                        title: "Connect a bank with Plaid Link",
-                        detail: credentialEditor.hasStoredCredentials ? "Your credentials are saved. Use Start Bank Connection below." : "This unlocks after your credentials are saved."
-                    )
-                }
-
-                HStack {
-                    Button {
-                        openPlaidSignup()
-                    } label: {
-                        Label("Create Plaid Account", systemImage: "person.crop.circle.badge.plus")
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    Button {
-                        openPlaidAPIKeys()
-                    } label: {
-                        Label("Open API Keys", systemImage: "key.viewfinder")
-                    }
-
-                    Spacer()
-
-                    Text("No terminal required")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(4)
-        } label: {
-            Label("First-Time Setup", systemImage: "sparkles")
-        }
-    }
-
-    private var bankConnectionCard: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Connect with Plaid Link")
-                            .font(.headline)
-                        Text("MoneyMap opens Plaid in your browser. After bank login and consent, return here to finish the connection and sync the first snapshot.")
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if coordinator.isWorking {
-                        ProgressView()
-                    }
-                }
-
-                if let pendingLinkSession = coordinator.pendingLinkSession {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Label(pendingLinkSession.mode == .addItem ? "Bank connection in progress" : "Reconnect in progress", systemImage: "link")
-                            .font(.subheadline.weight(.semibold))
-                        if let expiration = pendingLinkSession.expiration {
-                            Text("Expires \(expiration.formatted(date: .abbreviated, time: .shortened))")
-                                .foregroundStyle(.secondary)
-                        }
-                        if let requestID = pendingLinkSession.requestID {
-                            Text("Plaid request \(requestID)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                        }
-                    }
-                    .padding(10)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                }
-
-                HStack {
-                    Button {
-                        Task { await coordinator.startHostedLinkConnection() }
-                    } label: {
-                        Label(credentialEditor.hasStoredCredentials ? "Start Bank Connection" : "Save \(credentialEditor.environment.displayName) Credentials First", systemImage: "link.badge.plus")
-                    }
-                    .disabled(!credentialEditor.hasStoredCredentials || coordinator.isWorking)
-                    .buttonStyle(.borderedProminent)
-
-                    if coordinator.pendingLinkSession != nil {
-                        Button {
-                            coordinator.openPendingLinkSession()
-                        } label: {
-                            Label("Open Link Again", systemImage: "safari")
-                        }
-                        .disabled(coordinator.isWorking)
-
-                        Button {
-                            Task { await coordinator.finishHostedLinkConnection(context: modelContext) }
-                        } label: {
-                            Label("Finish Bank Connection", systemImage: "checkmark.circle")
-                        }
-                        .disabled(!credentialEditor.hasStoredCredentials || coordinator.isWorking)
-                    }
-                }
-            }
-            .padding(4)
-        } label: {
-            Label("Bank Connection", systemImage: "link")
-        }
-    }
-
-    private var syncCard: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(syncHeadline)
-                            .font(.headline)
-                        Text(syncDetail)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if coordinator.isWorking {
-                        ProgressView()
-                    }
-                }
-
-                if let statusMessage = coordinator.statusMessage {
-                    Label(statusMessage, systemImage: "checkmark.circle")
-                        .foregroundStyle(.secondary)
-                }
-
-                if let errorMessage = coordinator.errorMessage {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                        .textSelection(.enabled)
-                }
-
-                if let launchAtLoginMessage {
-                    Label(launchAtLoginMessage, systemImage: "info.circle")
-                        .foregroundStyle(.secondary)
-                }
-
-                Toggle("Open MoneyMap for Mac at login", isOn: $launchAtLogin)
-                    .onChange(of: launchAtLogin) { _, newValue in
-                        updateLaunchAtLogin(newValue)
-                    }
-
-                HStack {
-                    Button {
-                        Task { await coordinator.syncAll(context: modelContext) }
-                    } label: {
-                        Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    .disabled(!credentialEditor.hasStoredCredentials || connections.isEmpty || coordinator.isWorking)
-
-                    if credentialEditor.environment == .sandbox {
-                        Button {
-                            Task { await coordinator.createSandboxConnection(context: modelContext) }
-                        } label: {
-                            Label("Create Sandbox Test Bank", systemImage: "testtube.2")
-                        }
-                        .disabled(!credentialEditor.hasStoredCredentials || coordinator.isWorking)
-                    }
-                }
-            }
-            .padding(4)
-        } label: {
-            Label("Mac Server", systemImage: "desktopcomputer")
-        }
-    }
-
-    private var connectionsCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private var overview: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            pageHeading("Your banks, in order", subtitle: "This Mac keeps your bank data ready for MoneyMap on iPhone.")
             GroupBox {
-                if connections.isEmpty {
-                    ContentUnavailableView("No Bank Connections", systemImage: "link")
-                        .frame(maxWidth: .infinity, minHeight: 120)
-                } else {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(connections) { connection in
-                            MacPlaidConnectionRow(
-                                connection: connection,
-                                onReconnect: {
-                                    Task { await coordinator.startReconnect(itemID: connection.itemID) }
-                                },
-                                onRemove: {
-                                    connectionPendingRemoval = connection
-                                }
-                            )
-                            if connection.id != connections.last?.id {
-                                Divider()
-                            }
+                HStack(alignment: .top, spacing: 16) {
+                    Image(systemName: hasService ? (attentionCount > 0 ? "exclamationmark.circle.fill" : "checkmark.circle.fill") : "building.columns")
+                        .font(.system(size: 32)).foregroundStyle(attentionCount > 0 ? Color.orange : Color.accentColor)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(!hasService ? "Welcome to MoneyMap" : connections.isEmpty ? "Connect your first bank" : attentionCount > 0 ? "A little attention needed" : "You're connected")
+                            .font(.title2.weight(.semibold))
+                        Text(!hasService ? "A short setup gets this Mac ready to connect your accounts." : connections.isEmpty ? "Choose your bank and sign in securely in your browser." : attentionCount > 0 ? "\(attentionCount) bank\(attentionCount == 1 ? " has" : "s have") a connection update to review." : "\(connections.count) banks · \(accounts.count) accounts")
+                            .foregroundStyle(.secondary)
+                        if let lastSync { Text("All banks refreshed through \(lastSync.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
+                        if !hasService || connections.isEmpty {
+                            Button(!hasService ? "Get Started" : "Connect a Bank") { beginConnection() }.buttonStyle(.borderedProminent)
+                        } else if attentionCount > 0 {
+                            Button("Review Banks") { destination = .banks }.buttonStyle(.borderedProminent)
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            } label: {
-                Label("Connections", systemImage: "building.columns")
-            }
-
-            Text("Account rows are read-only snapshots. Remove a bank connection here to clean up test banks and synced accounts in MoneyMap.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 4)
-        }
-    }
-
-    private var phoneSyncCard: some View {
-        GroupBox {
-            HStack(alignment: .top, spacing: 20) {
-                Image(systemName: "iphone.gen3")
-                    .font(.title2)
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 32)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Ready for iPhone Review")
-                        .font(.headline)
-                    Text(phoneSyncSummary)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                HStack(spacing: 20) {
-                    MetricTile(title: "Transactions", value: "\(readyReviewItems.count)", symbol: "tray.full")
-                    MetricTile(title: "Suggestions", value: "\(readySuggestions.count)", symbol: "lightbulb")
-                }
-                .frame(maxWidth: 220)
-            }
-            .padding(4)
-        } label: {
-            Label("iPhone Sync", systemImage: "icloud.and.arrow.up")
-        }
-    }
-
-    private var advancedDetailsCard: some View {
-        GroupBox {
-            DisclosureGroup(isExpanded: $showingAdvancedDetails) {
-                VStack(alignment: .leading, spacing: 18) {
-                    storageStatusCard
-                    accountsCard
-                    transactionsCard
-                    diagnosticsCard
-                }
-                .padding(.top, 12)
-            } label: {
-                HStack {
-                    Label("Details and Diagnostics", systemImage: "stethoscope")
                     Spacer()
-                    Text("\(accounts.count) accounts, \(reviewItems.count) transactions")
-                        .foregroundStyle(.secondary)
-                }
-                .font(.headline)
+                }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+            }.groupBoxStyle(MacWorkspaceGroupStyle(tint: attentionCount > 0 ? .orange : .accentColor))
+            if let pending = coordinator.pendingLinkSession {
+                actionRow(pending.isDataUpgrade == true ? "Finish your data upgrade" : "Finish your bank sign-in", detail: "Continue where you left off in your browser.", symbol: "arrow.forward.circle") { workflow = true }
             }
-            .padding(4)
+            if upgradeCount > 0 {
+                actionRow("Unlock more account details", detail: "\(upgradeCount) connected bank\(upgradeCount == 1 ? "" : "s") can request additional data access.", symbol: "sparkles") { destination = .banks }
+            }
+            if PlaidSyncContainerFactory.lastReport.mode == .inMemory {
+                Label("MoneyMap couldn't open its saved data. Changes won't be kept after quitting. Open Settings → Troubleshooting for details.", systemImage: "externaldrive.badge.exclamationmark").foregroundStyle(.orange)
+            }
+            if coordinator.errorMessage != nil {
+                DisclosureGroup {
+                    Text(coordinator.errorMessage ?? "").textSelection(.enabled).foregroundStyle(.secondary).padding(.top, 8)
+                } label: { Label("The last update needs attention", systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+            }
+            actionRow("Your banks", detail: "Accounts, balances, and connection health", symbol: "building.columns") { destination = .banks }
+            actionRow("Latest activity", detail: "See what has arrived from your banks", symbol: "clock.arrow.circlepath") { destination = .activity }
+            actionRow("Update your iPhone", detail: "A short guide to bringing your bank data up to date", symbol: "iphone") { phoneGuide = true }
+            GroupBox {
+                Label("MoneyMap can keep updating your banks from the menu bar, even with this window closed.", systemImage: "iphone.and.arrow.forward")
+                    .foregroundStyle(.secondary).padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
-    private var accountsCard: some View {
-        GroupBox {
-            if accounts.isEmpty {
-                ContentUnavailableView("No Synced Accounts", systemImage: "building.columns")
-                    .frame(maxWidth: .infinity, minHeight: 120)
-            } else {
-                Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 12) {
-                    GridRow {
-                        Text("Account").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        Text("Type").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        Text("Balance").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    }
-                    ForEach(accounts) { account in
-                        GridRow {
-                            Text(account.displayName)
-                            Text(account.subtype ?? account.type).foregroundStyle(.secondary)
-                            Text(balanceText(account)).monospacedDigit()
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+    private var banks: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            pageHeading("Your banks", subtitle: "Open a bank to see its accounts or manage its connection.")
+            if connections.isEmpty {
+                ContentUnavailableView { Label("No banks yet", systemImage: "building.columns") } description: { Text("Connect an account to get started.") } actions: { Button("Connect a Bank") { beginConnection() } }
             }
-        } label: {
-            Label("Account Snapshots", systemImage: "list.bullet.rectangle")
+            ForEach(connections) { connection in
+                actionRow(connection.institutionName ?? "Bank", detail: "\(accounts.filter { $0.itemID == connection.itemID }.count) accounts · \(needsReconnect(connection) ? "Reconnect needed" : needsConsent(connection) ? "Data access upgrade available" : connection.errorMessage != nil ? "Update delayed" : "Connected")", symbol: "building.columns") { selectedBank = connection.itemID }
+            }
         }
     }
 
-    private var transactionsCard: some View {
-        GroupBox {
-            if reviewItems.isEmpty {
-                ContentUnavailableView("No Synced Transactions", systemImage: "list.bullet.rectangle")
-                    .frame(maxWidth: .infinity, minHeight: 120)
-            } else {
-                VStack(alignment: .leading, spacing: 10) {
+    private func bankDetail(_ connection: PlaidConnection) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Button { selectedBank = nil } label: { Label("All Banks", systemImage: "chevron.left") }.buttonStyle(.plain).foregroundStyle(Color.accentColor)
+            pageHeading(connection.institutionName ?? "Bank", subtitle: connection.lastSyncAt.map { "Updated \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Waiting for its first update")
+            if needsReconnect(connection) {
+                GroupBox {
                     HStack(spacing: 16) {
-                        MetricTile(title: "Ready", value: "\(readyReviewItems.count)", symbol: "tray.full")
-                        MetricTile(title: "Imported", value: "\(importedReviewItems.count)", symbol: "checkmark.circle")
-                        MetricTile(title: "Skipped", value: "\(skippedReviewItems.count)", symbol: "forward.end")
+                        Label("Bank access needs to be restored", systemImage: "exclamationmark.lock").foregroundStyle(.orange)
+                        Spacer()
+                        Button("Reconnect Bank") { reconnectID = connection.itemID; upgradeAccess = false; workflow = true }
+                            .buttonStyle(.borderedProminent).disabled(coordinator.isWorking)
+                    }.padding(12)
+                }.groupBoxStyle(MacWorkspaceGroupStyle(tint: .orange))
+            } else if needsConsent(connection) {
+                GroupBox {
+                    HStack(alignment: .top, spacing: 16) {
+                        Image(systemName: "sparkles").font(.title2).foregroundStyle(.purple)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("Get more from your accounts").font(.headline)
+                            Text("Your bank is connected. Approve additional access to request payment details or other supported data.").foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        Button("Upgrade Data Access") { reconnectID = connection.itemID; upgradeAccess = true; workflow = true }
+                            .buttonStyle(.borderedProminent).disabled(coordinator.isWorking)
+                    }.padding(12)
+                }.groupBoxStyle(MacWorkspaceGroupStyle(tint: .purple))
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 330), alignment: .top)], alignment: .leading, spacing: 20) {
+                ForEach(accounts.filter { $0.itemID == connection.itemID }) { account in
+                    MacAccountDetailsCard(account: account, connection: connection,
+                        transactions: transactions.filter { $0.plaidAccountID == account.accountID && $0.bankRemovedAt == nil },
+                        canUpgrade: !coordinator.isWorking && !needsReconnect(connection)) {
+                            reconnectID = connection.itemID; upgradeAccess = true; workflow = true
+                        }
+                }
+            }
+            Text("Capabilities are based on data returned for each account. A successful bank connection does not guarantee every field is supplied.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let error = connection.errorMessage {
+                DisclosureGroup("Connection details") { Text(error).textSelection(.enabled).padding(.top, 8) }.foregroundStyle(.secondary)
+            }
+            Button("Remove Bank…", role: .destructive) { removal = connection }.disabled(coordinator.isWorking)
+        }
+    }
+
+    private var activity: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            pageHeading("Latest activity", subtitle: "Recent bank transactions. Review and organize them in MoneyMap on iPhone.")
+            if let status = coordinator.statusMessage {
+                DisclosureGroup("Latest update") { Text(status).foregroundStyle(.secondary).textSelection(.enabled).padding(.top, 8) }
+            }
+            if transactions.isEmpty { ContentUnavailableView("No activity yet", systemImage: "clock") }
+            else {
+                GroupBox {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(Array(transactions.prefix(50))) { item in MacPlaidTransactionRow(reviewItem: item); Divider() }
+                    }.padding(12)
+                }
+                Text("Showing the 50 most recently updated transactions.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func beginConnection() {
+        refreshServiceStatus()
+        if hasService { reconnectID = nil; upgradeAccess = false; workflow = true } else { setup = true }
+    }
+    private func refreshServiceStatus() { hasService = PlaidCredentialStore().hasStoredCredentialsHint || !connections.isEmpty }
+    private func needsReconnect(_ connection: PlaidConnection) -> Bool {
+        MacBankAccessPresentation.needsReconnect(status: connection.status, error: connection.errorMessage, enrichmentJSON: connection.enrichmentJSON)
+    }
+    private func needsConsent(_ connection: PlaidConnection) -> Bool {
+        accounts.filter { $0.itemID == connection.itemID }.contains { account in
+            MacAccountCapability.make(type: account.type, balance: account.currentBalance, accountJSON: account.enrichmentJSON,
+                connectionJSON: connection.enrichmentJSON, transactionCount: 0).contains { $0.availability == .upgrade }
+        }
+    }
+}
+
+private func pageHeading(_ title: String, subtitle: String) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+        Text(title).font(.largeTitle.weight(.semibold))
+        Text(subtitle).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private func actionRow(_ title: String, detail: String, symbol: String, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+        HStack(spacing: 14) {
+            Image(systemName: symbol).font(.title2).foregroundStyle(Color.accentColor).frame(width: 32)
+            VStack(alignment: .leading, spacing: 4) { Text(title).font(.headline); Text(detail).foregroundStyle(.secondary) }
+            Spacer()
+            Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+        }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
+            .macWorkspaceSurface(radius: 14)
+            .contentShape(Rectangle())
+    }.buttonStyle(.plain)
+}
+
+private struct MacBankConnectionFlow: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var context
+    @ObservedObject var coordinator: MacPlaidSyncCoordinator
+    let reconnectID: String?
+    var upgradeAccess = false
+    @State private var finishedUpgrade = false
+    private var isUpgrade: Bool { finishedUpgrade || (coordinator.pendingLinkSession?.isDataUpgrade ?? upgradeAccess) }
+    @State private var product = "transactions"
+    @State private var completed = false
+    @State private var performedAction = false
+    @State private var cancelConfirmation = false
+    private var pending: Bool { coordinator.pendingLinkSession != nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+            Text(completed ? (isUpgrade ? "Data access updated" : "Connection updated") : pending ? (isUpgrade ? "Approve additional access" : "Finish in your browser") : reconnectID == nil ? "Connect a bank" : isUpgrade ? "Upgrade data access" : "Reconnect your bank")
+                .font(.title.weight(.semibold))
+            Text(completed ? "Step 3 of 3 · Ready" : pending ? "Step 2 of 3 · Bank sign-in" : "Step 1 of 3 · Prepare")
+                .font(.subheadline).foregroundStyle(.secondary)
+            if completed {
+                Label("Your available bank data has been refreshed.", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                Text(coordinator.statusMessage ?? "Your updated data is ready for iPhone.").foregroundStyle(.secondary)
+            } else if pending {
+                Text(isUpgrade ? "Approve the additional data you want to share in your browser, then return here. Your existing bank connection stays in place." : "Sign in and approve access in your browser. Return here when you finish so MoneyMap can retrieve your accounts.")
+                Button("Open Bank Sign-in Again") { coordinator.openPendingLinkSession() }.disabled(coordinator.isWorking)
+                Text("You can close this guide and resume it from Overview.").font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text(reconnectID == nil ? "Choose the kind of account you want to add. You'll sign in securely with Plaid in your browser." : isUpgrade ? "Your bank is already connected. This upgrade requests supported payment, loan, or investment details. Some banks may still leave individual fields unavailable." : "Your bank sign-in is no longer working. Sign in again to restore access to your accounts.")
+                if reconnectID == nil {
+                    Picker("Account type", selection: $product) {
+                        Text("Everyday banking & cards").tag("transactions")
+                        Text("Investments").tag("investments")
+                        Text("Loans").tag("liabilities")
+                    }.pickerStyle(.radioGroup)
+                }
+            }
+            if performedAction, let error = coordinator.errorMessage {
+                Label("We couldn't finish this step. You can try again.", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                DisclosureGroup("Details") { Text(error).font(.caption).textSelection(.enabled) }
+            } else if performedAction, pending, let message = coordinator.statusMessage {
+                Text(message).font(.callout).foregroundStyle(.secondary)
+            }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Divider()
+            HStack {
+                Button(completed ? "Close" : "Later") { dismiss() }.keyboardShortcut(.cancelAction)
+                if pending { Button("Cancel Connection…", role: .destructive) { cancelConfirmation = true }.disabled(coordinator.isWorking) }
+                Spacer()
+                if coordinator.isWorking { ProgressView().controlSize(.small) }
+                Button(completed ? "Done" : pending ? "I've Finished Signing In" : "Continue to Bank") {
+                    if completed { dismiss(); return }
+                    Task {
+                        performedAction = true
+                        if pending {
+                            finishedUpgrade = isUpgrade
+                            await coordinator.finishHostedLinkConnection(context: context)
+                            completed = coordinator.pendingLinkSession == nil && coordinator.errorMessage == nil
+                        } else if let reconnectID { await coordinator.startReconnect(itemID: reconnectID, upgradeDataAccess: isUpgrade) }
+                        else { await coordinator.startHostedLinkConnection(primaryProduct: product) }
                     }
-
-                    Divider()
-
-                    ForEach(Array(reviewItems.prefix(10))) { reviewItem in
-                        MacPlaidTransactionRow(reviewItem: reviewItem)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(coordinator.isWorking)
             }
-        } label: {
-            Label("Transactions", systemImage: "list.bullet.rectangle")
-        }
-    }
-
-    private var reviewCard: some View {
-        GroupBox {
-            HStack(spacing: 24) {
-                MetricTile(title: "Transactions", value: "\(readyReviewItems.count)", symbol: "tray.full")
-                MetricTile(title: "Suggestions", value: "\(readySuggestions.count)", symbol: "lightbulb")
-                MetricTile(title: "Connections", value: "\(connections.count)", symbol: "link")
-            }
-        } label: {
-            Label("Prepared for Review", systemImage: "checklist")
-        }
-    }
-
-    private var diagnosticsCard: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
-                DiagnosticLine(label: "Environment", value: credentialEditor.environment.displayName)
-                DiagnosticLine(label: "Connections", value: "\(connections.count)")
-                DiagnosticLine(label: "Accounts", value: "\(accounts.count)")
-                DiagnosticLine(label: "Transactions", value: "\(reviewItems.count)")
-                DiagnosticLine(label: "Suggestions", value: "\(suggestions.count)")
-                if let pendingLinkSession = coordinator.pendingLinkSession {
-                    DiagnosticLine(label: "Pending Link", value: pendingLinkSession.mode == .addItem ? "Add bank" : "Reconnect")
-                    DiagnosticLine(label: "Link Token", value: pendingLinkSession.linkToken)
-                }
-                ForEach(connections.filter { $0.errorMessage != nil }) { connection in
-                    DiagnosticLine(
-                        label: connection.institutionName ?? "Connection",
-                        value: connection.errorMessage ?? "Needs attention"
-                    )
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .textSelection(.enabled)
-        } label: {
-            Label("Diagnostics", systemImage: "stethoscope")
-        }
-    }
-
-
-    private var syncHeadline: String {
-        if let lastSyncAt = connections.compactMap(\.lastSyncAt).max() {
-            let freshness = BankSyncFreshness(lastSyncAt: lastSyncAt)
-            let prefix = freshness.level.isStale ? "Stale sync" : "Last synced"
-            let age = freshness.level.isStale ? " - \(freshness.ageLabel ?? "old")" : ""
-            return "\(prefix) \(lastSyncAt.formatted(date: .abbreviated, time: .shortened))\(age)"
-        }
-        return connections.isEmpty ? "Ready to connect a bank" : "Ready to sync"
-    }
-
-    private var syncDetail: String {
-        automaticRefreshEnabled
-            ? "This Mac refreshes every \(automaticRefreshIntervalLabel) while MoneyMap is open. iPhone and iPad read the shared snapshots."
-            : "Automatic refresh is off. iPhone and iPad read snapshots after you sync this Mac."
-    }
-
-    private var automaticRefreshIntervalLabel: String {
-        switch refreshIntervalMinutes {
-        case 30:
-            return "30 minutes"
-        case 60:
-            return "hour"
-        case 180:
-            return "3 hours"
-        case 360:
-            return "6 hours"
-        default:
-            return "\(refreshIntervalMinutes) minutes"
-        }
-    }
-
-    private var removeConnectionTitle: String {
-        guard let connectionPendingRemoval else { return "Remove Bank Connection?" }
-        return "Remove \(connectionPendingRemoval.institutionName ?? "Bank Connection")?"
-    }
-
-    private var removeConnectionConfirmationBinding: Binding<Bool> {
-        Binding(
-            get: { connectionPendingRemoval != nil },
-            set: { isPresented in
-                if !isPresented {
-                    connectionPendingRemoval = nil
-                }
-            }
-        )
-    }
-
-    private var primaryStatus: (title: String, detail: String, systemImage: String, color: Color) {
-        if !credentialEditor.hasStoredCredentials {
-            return (
-                "Set up Plaid credentials",
-                "Save your Client ID and the matching Sandbox or Production secret before connecting banks.",
-                "key",
-                .orange
-            )
-        }
-
-        if coordinator.pendingLinkSession != nil {
-            return (
-                "Finish the bank connection",
-                "Plaid Link is open or waiting in your browser. Finish it there, then return here.",
-                "link",
-                .accentColor
-            )
-        }
-
-        if connections.isEmpty {
-            return (
-                "Ready to connect a bank",
-                "Credentials are saved. Start Plaid Link to connect your first bank.",
-                "link.badge.plus",
-                .accentColor
-            )
-        }
-
-        if !connectionsNeedingAttention.isEmpty {
-            return (
-                "\(connectionsNeedingAttention.count) bank\(connectionsNeedingAttention.count == 1 ? "" : "s") need attention",
-                "Reconnect the affected bank login, then sync again.",
-                "exclamationmark.triangle",
-                .orange
-            )
-        }
-
-        if readyReviewItems.count + readySuggestions.count > 0 {
-            return (
-                "New items are ready on iPhone",
-                "\(readyReviewItems.count) transactions and \(readySuggestions.count) suggestions are waiting for review.",
-                "iphone.gen3",
-                .green
-            )
-        }
-
-        if let lastSyncAt = connections.compactMap(\.lastSyncAt).max() {
-            let freshness = BankSyncFreshness(lastSyncAt: lastSyncAt)
-            if freshness.level.isStale {
-                return (
-                    "Bank data is stale",
-                    "Last synced \(lastSyncAt.formatted(date: .abbreviated, time: .shortened)) (\(freshness.ageLabel ?? "old")). Run Sync Now to refresh Plaid and push a new iPhone snapshot.",
-                    "exclamationmark.triangle",
-                    .orange
-                )
-            }
-            return (
-                "Bank sync is current",
-                "Last synced \(lastSyncAt.formatted(date: .abbreviated, time: .shortened)).",
-                "checkmark.circle",
-                .green
-            )
-        }
-
-        return (
-            "Ready to sync",
-            "Your bank connection is saved. Run Sync Now to refresh accounts and transactions.",
-            "arrow.triangle.2.circlepath",
-            .accentColor
-        )
-    }
-
-    private var nextActionTitle: String {
-        if !credentialEditor.hasStoredCredentials {
-            return "Add your Plaid credentials"
-        }
-        if coordinator.pendingLinkSession != nil {
-            return "Finish Plaid Link"
-        }
-        if connections.isEmpty {
-            return "Connect your first bank"
-        }
-        return "Sync bank data"
-    }
-
-    private var nextActionDetail: String {
-        if !credentialEditor.hasStoredCredentials {
-            return "MoneyMap needs your Plaid Client ID and the secret for the environment you want to use."
-        }
-        if coordinator.pendingLinkSession != nil {
-            return "Complete bank login in the browser, then finish the connection here."
-        }
-        if connections.isEmpty {
-            return "This opens Plaid in your browser. Credentials and tokens stay on this Mac."
-        }
-        return "Refresh accounts, transactions, and suggestions, then send the latest snapshot to iPhone."
-    }
-
-    private var nextActionSystemImage: String {
-        if !credentialEditor.hasStoredCredentials {
-            return "key"
-        }
-        if coordinator.pendingLinkSession != nil {
-            return "checkmark.circle"
-        }
-        if connections.isEmpty {
-            return "link.badge.plus"
-        }
-        return "arrow.triangle.2.circlepath"
-    }
-
-    private var phoneSyncSummary: String {
-        if readyReviewItems.isEmpty && readySuggestions.isEmpty {
-            return connections.isEmpty
-                ? "Connect a bank on this Mac first. Your iPhone will receive safe snapshots after a sync."
-                : "No new review items are waiting right now. Sync again when you want to refresh bank data."
-        }
-
-        return "Open MoneyMap on iPhone, go to Wallet, then Bank Sync to review imported bank data."
-    }
-
-    private var connectionsNeedingAttention: [PlaidConnection] {
-        connections.filter { connection in
-            connection.errorMessage?.isEmpty == false ||
-            connection.status == "needs_attention" ||
-            connection.status == "needs_credentials"
-        }
-    }
-
-    private var readyReviewItems: [PlaidTransactionReviewItem] {
-        reviewItems.filter { $0.status == .ready }
-    }
-
-    private var importedReviewItems: [PlaidTransactionReviewItem] {
-        reviewItems.filter { $0.status == .imported }
-    }
-
-    private var skippedReviewItems: [PlaidTransactionReviewItem] {
-        reviewItems.filter { $0.status == .skipped }
-    }
-
-    private var readySuggestions: [PlaidSuggestion] {
-        suggestions.filter { $0.status == .ready }
-    }
-
-    private func balanceText(_ account: PlaidAccountSnapshot) -> String {
-        guard let balance = account.currentBalance else { return "Not available" }
-        return balance.formatted(.currency(code: account.currencyCode ?? "USD"))
-    }
-
-    private func openPlaidDashboard() {
-        openPlaidAPIKeys()
-    }
-
-    private func openPlaidSignup() {
-        NSWorkspace.shared.open(URL(string: "https://dashboard.plaid.com/signup")!)
-    }
-
-    private func openPlaidAPIKeys() {
-        NSWorkspace.shared.open(URL(string: "https://dashboard.plaid.com/team/keys")!)
-    }
-
-    @discardableResult
-    private func saveCredentials() -> Bool {
-        credentialStatusMessage = nil
-        credentialErrorMessage = nil
-
-        do {
-            try credentialEditor.save()
-            credentialStatusMessage = "\(credentialEditor.environment.displayName) credentials saved. Next: start a bank connection."
-            return true
-        } catch {
-            credentialErrorMessage = error.localizedDescription
-            return false
-        }
-    }
-
-    private func loadCredentialValues() {
-        credentialStatusMessage = nil
-        credentialErrorMessage = nil
-
-        do {
-            try credentialEditor.loadValuesForEditing()
-            credentialStatusMessage = "Saved credentials loaded."
-        } catch {
-            credentialErrorMessage = error.localizedDescription
-        }
-    }
-
-    private func updateLaunchAtLogin(_ enabled: Bool) {
-        do {
-            try LaunchAtLoginController.setEnabled(enabled)
-            launchAtLoginMessage = enabled ? "MoneyMap for Mac will open when you sign in." : "MoneyMap for Mac will not open at login."
-        } catch {
-            launchAtLogin = LaunchAtLoginController.isEnabled
-            launchAtLoginMessage = error.localizedDescription
+        }.padding(28).frame(width: 520, height: 440).background(Color(nsColor: .windowBackgroundColor))
+        .confirmationDialog("Cancel this bank connection?", isPresented: $cancelConfirmation) {
+            Button("Cancel Connection", role: .destructive) { coordinator.cancelPendingLinkSession(); dismiss() }
         }
     }
 }
 
 struct MacBankSyncSettingsView: View {
+    @Environment(\.modelContext) private var context
+    @ObservedObject var coordinator: MacPlaidSyncCoordinator
+    @AppStorage(MacBankSyncPreferences.automaticRefreshEnabledKey) private var automaticRefresh = true
+    @AppStorage(MacBankSyncPreferences.refreshIntervalMinutesKey) private var interval = 60
+    @AppStorage(MacPlaidAPIClient.linkCustomizationNameKey) private var customization = ""
+    @AppStorage(MacBackgroundLifecycle.keepRunningKey) private var keepRunning = true
+    @State private var launchAtLogin = false
+    @State private var launchError: String?
+    @State private var setup = false
+    @State private var serviceReady = false
+
     var body: some View {
         Form {
-            Text("Manage Plaid credentials and bank sync from the main MoneyMap for Mac window.")
-        }
-        .formStyle(.grouped)
-        .padding()
-        .frame(width: 420)
-    }
-}
-
-private struct MetricTile: View {
-    let title: String
-    let value: String
-    let symbol: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: symbol)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.title2.weight(.semibold))
-                .monospacedDigit()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct MacPlaidConnectionRow: View {
-    let connection: PlaidConnection
-    let onReconnect: () -> Void
-    let onRemove: () -> Void
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            Image(systemName: connection.errorMessage == nil ? "building.columns" : "exclamationmark.triangle")
-                .font(.title3)
-                .foregroundStyle(connection.errorMessage == nil ? Color.accentColor : Color.orange)
-                .frame(width: 28)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(connection.institutionName ?? "Plaid connection")
-                    .font(.headline)
-                Text(statusText)
-                    .foregroundStyle(.secondary)
-                if let errorMessage = connection.errorMessage {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .textSelection(.enabled)
-                }
+            Section {
+                Toggle("Keep bank data up to date", isOn: $automaticRefresh)
+                Toggle("Keep syncing when I close MoneyMap", isOn: $keepRunning)
+                Toggle("Open MoneyMap at login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, enabled in
+                        guard enabled != LaunchAtLoginController.isEnabled else { return }
+                        do { try LaunchAtLoginController.setEnabled(enabled); launchError = nil }
+                        catch { launchError = error.localizedDescription; launchAtLogin = LaunchAtLoginController.isEnabled }
+                    }
+                if let launchError { Text(launchError).font(.caption).foregroundStyle(.orange) }
+            } header: { Text("Everyday essentials") } footer: { Text("When background sync is on, closing the window or pressing ⌘Q keeps MoneyMap in the menu bar. Use Quit MoneyMap Completely to stop it.") }
+            Section("Bank connection service") {
+                LabeledContent("Plaid", value: serviceReady ? "Set up" : "Setup needed")
+                Button(serviceReady ? "Manage Connection Setup…" : "Set Up Bank Connections…") { setup = true }
+                    .disabled(coordinator.isWorking || coordinator.pendingLinkSession != nil)
             }
+            Section {
+                DisclosureGroup("Refresh schedule") {
+                    Picker("Check for updates", selection: $interval) {
+                        Text("Every 30 minutes").tag(30); Text("Every hour").tag(60)
+                        Text("Every 3 hours").tag(180); Text("Every 6 hours").tag(360)
+                    }.disabled(!automaticRefresh)
+                    Text("Bank availability can affect when new data arrives.").font(.caption).foregroundStyle(.secondary)
+                }
+                DisclosureGroup("Advanced connection options") {
+                    Text("Only change these if your Plaid setup requires it.").foregroundStyle(.secondary)
+                    TextField("Link customization", text: $customization, prompt: Text("Use Plaid default"))
+                        .disabled(coordinator.isWorking || coordinator.pendingLinkSession != nil)
+                    Link("Open Plaid Dashboard", destination: URL(string: "https://dashboard.plaid.com/")!)
+                    Text("Open a bank and choose Upgrade Data Access to approve additional information.").font(.caption).foregroundStyle(.secondary)
+                }
+                DisclosureGroup("Troubleshooting") {
+                    LabeledContent("Connection environment", value: PlaidCredentialStore().selectedEnvironment.displayName)
+                    let report = PlaidSyncContainerFactory.lastReport
+                    LabeledContent("Storage", value: report.mode.displayName)
+                    if let reason = report.fallbackReason { Text(reason).font(.caption).textSelection(.enabled) }
+                    if let url = report.storeURL { Text(url.path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                    if let error = coordinator.errorMessage { Text(error).font(.caption).textSelection(.enabled) }
+                    if PlaidCredentialStore().selectedEnvironment == .sandbox {
+                        Button("Add a Test Bank") { Task { await coordinator.createSandboxConnection(context: context) } }
+                            .disabled(coordinator.isWorking || coordinator.pendingLinkSession != nil)
+                    }
+                }
+            } header: { Text("More options") }
+        }.formStyle(.grouped).frame(width: 560, height: 540)
+        .onAppear { launchAtLogin = LaunchAtLoginController.isEnabled; refreshStatus() }
+        .sheet(isPresented: $setup, onDismiss: { refreshStatus() }) { MacServiceSetupFlow(coordinator: coordinator) }
+    }
+    private func refreshStatus() { serviceReady = PlaidCredentialStore().hasStoredCredentialsHint }
+}
 
-            Spacer()
+private struct MacServiceSetupFlow: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var coordinator: MacPlaidSyncCoordinator
+    @State private var editor = PlaidCredentialEditorState()
+    @State private var step = 0
+    @State private var errorMessage: String?
+    @State private var working = false
 
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+            Text(step == 2 ? "Your Mac is ready" : "Set up bank connections").font(.title.weight(.semibold))
+            Text("Step \(step + 1) of 3").font(.subheadline).foregroundStyle(.secondary)
+            if step == 0 {
+                Text("MoneyMap uses Plaid to connect to your banks. This one-time setup saves the connection keys securely in your Mac's Keychain.")
+                Text("Have a Plaid account ready, then continue to enter its connection keys.").foregroundStyle(.secondary)
+                Link("Open Plaid", destination: URL(string: "https://dashboard.plaid.com/")!)
+            } else if step == 1 {
+                Text("Copy the keys from your Plaid account. These are service keys, not your bank password.").foregroundStyle(.secondary)
+                Picker("Accounts", selection: $editor.environment) {
+                    Text("Real accounts").tag(PlaidCredentialEnvironment.production)
+                    Text("Test accounts").tag(PlaidCredentialEnvironment.sandbox)
+                }.onChange(of: editor.environment) { old, new in editor.selectEnvironment(new, previousEnvironment: old) }
+                TextField("Client ID", text: $editor.clientID).textFieldStyle(.roundedBorder)
+                SecureField(editor.environment == .production ? "Production secret" : "Sandbox secret", text: $editor.secret).textFieldStyle(.roundedBorder)
+                HStack {
+                    Link("Find My Keys", destination: URL(string: "https://dashboard.plaid.com/team/keys")!)
+                    Spacer()
+                    Button("Load Saved Keys") { do { try editor.loadValuesForEditing() } catch { errorMessage = error.localizedDescription } }
+                }
+            } else {
+                Label("Connection service verified", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                Text("Use Add Bank in the main window to choose a bank and sign in. You can manage these settings whenever you need to.").foregroundStyle(.secondary)
+            }
+            if let errorMessage {
+                Label("Setup needs attention", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                DisclosureGroup("Details") { Text(errorMessage).font(.caption).textSelection(.enabled) }
+            }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Divider()
             HStack {
-                Button("Reconnect", systemImage: "arrow.triangle.2.circlepath") {
-                    onReconnect()
-                }
-
-                Button("Remove", systemImage: "trash", role: .destructive) {
-                    onRemove()
-                }
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(working)
+                if step == 1 { Button("Back") { step = 0; errorMessage = nil }.disabled(working) }
+                Spacer()
+                if working { ProgressView().controlSize(.small) }
+                Button(step == 2 ? "Done" : step == 1 ? "Save & Verify" : "Continue") {
+                    if step == 2 { dismiss() }
+                    else if step == 0 { step = 1 }
+                    else {
+                        working = true; errorMessage = nil
+                        Task {
+                            do {
+                                // Verify before replacing the saved keys or selected environment.
+                                let credentials = PlaidStoredCredentials(clientID: editor.clientID.trimmingCharacters(in: .whitespacesAndNewlines), secret: editor.secret.trimmingCharacters(in: .whitespacesAndNewlines), environment: editor.environment)
+                                try await MacPlaidAPIClient(credentials: credentials).validateCredentials()
+                                try editor.save(); step = 2
+                            } catch { errorMessage = error.localizedDescription }
+                            working = false
+                        }
+                    }
+                }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .disabled(working || coordinator.isWorking || (step == 1 && !editor.canSave))
             }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private var statusText: String {
-        var parts: [String] = []
-        if let status = connection.status, !status.isEmpty {
-            parts.append(status.replacingOccurrences(of: "_", with: " ").capitalized)
-        }
-        if let lastSyncAt = connection.lastSyncAt {
-            parts.append("Last synced \(lastSyncAt.formatted(date: .abbreviated, time: .shortened))")
-        }
-        return parts.isEmpty ? "Waiting for first sync" : parts.joined(separator: " - ")
+        }.padding(28).frame(width: 500, height: 430).background(Color(nsColor: .windowBackgroundColor))
+        .onAppear { editor.loadStatus(hasConnections: false) }
+        .interactiveDismissDisabled(working)
     }
 }
-
 private struct MacPlaidTransactionRow: View {
     let reviewItem: PlaidTransactionReviewItem
 
@@ -1271,60 +513,6 @@ private struct MacPlaidTransactionRow: View {
             parts.append("Pending")
         }
         return parts.joined(separator: " - ")
-    }
-}
-
-private struct DiagnosticLine: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        HStack(alignment: .top) {
-            Text(label)
-                .foregroundStyle(.secondary)
-                .frame(width: 140, alignment: .leading)
-            Text(value)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .font(.caption)
-    }
-}
-
-private struct PlaidCredentialSlotStatus: View {
-    let environment: PlaidCredentialEnvironment
-    let isSaved: Bool
-
-    var body: some View {
-        Label(
-            isSaved ? "\(environment.displayName) saved" : "\(environment.displayName) empty",
-            systemImage: isSaved ? "checkmark.circle.fill" : "circle"
-        )
-        .font(.caption)
-        .foregroundStyle(isSaved ? Color.green : Color.secondary)
-    }
-}
-
-private struct GuidedPlaidStep: View {
-    let number: Int
-    let title: String
-    let detail: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text("\(number)")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 22, height: 22)
-                .background(Circle().fill(Color.accentColor))
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                Text(detail)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-        }
     }
 }
 
@@ -1412,4 +600,41 @@ enum LaunchAtLoginController {
 enum MacBankSyncPreferences {
     static let automaticRefreshEnabledKey = "plaid.automaticRefreshEnabled"
     static let refreshIntervalMinutesKey = "plaid.refreshIntervalMinutes"
+}
+
+private struct MacPhoneUpdateFlow: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var context
+    @ObservedObject var coordinator: MacPlaidSyncCoordinator
+    @State private var refreshed = false
+    @State private var attempted = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Text("Update your iPhone").font(.title.weight(.semibold))
+            Text(refreshed ? "Step 2 of 2 · On your iPhone" : "Step 1 of 2 · Refresh your banks").foregroundStyle(.secondary)
+            if refreshed {
+                Label("Bank refresh finished", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                Text("Open MoneyMap on your iPhone. Go to Wallet → Bank Sync, then refresh to receive your Mac's latest update.")
+                Text("Both devices need an internet connection and the same iCloud account.").foregroundStyle(.secondary)
+            } else {
+                Text("First, this Mac will check your banks for updates and send the available data to iCloud.")
+                Text("Keep MoneyMap open until the refresh finishes.").foregroundStyle(.secondary)
+                if attempted, let error = coordinator.errorMessage {
+                    DisclosureGroup("The update needs attention") { Text(error).font(.caption).textSelection(.enabled) }
+                }
+            }
+            Spacer()
+            Divider()
+            HStack {
+                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+                Spacer()
+                if coordinator.isWorking { ProgressView().controlSize(.small) }
+                Button(refreshed ? "Done" : attempted ? "Try Again" : "Refresh Banks") {
+                    if refreshed { dismiss() }
+                    else { Task { attempted = true; await coordinator.syncAll(context: context); refreshed = coordinator.errorMessage == nil } }
+                }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(coordinator.isWorking)
+            }
+        }.padding(28).frame(width: 500, height: 360).background(Color(nsColor: .windowBackgroundColor))
+    }
 }

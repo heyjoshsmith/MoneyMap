@@ -16,6 +16,13 @@ public enum PlaidCloudSyncService {
     private static let macRefreshCommandRecordID = CKRecord.ID(recordName: "mac-refresh")
 
     public static func push(context: ModelContext) async throws {
+        #if !os(macOS)
+        // Bank snapshots belong to the Mac. A phone must never publish an older copy over a newer scan.
+        try await pushReviewDecisions(context: context)
+        return
+        #else
+        try await pullReviewDecisions(context: context)
+
         let snapshot = PlaidCloudSnapshot(
             updatedAt: .now,
             connections: try context.fetch(FetchDescriptor<PlaidConnection>()).map(PlaidCloudConnection.init),
@@ -28,10 +35,12 @@ public enum PlaidCloudSyncService {
         encoder.dateEncodingStrategy = .iso8601
 
         let record = CKRecord(recordType: "PlaidSyncSnapshot", recordID: snapshotRecordID)
-        record["payload"] = try encoder.encode(snapshot)
+        let temporaryFile = try setPayload(encoder.encode(snapshot), on: record)
+        defer { if let temporaryFile { try? FileManager.default.removeItem(at: temporaryFile) } }
         record["updatedAt"] = snapshot.updatedAt
 
         try await save(record)
+        #endif
     }
 
     public static func pull(context: ModelContext) async throws {
@@ -44,18 +53,135 @@ public enum PlaidCloudSyncService {
             throw mapCloudKitError(error, missingSnapshotError: .missingSnapshot)
         }
 
-        guard let payload = record["payload"] as? Data else {
-            throw PlaidCloudSyncError.missingSnapshotPayload
-        }
+        try applySnapshotPayload(payload(from: record), context: context, sourceUpdatedAt: record.modificationDate)
+    }
 
+    private static var appliedSnapshotDates: [String: Date] = [:]
+    private static let inMemorySnapshotDates = NSMapTable<ModelContainer, NSDate>(
+        keyOptions: [.weakMemory, .objectPointerPersonality], valueOptions: .strongMemory
+    )
+
+    /// Envelope ordering matters: individual account timestamps describe bank balances and can
+    /// intentionally remain unchanged while fresh liabilities or removal facts arrive.
+    static func applySnapshotPayload(_ payload: Data, context: ModelContext, sourceUpdatedAt: Date? = nil) throws {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let snapshot = try decoder.decode(PlaidCloudSnapshot.self, from: payload)
-
+        let versionDate = sourceUpdatedAt ?? snapshot.updatedAt
+        let configurations = context.container.configurations
+        let persistentURLs = configurations.filter { !$0.isStoredInMemoryOnly }.map(\.url)
+        let defaultsKey: String?
+        let lastApplied: Date
+        if persistentURLs.isEmpty {
+            // Weak identity keys disappear with the container; a reused allocation address cannot
+            // inherit an unrelated in-memory store's previously downloaded snapshot version.
+            defaultsKey = nil
+            lastApplied = inMemorySnapshotDates.object(forKey: context.container) as Date? ?? .distantPast
+        } else {
+            // Recreating a local store starts a new ordering history, even at the same path.
+            let storeIdentity = persistentURLs.map { url in
+                let created = try? url.resourceValues(forKeys: [.creationDateKey]).creationDate
+                return "\(url.absoluteString)|\(created?.timeIntervalSince1970 ?? 0)"
+            }.sorted().joined(separator: ";")
+            let key = "plaid.cloud.appliedSnapshot." + Data(storeIdentity.utf8).base64EncodedString()
+            defaultsKey = key
+            let persistedDate = UserDefaults.standard.object(forKey: key) as? Date
+            lastApplied = max(appliedSnapshotDates[key] ?? .distantPast, persistedDate ?? .distantPast)
+        }
+        guard versionDate >= lastApplied else { return }
         try upsertConnections(snapshot.connections, context: context)
         try upsertAccounts(snapshot.accounts, context: context)
         try upsertTransactions(snapshot.transactions, context: context)
         try upsertSuggestions(snapshot.suggestions, context: context)
+        try context.save()
+        if let defaultsKey {
+            appliedSnapshotDates[defaultsKey] = versionDate
+            UserDefaults.standard.set(versionDate, forKey: defaultsKey)
+        } else {
+            inMemorySnapshotDates.setObject(versionDate as NSDate, forKey: context.container)
+        }
+    }
+
+    /// Import is an irreversible completed review action in the current UI. A stale skip/ready
+    /// copy from another device must not turn an imported row back into a review candidate.
+    static func mergedReviewStatus(_ first: String?, _ second: String?) -> String {
+        let values = [first, second].compactMap { $0 }
+        if values.contains(PlaidReviewStatus.imported.rawValue) { return PlaidReviewStatus.imported.rawValue }
+        if values.contains(PlaidReviewStatus.skipped.rawValue) { return PlaidReviewStatus.skipped.rawValue }
+        return PlaidReviewStatus.ready.rawValue
+    }
+
+    /// Large histories use an asset instead of exceeding CloudKit's inline record limit.
+    static func setPayload(_ data: Data, on record: CKRecord) throws -> URL? {
+        if data.count < 700_000 {
+            record["payload"] = data
+            record["payloadAsset"] = nil
+            return nil
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("plaid-\(UUID().uuidString).json")
+        try data.write(to: url, options: .atomic)
+        record["payload"] = nil
+        record["payloadAsset"] = CKAsset(fileURL: url)
+        return url
+    }
+
+    static func payload(from record: CKRecord) throws -> Data {
+        if let asset = record["payloadAsset"] as? CKAsset, let url = asset.fileURL {
+            return try Data(contentsOf: url)
+        }
+        guard let data = record["payload"] as? Data else { throw PlaidCloudSyncError.missingSnapshotPayload }
+        return data
+    }
+
+    private static let reviewRecordID = CKRecord.ID(recordName: "review-decisions")
+
+    private struct ReviewDecisions: Codable {
+        var transactions: [String: String] = [:]
+        var suggestions: [String: String] = [:]
+    }
+
+    private static func readReviewRecord() async throws -> CKRecord {
+        do { return try await readSnapshot { try await database.record(for: reviewRecordID) } }
+        catch let error as CKError where error.code == .unknownItem {
+            return CKRecord(recordType: "PlaidSyncSnapshot", recordID: reviewRecordID)
+        }
+    }
+
+    private static func decisions(from record: CKRecord) throws -> ReviewDecisions {
+        if record["payload"] == nil && record["payloadAsset"] == nil { return ReviewDecisions() }
+        return try JSONDecoder().decode(ReviewDecisions.self, from: payload(from: record))
+    }
+
+    private static func pushReviewDecisions(context: ModelContext) async throws {
+        for attempt in 0..<3 {
+            let record = try await readReviewRecord()
+            var values = try decisions(from: record)
+            for item in try context.fetch(FetchDescriptor<PlaidTransactionReviewItem>()) where item.status != .ready {
+                values.transactions[item.plaidTransactionID] = mergedReviewStatus(values.transactions[item.plaidTransactionID], item.statusRaw)
+            }
+            for item in try context.fetch(FetchDescriptor<PlaidSuggestion>()) where item.status != .ready {
+                values.suggestions[item.id.uuidString] = mergedReviewStatus(values.suggestions[item.id.uuidString], item.statusRaw)
+            }
+            let file = try setPayload(JSONEncoder().encode(values), on: record)
+            defer { if let file { try? FileManager.default.removeItem(at: file) } }
+            record["updatedAt"] = Date()
+            do {
+                _ = try await database.save(record)
+                return
+            } catch let error as CKError where error.code == .serverRecordChanged && attempt < 2 {
+                continue
+            }
+        }
+    }
+
+    private static func pullReviewDecisions(context: ModelContext) async throws {
+        let values = try decisions(from: await readReviewRecord())
+        for item in try context.fetch(FetchDescriptor<PlaidTransactionReviewItem>()) {
+            if let status = values.transactions[item.plaidTransactionID] { item.statusRaw = mergedReviewStatus(item.statusRaw, status) }
+        }
+        for item in try context.fetch(FetchDescriptor<PlaidSuggestion>()) {
+            if let status = values.suggestions[item.id.uuidString] { item.statusRaw = mergedReviewStatus(item.statusRaw, status) }
+        }
         try context.save()
     }
 
@@ -290,6 +416,7 @@ private extension PlaidCloudSyncService {
             connection.lastSyncAt = item.lastSyncAt
             connection.createdAt = item.createdAt
             connection.updatedAt = item.updatedAt
+            connection.enrichmentJSON = item.enrichmentJSON
             connection.errorMessage = item.errorMessage
             if byItemID[item.itemID] == nil {
                 context.insert(connection)
@@ -324,6 +451,7 @@ private extension PlaidCloudSyncService {
             account.availableBalance = item.availableBalance
             account.currencyCode = item.currencyCode
             account.updatedAt = item.updatedAt
+            account.enrichmentJSON = item.enrichmentJSON
             if byAccountID[item.accountID] == nil {
                 context.insert(account)
             }
@@ -358,9 +486,12 @@ private extension PlaidCloudSyncService {
             transaction.currencyCode = item.currencyCode
             transaction.pending = item.pending
             transaction.pendingTransactionID = item.pendingTransactionID
-            transaction.statusRaw = item.statusRaw
+            // Keep local review choices while accepting fresh bank-owned fields.
+            transaction.statusRaw = mergedReviewStatus(transaction.statusRaw, item.statusRaw)
             transaction.createdAt = item.createdAt
             transaction.updatedAt = item.updatedAt
+            transaction.enrichmentJSON = item.enrichmentJSON
+            transaction.bankRemovedAt = item.bankRemovedAt
             if byTransactionID[item.plaidTransactionID] == nil {
                 context.insert(transaction)
             }
@@ -391,7 +522,7 @@ private extension PlaidCloudSyncService {
             suggestion.detail = item.detail
             suggestion.amount = item.amount
             suggestion.dueDate = item.dueDate
-            suggestion.statusRaw = item.statusRaw
+            suggestion.statusRaw = mergedReviewStatus(suggestion.statusRaw, item.statusRaw)
             suggestion.createdAt = item.createdAt
             suggestion.updatedAt = item.updatedAt
             if byID[item.id] == nil {
@@ -409,7 +540,8 @@ private struct PlaidCloudSnapshot: Codable {
     var suggestions: [PlaidCloudSuggestion]
 }
 
-private struct PlaidCloudConnection: Codable {
+struct PlaidCloudConnection: Codable {
+    var enrichmentJSON: String?
     var itemID: String
     var institutionID: String?
     var institutionName: String?
@@ -420,6 +552,7 @@ private struct PlaidCloudConnection: Codable {
     var errorMessage: String?
 
     init(_ connection: PlaidConnection) {
+        enrichmentJSON = connection.enrichmentJSON
         itemID = connection.itemID
         institutionID = connection.institutionID
         institutionName = connection.institutionName
@@ -431,7 +564,8 @@ private struct PlaidCloudConnection: Codable {
     }
 }
 
-private struct PlaidCloudAccount: Codable {
+struct PlaidCloudAccount: Codable {
+    var enrichmentJSON: String?
     var accountID: String
     var itemID: String
     var institutionName: String?
@@ -446,6 +580,7 @@ private struct PlaidCloudAccount: Codable {
     var updatedAt: Date
 
     init(_ account: PlaidAccountSnapshot) {
+        enrichmentJSON = account.enrichmentJSON
         accountID = account.accountID
         itemID = account.itemID
         institutionName = account.institutionName
@@ -461,7 +596,9 @@ private struct PlaidCloudAccount: Codable {
     }
 }
 
-private struct PlaidCloudTransaction: Codable {
+struct PlaidCloudTransaction: Codable {
+    var bankRemovedAt: Date?
+    var enrichmentJSON: String?
     var plaidTransactionID: String
     var plaidAccountID: String
     var plaidItemID: String
@@ -479,6 +616,8 @@ private struct PlaidCloudTransaction: Codable {
     var updatedAt: Date
 
     init(_ transaction: PlaidTransactionReviewItem) {
+        bankRemovedAt = transaction.bankRemovedAt
+        enrichmentJSON = transaction.enrichmentJSON
         plaidTransactionID = transaction.plaidTransactionID
         plaidAccountID = transaction.plaidAccountID
         plaidItemID = transaction.plaidItemID

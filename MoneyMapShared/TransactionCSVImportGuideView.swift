@@ -63,7 +63,7 @@ public struct TransactionCSVImportGuideView: View {
 
     private var creditCards: [Bill] {
         bills
-            .filter { $0.category == .creditCard }
+            .filter { $0.canImportTransactionsManually }
             .sorted { ($0.name ?? "") < ($1.name ?? "") }
     }
 
@@ -78,6 +78,7 @@ public struct TransactionCSVImportGuideView: View {
                     cardSection
                     fileSection
                 case .review:
+                    destinationSection
                     fileSection
                     reviewSection
                 case .complete:
@@ -121,9 +122,10 @@ public struct TransactionCSVImportGuideView: View {
                 }
             }
             .onAppear {
-                if fixedBill != nil {
-                    refreshPreview()
-                }
+                updateDestination()
+            }
+            .onChange(of: creditCards.map(\.id)) { _, _ in
+                updateDestination()
             }
         }
     }
@@ -209,9 +211,9 @@ public struct TransactionCSVImportGuideView: View {
         Section("Destination") {
             if creditCards.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    Label("No credit cards found", systemImage: "creditcard.trianglebadge.exclamationmark")
+                    Label("No cards available for import", systemImage: "creditcard.trianglebadge.exclamationmark")
                         .font(.headline)
-                    Text("Add Apple Card as a credit card in MoneyMap, then run the import again.")
+                    Text("Manual imports are available for cards that aren’t linked to Plaid. Linked cards receive transactions through bank sync.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -257,6 +259,42 @@ public struct TransactionCSVImportGuideView: View {
         }
         .contentShape(Rectangle())
         .padding(.vertical, 4)
+    }
+
+    private var destinationSection: some View {
+        Section("Card") {
+            if let selectedBill {
+                Label(selectedBill.name ?? "Untitled Card", systemImage: "creditcard")
+            }
+            if fixedBill == nil && creditCards.count > 1 {
+                Button("Change Card") { step = .chooseCard }
+            }
+        }
+        .listRowBackground(TransactionImportDesign.surfaceBackground)
+    }
+
+    private func updateDestination() {
+        guard step != .complete, !isImporting else { return }
+        if let fixedBill {
+            selectedBill = fixedBill.canImportTransactionsManually ? fixedBill : nil
+        } else {
+            if let selectedBill, !creditCards.contains(where: { $0.id == selectedBill.id }) {
+                self.selectedBill = nil
+            }
+            if selectedBill == nil && creditCards.count == 1 {
+                selectedBill = creditCards.first
+            }
+        }
+        preview = nil
+        if selectedBill != nil {
+            step = .review
+            refreshPreview()
+        } else {
+            step = .chooseCard
+            if fixedBill != nil {
+                errorMessage = TransactionCSVImportError.ineligibleCard.localizedDescription
+            }
+        }
     }
 
     private var fileSection: some View {
@@ -392,12 +430,12 @@ public struct TransactionCSVImportGuideView: View {
                 }
                 refreshPreview()
             }
-            .disabled(selectedBill == nil)
+            .disabled(selectedBill?.canImportTransactionsManually != true)
         case .review:
             Button("Import") {
                 importNow()
             }
-            .disabled(selectedBill == nil || isImporting || preview == nil)
+            .disabled(selectedBill?.canImportTransactionsManually != true || isImporting || preview == nil)
         case .complete:
             Button("Done") {
                 onFinished(summary)

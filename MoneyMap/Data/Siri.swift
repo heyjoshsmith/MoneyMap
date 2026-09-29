@@ -335,14 +335,14 @@ struct TransactionEntity: AppEntity, IndexedEntity, Hashable {
     var displayRepresentation: DisplayRepresentation {
         DisplayRepresentation(
             title: "\(name)",
-            subtitle: "\(MoneyMapFormatters.currencyString(for: NSDecimalNumber(decimal: amount.amount).doubleValue))"
+            subtitle: "\(NSDecimalNumber(decimal: amount.amount).doubleValue.formatted(.currency(code: amount.currencyCode)))"
         )
     }
 
     var attributeSet: CSSearchableItemAttributeSet {
         let attributes = defaultAttributeSet
         let dateText = date.map(MoneyMapFormatters.mediumDateString(for:)) ?? "Unknown date"
-        let amountText = MoneyMapFormatters.currencyString(for: NSDecimalNumber(decimal: amount.amount).doubleValue)
+        let amountText = NSDecimalNumber(decimal: amount.amount).doubleValue.formatted(.currency(code: amount.currencyCode))
         attributes.contentDescription = [
             amountText,
             merchantName ?? "Unknown merchant",
@@ -516,11 +516,11 @@ extension BillEntity {
         id = bill.id
         name = bill.name ?? "Untitled"
         amount = makeCurrencyAmount(bill.amount)
-        dueDate = bill.dueDate
+        dueDate = bill.displayDueDate
         categoryName = bill.category?.name ?? "Other"
         notes = bill.notes
         autopaySource = bill.autopaySource
-        isPaid = bill.datePaid != nil || bill.status == .paid
+        isPaid = bill.displayPaymentIsPaid
         autopayEnabled = bill.autopayEnabled
         currentBalance = makeCurrencyAmount(bill.currentCreditCardDetails?.cardBalance)
         creditLimit = makeCurrencyAmount(bill.currentCreditCardDetails?.creditLimit)
@@ -544,7 +544,7 @@ extension TransactionEntity {
     init(_ transaction: Transaction) {
         id = transactionEntityID(for: transaction)
         name = transactionHeadline(transaction)
-        amount = makeCurrencyAmount(abs(transaction.amountUSD ?? 0)) ?? IntentCurrencyAmount(amount: 0, currencyCode: moneyMapCurrencyCode)
+        amount = IntentCurrencyAmount(amount: Decimal(transaction.displayAmount ?? 0), currencyCode: transaction.displayCurrencyCode)
         date = transaction.transactionDate ?? transaction.clearingDate
         merchantName = transaction.merchant
         categoryName = transaction.category
@@ -844,7 +844,7 @@ struct OpenNextDueBillIntent: AppIntent {
         }
 
         let name = bill.name ?? "bill"
-        let dueDate = bill.dueDate
+        let dueDate = bill.displayDueDate
         let dueDateText = dueDate.map { MoneyMapFormatters.mediumDateString(for: $0) } ?? "No due date"
         let relativeDueText = dueDate.map(relativeDuePhrase(for:)) ?? "soon"
         let amountText = bill.amount.map(MoneyMapFormatters.currencyString(for:)) ?? "Not set"
@@ -984,8 +984,8 @@ struct GetCashAfterBillsIntent: AppIntent {
         let upcomingBills = snapshot.bills
             .filter { bill in
                 guard bill.category != .creditCard,
-                      bill.status != .paid,
-                      let dueDate = bill.dueDate else {
+                      !bill.displayPaymentIsPaid,
+                      let dueDate = bill.displayDueDate else {
                     return false
                 }
                 return dueDate <= nextPayday
@@ -1036,10 +1036,10 @@ struct GetRecentTransactionsIntent: AppIntent {
         }
 
         let lines = matches.map { transaction in
-            let amount = MoneyMapFormatters.currencyString(for: abs(transaction.amountUSD ?? 0))
+            let amount = transaction.displayAmountText
             let merchantName = transactionHeadline(transaction)
             let date = (transaction.transactionDate ?? transaction.clearingDate).map(MoneyMapFormatters.mediumDateString(for:)) ?? "Unknown date"
-            return "\(merchantName) \(amount) on \(date)"
+            return "\(merchantName) \(amount) on \(date)" + (transaction.plaidBankRemovedAt != nil ? ", removed by bank" : "")
         }
 
         let spoken = "Recent transactions: " + lines.joined(separator: "; ") + "."
@@ -1086,9 +1086,16 @@ struct GetSpendingSummaryIntent: AppIntent {
             )
         )
 
-        let total = matches.reduce(0) { $0 + abs($1.amountUSD ?? 0) }
+        let spending = matches.filter { transaction in
+            guard transaction.plaidBankRemovedAt == nil, transaction.plaidIsPending != true,
+                  let amount = transaction.amountUSD else { return false }
+            return transaction.plaidTransactionID == nil || amount > 0
+        }
+        let total = spending.reduce(0) { $0 + abs($1.amountUSD ?? 0) }
         let scope = merchant ?? category ?? card?.name ?? "all tracked transactions"
-        let spoken = "You spent \(MoneyMapFormatters.currencyString(for: total)) on \(scope) during \(spendingWindowTitle(window)). That came from \(matches.count) transaction\(matches.count == 1 ? "" : "s")."
+        let foreignNote = matches.contains { $0.plaidOriginalAmount != nil && $0.amountUSD == nil && $0.plaidBankRemovedAt == nil }
+            ? " Amounts without a US dollar value are excluded." : ""
+        let spoken = "You spent \(MoneyMapFormatters.currencyString(for: total)) on \(scope) during \(spendingWindowTitle(window)). That came from \(spending.count) transaction\(spending.count == 1 ? "" : "s").\(foreignNote)"
         return .result(value: spoken, dialog: IntentDialog(stringLiteral: spoken))
     }
 }

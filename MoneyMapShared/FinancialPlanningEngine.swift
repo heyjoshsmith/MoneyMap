@@ -62,7 +62,7 @@ struct CreditCardPlanningAccount: Equatable {
     let availableBalance: Double?
 
     var balanceAmount: Double {
-        abs(currentBalance ?? 0)
+        max(currentBalance ?? 0, 0)
     }
 }
 
@@ -112,7 +112,7 @@ enum FinancialPlanningEngine {
     ) -> PaycheckRecommendationPlan {
         let roundedAvailable = roundedToCents(max(availableCash, 0))
         let cards = bills.filter { $0.category == .creditCard }
-        let creditAccountsByID = Dictionary(uniqueKeysWithValues: creditAccounts.map { ($0.accountID, $0) })
+        let creditAccountsByID = Dictionary(creditAccounts.map { ($0.accountID, $0) }, uniquingKeysWith: { first, _ in first })
 
         guard roundedAvailable > 0 else {
             return PaycheckRecommendationPlan(
@@ -213,7 +213,7 @@ enum FinancialPlanningEngine {
         let planningHorizon = Calendar.current.startOfDay(
             for: nextPayday ?? Calendar.current.date(byAdding: .day, value: 14, to: today) ?? today
         )
-        let creditAccountsByID = Dictionary(uniqueKeysWithValues: creditAccounts.map { ($0.accountID, $0) })
+        let creditAccountsByID = Dictionary(creditAccounts.map { ($0.accountID, $0) }, uniquingKeysWith: { first, _ in first })
 
         let prioritizedCards = cards
             .filter { effectiveCardBalance(for: $0, creditAccountsByID: creditAccountsByID) > 0 }
@@ -239,8 +239,8 @@ enum FinancialPlanningEngine {
             let utilizationTarget = max(0, balance - (creditLimit * 0.3))
             let statementTarget = statementTarget(for: bill, balance: balance)
             let duePaymentTarget = duePaymentTarget(for: bill, balance: balance)
-            let dueDay = bill.dueDate.map { Calendar.current.startOfDay(for: $0) }
-            let isMarkedPaid = bill.datePaid != nil || bill.status == .paid
+            let dueDay = bill.displayDueDate.map { Calendar.current.startOfDay(for: $0) }
+            let isMarkedPaid = bill.displayPaymentIsPaid
             let isOverdue = dueDay.map { $0 < today } ?? false
             let isDueBeforeNextPayday = dueDay.map { $0 <= planningHorizon } ?? false
             let protectedBase: Double
@@ -314,7 +314,7 @@ enum FinancialPlanningEngine {
                     recommendedPayment: payment,
                     activeBalance: candidate.balance,
                     rationale: rationale(for: candidate.bill, nextPayday: nextPayday, strategy: strategy),
-                    dueDate: candidate.bill.dueDate,
+                    dueDate: candidate.bill.displayDueDate,
                     utilization: candidate.utilization,
                     annualPercentageRate: candidate.annualPercentageRate,
                     minimumPayment: candidate.minimumPayment
@@ -543,7 +543,7 @@ enum FinancialPlanningEngine {
             payoffStrategy: payoffStrategy
         )
         let upcomingBillCount = bills.filter { bill in
-            guard bill.datePaid == nil, let dueDate = bill.dueDate else { return false }
+            guard !bill.displayPaymentIsPaid, let dueDate = bill.displayDueDate else { return false }
             let dueDay = Calendar.current.startOfDay(for: dueDate)
             let start = Calendar.current.startOfDay(for: Date())
             let end = Calendar.current.startOfDay(for: nextPayday ?? Calendar.current.date(byAdding: .day, value: 14, to: Date()) ?? Date())
@@ -689,10 +689,10 @@ enum FinancialPlanningEngine {
         let smallBalanceScore = balance > 0 ? (10_000 / max(balance, 1)) : 0
         let statementScore = statementTarget(for: bill, balance: balance) / 50
         let minimumPaymentScore = min(effectiveMinimumPayment(for: bill) / 10, 20)
-        let isMarkedPaid = bill.datePaid != nil || bill.status == .paid
-        let dueSoonScore = dueSoonWeight(for: bill.dueDate, nextPayday: nextPayday, isMarkedPaid: isMarkedPaid)
+        let isMarkedPaid = bill.displayPaymentIsPaid
+        let dueSoonScore = dueSoonWeight(for: bill.displayDueDate, nextPayday: nextPayday, isMarkedPaid: isMarkedPaid)
         let autopayPenalty = bill.autopayEnabled ? -3.0 : 0
-        let unpaidBonus = (bill.datePaid == nil && balance > 0) ? 15.0 : 0
+        let unpaidBonus = (!bill.displayPaymentIsPaid && balance > 0) ? 15.0 : 0
 
         switch strategy {
         case .balanced:
@@ -720,7 +720,12 @@ enum FinancialPlanningEngine {
     ) -> Double {
         guard bill.category == .creditCard else { return 0 }
         let details = bill.currentCreditCardDetails
-        let linkedBalance = linkedCreditAccount(for: bill, creditAccountsByID: creditAccountsByID)?.balanceAmount ?? 0
+        let linkedAccount = linkedCreditAccount(for: bill, creditAccountsByID: creditAccountsByID)
+        if bill.hasLinkedBankData {
+            if let balance = bill.plaidReportedCardBalance { return max(balance, 0) }
+            if let balance = linkedAccount?.currentBalance { return max(balance, 0) }
+        }
+        let linkedBalance = linkedAccount?.balanceAmount ?? 0
         return max(
             linkedBalance,
             abs(details?.cardBalance ?? 0),
@@ -743,7 +748,7 @@ enum FinancialPlanningEngine {
         for bill: Bill,
         creditAccountsByID: [String: CreditCardPlanningAccount]
     ) -> CreditCardPlanningAccount? {
-        guard let plaidAccountID = bill.plaidAccountID, !plaidAccountID.isEmpty else { return nil }
+        guard bill.hasLinkedBankData, let plaidAccountID = bill.plaidAccountID else { return nil }
         return creditAccountsByID[plaidAccountID]
     }
 
@@ -752,8 +757,9 @@ enum FinancialPlanningEngine {
         linkedAccount: CreditCardPlanningAccount?,
         balance: Double
     ) -> Double {
+        if let limit = details?.creditLimit, limit > 0 { return limit }
         let linkedLimit = balance + max(linkedAccount?.availableBalance ?? 0, 0)
-        return max(details?.creditLimit ?? 0, linkedLimit, balance, 0)
+        return max(linkedLimit, balance, 0)
     }
 
     private static func statementTarget(for bill: Bill, balance: Double) -> Double {
@@ -781,15 +787,15 @@ enum FinancialPlanningEngine {
 
     private static func rationale(for bill: Bill, nextPayday: Date?, strategy: CreditCardPayoffStrategy) -> String {
         let details = bill.currentCreditCardDetails
-        let isMarkedPaid = bill.datePaid != nil || bill.status == .paid
-        let isDueBeforeNextPayday = isDueBefore(nextPayday: nextPayday, dueDate: bill.dueDate)
+        let isMarkedPaid = bill.displayPaymentIsPaid
+        let isDueBeforeNextPayday = isDueBefore(nextPayday: nextPayday, dueDate: bill.displayDueDate)
 
         switch strategy {
         case .balanced:
             if isDueBeforeNextPayday && !isMarkedPaid { return "Due before next payday and still unpaid" }
             if (details?.utilization ?? 0) >= 0.3 { return "High utilization and active balance" }
             if let apr = details?.annualPercentageRate, apr >= 0.2 { return "High APR balance" }
-            if dueSoonWeight(for: bill.dueDate, nextPayday: nextPayday, isMarkedPaid: isMarkedPaid) >= 20 { return "Payment due soon" }
+            if dueSoonWeight(for: bill.displayDueDate, nextPayday: nextPayday, isMarkedPaid: isMarkedPaid) >= 20 { return "Payment due soon" }
             return "Balanced payoff priority"
         case .avalanche:
             return isDueBeforeNextPayday && !isMarkedPaid ? "Unpaid and due before next payday, with APR priority" : "Highest interest cost first"

@@ -31,7 +31,7 @@ enum ExtraMoneyPlanMatcher {
             }
         )
 
-        var usedTransactionKeys = Set<String>()
+        var usedTransactionKeys = Set(items.compactMap(\.matchedTransactionIDText))
         var matches: [ExtraMoneyPlanTransactionMatch] = []
 
         for item in items {
@@ -71,8 +71,9 @@ enum ExtraMoneyPlanMatcher {
     ) -> Transaction? {
         transactions
             .filter { transaction in
-                guard transaction.plaidIsPending != true else { return false }
+                guard transaction.plaidIsPending != true, transaction.plaidBankRemovedAt == nil else { return false }
                 guard matchesSource(transaction, plan: plan) else { return false }
+                guard matchesPaymentPurpose(transaction, item: item) else { return false }
                 guard matchesAmount(transaction.amountUSD, plannedAmount: item.amountValue) else { return false }
                 guard matchesDate(transaction.transactionDate ?? transaction.clearingDate, planCreatedAt: plan.createdAt, calendar: calendar) else { return false }
                 return true
@@ -83,6 +84,24 @@ enum ExtraMoneyPlanMatcher {
                 return lhsDate > rhsDate
             }
             .first
+    }
+
+    private static func matchesPaymentPurpose(_ transaction: Transaction, item: ExtraMoneyPlanItem) -> Bool {
+        guard item.kind == .creditCardPayment else { return true }
+        // Plaid represents money leaving a checking account as positive. A refund
+        // or incoming transfer must never pay off a plan merely because abs(amount) matches.
+        if transaction.plaidTransactionID != nil {
+            guard let amount = transaction.amountUSD, amount > 0 else { return false }
+        }
+        let description = [transaction.transactionDescription, transaction.merchant,
+                           transaction.category, transaction.friendlyName]
+            .compactMap { $0 }.joined(separator: " ").lowercased()
+        let paymentTerms = ["payment", "pymt", "pmt", "autopay"]
+        guard paymentTerms.contains(where: description.contains) else { return false }
+        if let targetID = item.targetID,
+           transaction.linkedBillID == targetID || transaction.creditCard?.id == targetID { return true }
+        let target = item.targetNameText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return !target.isEmpty && description.contains(target)
     }
 
     private static func matchesSource(_ transaction: Transaction, plan: ExtraMoneyPlan) -> Bool {
@@ -177,12 +196,12 @@ enum ExtraMoneyPlanSettlementService {
             transactions: transactions,
             calendar: calendar
         )
-        let itemsByID = Dictionary(uniqueKeysWithValues: cardItems.map { ($0.id, $0) })
+        let itemsByID = Dictionary(cardItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let transactionsByKey = Dictionary(
             transactions.map { (ExtraMoneyPlanMatcher.transactionKey(for: $0), $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        let billsByID = Dictionary(uniqueKeysWithValues: bills.map { ($0.id, $0) })
+        let billsByID = Dictionary(bills.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
         var summary = ExtraMoneyPlanSettlementSummary()
 
@@ -203,8 +222,20 @@ enum ExtraMoneyPlanSettlementService {
             let previousDueDate = bill.dueDate
             let previousStatus = bill.status
 
-            bill.makePayment(of: match.matchedAmount)
-            if let transactionDate = match.transactionDate {
+            // A linked bank balance is authoritative. Recording the payment must not
+            // subtract a debit that the latest bank snapshot may already include.
+            let bankDetails = !bill.plaidUnavailable &&
+                bill.plaidAccountID?.isEmpty == false && bill.plaidUpdatedAt != nil
+                ? bill.currentCreditCardDetails : nil
+            bill.makePayment(of: match.matchedAmount, operationID: item.id)
+            if let bankDetails { bill.currentCreditCardDetails = bankDetails }
+            if previousStatus == .paid {
+                // Keep an explicit earlier paid choice intact; imported corrections
+                // cannot tell us whether that choice came from a separate payment.
+                bill.datePaid = previousDatePaid
+                bill.dueDate = previousDueDate
+                bill.status = previousStatus
+            } else if let transactionDate = match.transactionDate {
                 bill.datePaid = calendar.startOfDay(for: transactionDate)
                 bill.status = .paid
             }

@@ -143,7 +143,7 @@ struct WalletAccountPreferences: Codable, Equatable {
                 return total
             }
 
-            return total + abs(account.currentBalance ?? account.availableBalance ?? 0)
+            return total + max(account.currentBalance ?? 0, 0)
         }
     }
 
@@ -218,7 +218,7 @@ enum WalletAccountContributionMode: String, Codable, CaseIterable, Identifiable 
             return .availableCash
         case "brokerage", "investment", "401k", "403b", "ira", "roth", "roth ira", "sep ira":
             return .ownedAsset
-        case "loan", "student", "mortgage", "auto":
+        case "credit", "credit card", "loan", "student", "mortgage", "auto":
             return .owedBalance
         default:
             return .ownedAsset

@@ -33,7 +33,6 @@ enum WhatsNewRepository {
                 "Transactions now appear as searchable app entities, and Spotlight ties bills, goals, and transaction activity back into MoneyMap.",
                 "MoneyMap now donates key actions like opening bills or goals, marking bills paid, checking savings, and planning a paycheck so Siri suggestions feel more personal over time.",
                 "Bill, goal, and home screens now provide broader onscreen context for Siri when you ask about what you are viewing.",
-                "New Ask MoneyMap assistant uses Apple Intelligence on device to answer finance questions from your own MoneyMap data.",
                 "Updated What's New experience now highlights the newest release on first open and keeps example Siri questions easy to revisit."
             ],
             featuredQuestions: [

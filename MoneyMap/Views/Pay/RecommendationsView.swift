@@ -58,10 +58,12 @@ struct RecommendationsView: View {
     }
 
     private var totalCreditCardDebt: Double {
-        let creditAccountsByID = Dictionary(uniqueKeysWithValues: creditAccounts.map { ($0.accountID, $0) })
+        let creditAccountsByID = Dictionary(creditAccounts.map { ($0.accountID, $0) }, uniquingKeysWith: { first, _ in first })
         return creditCards.reduce(0) { total, bill in
-            let linkedBalance = bill.plaidAccountID.flatMap { creditAccountsByID[$0]?.balanceAmount } ?? 0
-            return total + max(linkedBalance, abs(bill.currentCreditCardDetails?.cardBalance ?? 0))
+            let linkedBalance = bill.hasLinkedBankData
+                ? (bill.plaidReportedCardBalance ?? bill.plaidAccountID.flatMap { creditAccountsByID[$0]?.currentBalance })
+                : nil
+            return total + max(linkedBalance ?? bill.currentCreditCardDetails?.cardBalance ?? 0, 0)
         }
     }
 

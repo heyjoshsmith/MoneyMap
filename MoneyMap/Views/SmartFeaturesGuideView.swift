@@ -35,15 +35,6 @@ struct SmartFeaturesGuideView: View {
             }
             .listRowBackground(MoneyMapDesign.surfaceBackground)
 
-            Section("Ask") {
-                GuideRow(
-                    icon: "sparkles",
-                    title: "Search with answers",
-                    detail: "Search bills, goals, transactions, and allocation recommendations, then ask MoneyMap for grounded Apple Intelligence answers from the same data."
-                )
-            }
-            .listRowBackground(MoneyMapDesign.surfaceBackground)
-
             Section("Notifications") {
                 GuideRow(
                     icon: "bell.badge",

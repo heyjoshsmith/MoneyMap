@@ -8,8 +8,10 @@
 import Foundation
 
 struct MacPlaidAPIClient {
+    static let linkCustomizationNameKey = "plaid.linkCustomizationName"
     let credentials: PlaidStoredCredentials
     var session: URLSession = Self.makeSession()
+    var linkCustomizationName: String? = UserDefaults.standard.string(forKey: Self.linkCustomizationNameKey)
 
     func validateCredentials() async throws {
         _ = try await post(
@@ -28,8 +30,25 @@ struct MacPlaidAPIClient {
     func createHostedLinkSession(
         clientUserID: String,
         accessToken: String? = nil,
-        watch: Bool = false
+        watch: Bool = false,
+        phone: Bool = false,
+        primaryProduct: String = "transactions"
     ) async throws -> PlaidHostedLinkSession {
+        // Update-mode consent must be limited to this exact institution's coverage.
+        // Requesting an unsupported product can reject the entire reconnect session.
+        var additionalProducts: [String]?
+        if let accessToken {
+            let linkedItem = try await item(accessToken: accessToken)
+            guard let institutionID = linkedItem.institutionID else {
+                throw PlaidAPIError.transport("Plaid could not identify this bank's supported data. Try reconnecting again later.")
+            }
+            let bank = try await institution(id: institutionID)
+            guard let supported = bank.products else {
+                throw PlaidAPIError.transport("Plaid did not return this bank's supported data. Try reconnecting again later.")
+            }
+            let eligible = ["liabilities", "investments"].filter { supported.contains($0) }
+            additionalProducts = eligible.isEmpty ? nil : eligible
+        }
         let response = try await post(
             path: "/link/token/create",
             body: PlaidLinkTokenCreateRequest(
@@ -38,11 +57,17 @@ struct MacPlaidAPIClient {
                 clientName: "MoneyMap",
                 countryCodes: ["US"],
                 language: "en",
-                products: accessToken == nil ? ["transactions"] : nil,
-                transactions: accessToken == nil ? PlaidTransactionsLinkOptions(daysRequested: 730) : nil,
+                linkCustomizationName: linkCustomizationName.flatMap { name in
+                    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return trimmed.isEmpty ? nil : trimmed
+                },
+                products: accessToken == nil ? [primaryProduct] : nil,
+                optionalProducts: accessToken == nil ? ["transactions", "liabilities", "investments"].filter { $0 != primaryProduct } : nil,
+                additionalConsentedProducts: additionalProducts,
+                transactions: accessToken == nil && primaryProduct == "transactions" ? PlaidTransactionsLinkOptions(daysRequested: 730) : nil,
                 user: PlaidLinkUser(clientUserID: clientUserID),
                 accessToken: accessToken,
-                hostedLink: PlaidHostedLinkOptions(urlLifetimeSeconds: watch ? 1800 : 3600, isMobileApp: watch ? true : nil, completionRedirectURI: watch ? "moneymap-watch://bank-complete" : nil)
+                hostedLink: PlaidHostedLinkOptions(urlLifetimeSeconds: (watch || phone) ? 1800 : 3600, isMobileApp: watch ? true : nil, completionRedirectURI: watch ? "moneymap-watch://bank-complete" : nil)
             ),
             responseType: PlaidLinkTokenCreateResponse.self
         )
@@ -132,17 +157,19 @@ struct MacPlaidAPIClient {
         return response.institution
     }
 
-    func accounts(accessToken: String) async throws -> [PlaidAccountDTO] {
-        let response = try await post(
-            path: "/accounts/get",
-            body: PlaidAccessTokenRequest(
-                clientID: credentials.clientID,
-                secret: credentials.secret,
-                accessToken: accessToken
-            ),
-            responseType: PlaidAccountsResponse.self
-        )
-        return response.accounts
+    // Prefer live balances; callers explicitly label cached fallback when live retrieval fails.
+    func accounts(accessToken: String, cached: Bool = false) async throws -> [PlaidAccountDTO] {
+        var body: [String: PlaidJSONValue] = [
+            "client_id": .string(credentials.clientID), "secret": .string(credentials.secret),
+            "access_token": .string(accessToken)
+        ]
+        if !cached {
+            // Capital One non-depository balances require this field and cannot be requested live.
+            // Accept its latest reported value and carry the bank's actual timestamp to the UI.
+            // Plaid ignores this option for all other institutions and fetches their balances live.
+            body["options"] = .object(["min_last_updated_datetime": .string("1970-01-01T00:00:00Z")])
+        }
+        return try await post(path: cached ? "/accounts/get" : "/accounts/balance/get", body: body, responseType: PlaidAccountsResponse.self).accounts
     }
 
     func transactions(accessToken: String, cursor: String?) async throws -> PlaidTransactionsSyncResponse {
@@ -169,6 +196,44 @@ struct MacPlaidAPIClient {
             ),
             responseType: PlaidLiabilitiesResponse.self
         )
+    }
+
+    /// Raw product documents retain every field returned by the bank, including new optional fields.
+    func productDocument(path: String, accessToken: String, extra: [String: PlaidJSONValue] = [:]) async throws -> [String: PlaidJSONValue] {
+        var body = extra
+        body["client_id"] = .string(credentials.clientID)
+        body["secret"] = .string(credentials.secret)
+        body["access_token"] = .string(accessToken)
+        return try await post(path: path, body: body, responseType: [String: PlaidJSONValue].self)
+    }
+
+    func investmentTransactions(accessToken: String) async throws -> [String: PlaidJSONValue] {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        let end = Date.now
+        let start = Calendar(identifier: .gregorian).date(byAdding: .month, value: -24, to: end) ?? end
+        var transactions: [PlaidJSONValue] = []
+        var securities: [String: PlaidJSONValue] = [:]
+        var result: [String: PlaidJSONValue] = [:]
+        while true {
+            result = try await productDocument(path: "/investments/transactions/get", accessToken: accessToken, extra: [
+                "start_date": .string(formatter.string(from: start)), "end_date": .string(formatter.string(from: end)),
+                "options": .object(["count": .number(500), "offset": .number(Double(transactions.count))])
+            ])
+            let page = result["investment_transactions"]?.array ?? []
+            transactions.append(contentsOf: page)
+            for security in result["securities"]?.array ?? [] {
+                if let id = security.object?["security_id"]?.string { securities[id] = security }
+            }
+            let total = Int(result["total_investment_transactions"]?.number ?? Double(transactions.count))
+            if transactions.count >= total { break }
+            guard !page.isEmpty else { throw PlaidAPIError.transport("Plaid returned an incomplete investment transaction page. Try syncing again.") }
+        }
+        result["investment_transactions"] = .array(transactions)
+        result["securities"] = .array(Array(securities.values))
+        return result
     }
 
     private func post<RequestBody: Encodable, ResponseBody: Decodable>(
@@ -327,7 +392,10 @@ struct PlaidLinkTokenCreateRequest: Encodable {
     var clientName: String
     var countryCodes: [String]
     var language: String
+    var linkCustomizationName: String?
     var products: [String]?
+    var optionalProducts: [String]?
+    var additionalConsentedProducts: [String]?
     var transactions: PlaidTransactionsLinkOptions?
     var user: PlaidLinkUser
     var accessToken: String?
@@ -339,7 +407,10 @@ struct PlaidLinkTokenCreateRequest: Encodable {
         case clientName = "client_name"
         case countryCodes = "country_codes"
         case language
+        case linkCustomizationName = "link_customization_name"
         case products
+        case optionalProducts = "optional_products"
+        case additionalConsentedProducts = "additional_consented_products"
         case transactions
         case user
         case accessToken = "access_token"
@@ -413,26 +484,46 @@ struct PlaidLinkTokenStatus {
     var displayMessage: String?
     var rawSummary: String
 
+    var hasSuccessfulCompletion: Bool
+    var hasExited: Bool
+
     init(data: Data) {
-        let object = (try? JSONSerialization.jsonObject(with: data)) ?? [:]
-        institutionIDs = Self.collectStrings(named: "institution_id", in: object)
-        publicTokens = Self.collectStrings(named: "public_token", in: object)
-        requestID = Self.collectStrings(named: "request_id", in: object).first
-        completedAt = Self.collectStrings(named: "completed_at", in: object).first
-        finishedAt = Self.collectStrings(named: "finished_at", in: object).first
-        exitStatus = Self.collectStrings(named: "exit_status", in: object).first
-        errorCode = Self.collectStrings(named: "error_code", in: object).first
-        errorMessage = Self.collectStrings(named: "error_message", in: object).first
-        displayMessage = Self.collectStrings(named: "display_message", in: object).first
+        let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        // A token can have more than one session. An earlier exit or success must not determine
+        // the result of the session the user has most recently opened.
+        let sessions = root["link_sessions"] as? [[String: Any]] ?? []
+        let session = sessions.enumerated().max {
+            let lhs = $0.element["started_at"] as? String ?? ""
+            let rhs = $1.element["started_at"] as? String ?? ""
+            return lhs == rhs ? $0.offset < $1.offset : lhs < rhs
+        }?.element ?? [:]
+        let events = session["events"] as? [[String: Any]] ?? []
+        let handoff = events.first { $0["event_name"] as? String == "HANDOFF" }
+        let exitEvent = events.first { $0["event_name"] as? String == "EXIT" }
+        let exit = session["exit"] as? [String: Any] ?? session["on_exit"] as? [String: Any]
+        let exitMetadata = exit?["metadata"] as? [String: Any] ?? exitEvent?["event_metadata"] as? [String: Any] ?? [:]
+        let error = exit?["error"] as? [String: Any] ?? exitEvent?["event_metadata"] as? [String: Any] ?? [:]
+        let results = session["results"] as? [String: Any] ?? [:]
+        let itemResults = results["item_add_results"] as? [[String: Any]] ?? []
+        // HANDOFF is a documented stable success event; finished_at by itself merely says ended.
+        hasSuccessfulCompletion = session["on_success"] is [String: Any] || !itemResults.isEmpty || handoff != nil
+        hasExited = exit != nil || exitEvent != nil
+        institutionIDs = Self.collectStrings(named: "institution_id", in: session)
+        publicTokens = Self.collectStrings(named: "public_token", in: session)
+        requestID = root["request_id"] as? String
+        finishedAt = session["finished_at"] as? String
+        completedAt = hasSuccessfulCompletion ? (finishedAt ?? handoff?["timestamp"] as? String) : nil
+        exitStatus = exitMetadata["status"] as? String ?? exitMetadata["exit_status"] as? String
+        errorCode = error["error_code"] as? String
+        errorMessage = error["error_message"] as? String
+        displayMessage = error["display_message"] as? String
         rawSummary = String(data: data, encoding: .utf8) ?? ""
     }
 
-    var hasPublicToken: Bool {
-        !publicTokens.isEmpty
-    }
+    var hasPublicToken: Bool { !publicTokens.isEmpty }
 
     var finishedWithoutPublicToken: Bool {
-        finishedAt != nil || exitStatus != nil || errorCode != nil
+        !hasSuccessfulCompletion && (hasExited || errorCode != nil)
     }
 
     var userFacingStatusMessage: String {
@@ -514,10 +605,11 @@ struct PlaidInstitutionByIDResponse: Decodable {
 struct PlaidInstitutionDTO: Decodable {
     var institutionID: String
     var name: String
+    var products: [String]?
 
     enum CodingKeys: String, CodingKey {
         case institutionID = "institution_id"
-        case name
+        case name, products
     }
 }
 
@@ -598,10 +690,14 @@ struct PlaidItemResponse: Decodable {
 struct PlaidItemDTO: Decodable {
     var itemID: String
     var institutionID: String?
-
-    enum CodingKeys: String, CodingKey {
-        case itemID = "item_id"
-        case institutionID = "institution_id"
+    var details: [String: PlaidJSONValue]
+    init(from decoder: Decoder) throws {
+        details = try [String: PlaidJSONValue](from: decoder)
+        guard let id = details["item_id"]?.string else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Missing item_id"))
+        }
+        itemID = id
+        institutionID = details["institution_id"]?.string
     }
 }
 
@@ -633,10 +729,14 @@ struct PlaidBalancesDTO: Decodable {
     var available: Double?
     var current: Double?
     var isoCurrencyCode: String?
+    var limit: Double?
+    var lastUpdatedDateTime: String?
 
     enum CodingKeys: String, CodingKey {
         case available
         case current
+        case limit
+        case lastUpdatedDateTime = "last_updated_datetime"
         case isoCurrencyCode = "iso_currency_code"
     }
 }
@@ -699,6 +799,23 @@ struct PlaidTransactionDTO: Decodable {
         case pending
         case pendingTransactionID = "pending_transaction_id"
     }
+    var details: [String: PlaidJSONValue]
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        transactionID = try c.decode(String.self, forKey: .transactionID)
+        accountID = try c.decode(String.self, forKey: .accountID)
+        name = try c.decode(String.self, forKey: .name)
+        merchantName = try c.decodeIfPresent(String.self, forKey: .merchantName)
+        category = try c.decodeIfPresent([String].self, forKey: .category)
+        date = try c.decode(String.self, forKey: .date)
+        authorizedDate = try c.decodeIfPresent(String.self, forKey: .authorizedDate)
+        amount = try c.decode(Double.self, forKey: .amount)
+        isoCurrencyCode = try c.decodeIfPresent(String.self, forKey: .isoCurrencyCode)
+        pending = try c.decode(Bool.self, forKey: .pending)
+        pendingTransactionID = try c.decodeIfPresent(String.self, forKey: .pendingTransactionID)
+        details = try [String: PlaidJSONValue](from: decoder)
+    }
+
 }
 
 struct PlaidRemovedTransactionDTO: Decodable {

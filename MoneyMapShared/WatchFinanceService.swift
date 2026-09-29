@@ -53,7 +53,9 @@ public struct BillActionState: Codable, Equatable {
     }
     func restore(_ bill: Bill) {
         bill.amount = amount; bill.datePaid = paid; bill.dueDate = due; bill.status = status
-        bill.currentCreditCardDetails = credit; bill.lifecycleStateRaw = lifecycle
+        if !bill.hasLinkedBankData { bill.currentCreditCardDetails = credit }
+        bill.lifecycleStateRaw = lifecycle
+        bill.checkStatus()
     }
 }
 

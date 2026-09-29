@@ -57,7 +57,7 @@ struct BillsView: View {
         List {
             ForEach(visibleTimeframes) { timeframe in
                 
-                let billsForTimeframe = bills.due(timeframe)
+                let billsForTimeframe = bills.withoutCreditCards.due(timeframe)
                 
                 if !billsForTimeframe.isEmpty {
                     Section {
@@ -184,11 +184,11 @@ fileprivate struct Row: View {
     }
 
     private var canManuallyMarkPaid: Bool {
-        bill.lifecycleState == .active && bill.status != .paid && !bill.autopayEnabled && bill.category != .creditCard
+        bill.lifecycleState == .active && !bill.displayPaymentIsPaid && !bill.autopayEnabled && bill.category != .creditCard
     }
 
     private var canRecordCreditCardPayment: Bool {
-        bill.lifecycleState == .active && bill.status != .paid && bill.category == .creditCard
+        bill.lifecycleState == .active && !bill.displayPaymentIsPaid && bill.category == .creditCard
     }
 
     private func recordPayment() {

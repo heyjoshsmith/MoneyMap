@@ -190,6 +190,7 @@ struct BillEditor: View {
                     .tag(category)
                 }
             }
+            .disabled(bankLinked)
 
             HStack {
                 Text(selectedCategory == .creditCard ? "Payment Amount" : "Amount")
@@ -327,8 +328,11 @@ struct BillEditor: View {
         .moneyMapListSectionBackground()
     }
 
+    private var bankLinked: Bool { bill?.hasLinkedBankData == true }
+
     private var creditCardSection: some View {
         Section {
+            Group {
             currencyField("Credit Limit", value: $creditLimit, focus: .creditLimit)
             currencyField("Card Balance", value: $cardBalance, focus: .cardBalance)
             currencyField("Minimum Payment", value: $minimumPayment, focus: .minimumPayment)
@@ -365,6 +369,10 @@ struct BillEditor: View {
                 DatePicker("Closing Date", selection: $statementClosingDate, displayedComponents: .date)
             }
 
+            }
+            .disabled(bankLinked)
+            if bankLinked { Text("Card balances and statement details come from your bank. Your payment plan and promo reminder remain editable.").font(.footnote).foregroundStyle(.secondary) }
+
             Toggle("Promo APR Expiration", isOn: $hasPromoAPRExpiration)
             if hasPromoAPRExpiration {
                 DatePicker("Promo APR Ends", selection: $promoAPRExpiration, displayedComponents: .date)
@@ -399,7 +407,7 @@ struct BillEditor: View {
     private func moveFocus(direction: Int) {
         var fields: [Field] = [.name, .amount, .autopaySource, .notes]
 
-        if selectedCategory == .creditCard {
+        if selectedCategory == .creditCard && !bankLinked {
             fields.append(contentsOf: [
                 .creditLimit,
                 .cardBalance,
@@ -452,7 +460,7 @@ struct BillEditor: View {
         targetBill.name = normalizedName
         targetBill.amount = amount
         targetBill.dueDate = Calendar.current.startOfDay(for: dueDate)
-        targetBill.category = selectedCategory
+        if !targetBill.hasLinkedBankData { targetBill.category = selectedCategory }
         targetBill.recurrenceInterval = repeats ? recurrenceInterval : nil
         targetBill.recurrenceUnit = repeats ? selectedRecurrenceUnit : nil
         targetBill.updatePaymentSettings(
@@ -466,7 +474,11 @@ struct BillEditor: View {
         targetBill.notes = normalizedNotes
         targetBill.lifecycleState = selectedLifecycleState
 
-        if selectedCategory == .creditCard {
+        if targetBill.hasLinkedBankData {
+            var existing = targetBill.currentCreditCardDetails
+            existing?.promoAPRExpiration = hasPromoAPRExpiration ? promoAPRExpiration : nil
+            targetBill.currentCreditCardDetails = existing
+        } else if selectedCategory == .creditCard {
             targetBill.currentCreditCardDetails = creditCardDetails
         } else {
             targetBill.currentCreditCardDetails = nil

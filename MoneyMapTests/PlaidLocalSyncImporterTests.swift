@@ -10,6 +10,7 @@ import XCTest
 @testable import MoneyMap
 
 final class PlaidLocalSyncImporterTests: XCTestCase {
+    private var retainedContainers: [ModelContainer] = []
     func testRefreshSnapshotsUpsertsConnectionsAndAccounts() throws {
         let context = try makeContext()
         let initialSnapshot = PlaidSnapshot(
@@ -82,6 +83,8 @@ final class PlaidLocalSyncImporterTests: XCTestCase {
 
         try PlaidLocalSyncImporter.refreshSnapshots(initialSnapshot, context: context)
         try PlaidLocalSyncImporter.refreshSnapshots(updatedSnapshot, context: context)
+        // A delayed legacy bridge response must not replace newer cloud bank facts.
+        try PlaidLocalSyncImporter.refreshSnapshots(initialSnapshot, context: context)
 
         let connections = try context.fetch(FetchDescriptor<PlaidConnection>())
         let accounts = try context.fetch(FetchDescriptor<PlaidAccountSnapshot>())
@@ -193,8 +196,7 @@ final class PlaidLocalSyncImporterTests: XCTestCase {
 
         XCTAssertEqual(summary.importedCount, 1)
         XCTAssertEqual(summary.skippedCount, 1)
-        XCTAssertEqual(reviewItem.status, .imported)
-        XCTAssertEqual(duplicateReviewItem.status, .skipped)
+        XCTAssertEqual([reviewItem.statusRaw, duplicateReviewItem.statusRaw].sorted(), ["imported", "skipped"])
         XCTAssertEqual(transactions.count, 1)
         XCTAssertEqual(transactions.first?.plaidTransactionID, "review-transaction-1")
         XCTAssertEqual(transactions.first?.merchant, "Local Market")
@@ -240,8 +242,187 @@ final class PlaidLocalSyncImporterTests: XCTestCase {
         XCTAssertEqual(paymentMethods.first?.plaidInstitutionID, "ins-1")
     }
 
+    func testImportedCorrectionsPreserveCustomLabelsAndReconcileBankAmounts() throws {
+        let context = try makeContext()
+        let item = reviewItem("one", amount: 10)
+        try PlaidLocalSyncImporter.importReviewedItems([item], context: context, bills: [])
+        let transaction = try XCTUnwrap(context.fetch(FetchDescriptor<Transaction>()).first)
+        transaction.friendlyName = "My custom name"
+        transaction.category = "My category"
+        let userLink = UUID()
+        transaction.linkedBillID = userLink
+        item.amount = 12
+        item.name = "Corrected merchant"
+        item.merchantName = "Corrected merchant"
+        item.category = "Bank category"
+        item.enrichmentJSON = "{\"payment_channel\":\"online\"}"
+        item.updatedAt = .now.addingTimeInterval(1)
+        let summary = try PlaidLocalSyncImporter.importReviewedItems([item], context: context, bills: [])
+        XCTAssertEqual(summary.updatedCount, 1)
+        XCTAssertEqual(transaction.amountUSD, 12)
+        XCTAssertEqual(transaction.merchant, "Corrected merchant")
+        XCTAssertEqual(transaction.friendlyName, "My custom name")
+        XCTAssertEqual(transaction.category, "My category")
+        XCTAssertEqual(transaction.linkedBillID, userLink)
+        XCTAssertEqual(transaction.plaidEnrichmentJSON, item.enrichmentJSON)
+    }
+
+    func testPendingReplacementAndRemovalDoNotDoubleCountOrDeleteUserLinks() throws {
+        let context = try makeContext()
+        let pending = reviewItem("pending", amount: 10)
+        pending.pending = true
+        try PlaidLocalSyncImporter.importReviewedItems([pending], context: context, bills: [])
+        let original = try XCTUnwrap(context.fetch(FetchDescriptor<Transaction>()).first)
+        original.friendlyName = "Keep me"
+        let posted = reviewItem("posted", amount: 13)
+        posted.pendingTransactionID = "pending"
+        posted.updatedAt = .now.addingTimeInterval(2)
+        pending.bankRemovedAt = .now
+        pending.updatedAt = .now.addingTimeInterval(1)
+        try PlaidLocalSyncImporter.importReviewedItems([pending, posted], context: context, bills: [])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Transaction>()).count, 1)
+        XCTAssertEqual(original.plaidTransactionID, "posted")
+        XCTAssertEqual(original.friendlyName, "Keep me")
+        XCTAssertEqual(original.amountUSD, 13)
+        posted.bankRemovedAt = .now
+        posted.updatedAt = .now.addingTimeInterval(3)
+        let summary = try PlaidLocalSyncImporter.importReviewedItems([posted, pending], context: context, bills: [])
+        XCTAssertEqual(summary.removedCount, 1)
+        XCTAssertNil(original.amountUSD)
+        XCTAssertEqual(original.displayAmount, 13)
+        XCTAssertNotNil(original.plaidBankRemovedAt)
+    }
+
+    func testForeignCurrencyIsPreservedWithoutCountingAsDollars() throws {
+        let context = try makeContext()
+        let item = reviewItem("foreign", amount: 100)
+        item.currencyCode = "CAD"
+        try PlaidLocalSyncImporter.importReviewedItems([item], context: context, bills: [])
+        let transaction = try XCTUnwrap(context.fetch(FetchDescriptor<Transaction>()).first)
+        XCTAssertNil(transaction.amountUSD)
+        XCTAssertEqual(transaction.displayAmount, 100)
+        XCTAssertEqual(transaction.displayCurrencyCode, "CAD")
+    }
+
+    func testOlderSnapshotCannotOverwriteCurrentImportedAmount() throws {
+        let context = try makeContext()
+        let item = reviewItem("one", amount: 20)
+        item.updatedAt = .now.addingTimeInterval(10)
+        try PlaidLocalSyncImporter.importReviewedItems([item], context: context, bills: [])
+        item.amount = 5
+        item.updatedAt = .distantPast
+        try PlaidLocalSyncImporter.importReviewedItems([item], context: context, bills: [])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Transaction>()).first?.amountUSD, 20)
+    }
+
+    func testDistinctBankIDsWithSameMerchantDateAndAmountBothImport() throws {
+        let context = try makeContext()
+        let first = reviewItem("purchase-a", amount: 5)
+        let second = reviewItem("purchase-b", amount: 5)
+        let summary = try PlaidLocalSyncImporter.importReviewedItems([first, second], context: context, bills: [])
+        XCTAssertEqual(summary.importedCount, 2)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Transaction>()).count, 2)
+    }
+
+    func testUserSelectedCardAndMissingMetadataSurviveCorrection() throws {
+        let context = try makeContext()
+        let item = reviewItem("purchase", amount: 10)
+        item.enrichmentJSON = "{\"website\":\"example.com\"}"
+        item.category = "Food"
+        try PlaidLocalSyncImporter.importReviewedItems([item], context: context, bills: [])
+        let transaction = try XCTUnwrap(context.fetch(FetchDescriptor<Transaction>()).first)
+        let chosen = Bill(name: "User selected", amount: 25, dueDate: .now,
+                          category: .creditCard, recurrenceInterval: 1, recurrenceUnit: .month)
+        context.insert(chosen)
+        transaction.creditCard = chosen
+        transaction.linkedBillID = chosen.id
+        item.amount = 15
+        item.currencyCode = nil
+        item.enrichmentJSON = nil
+        item.category = nil
+        item.date = nil
+        item.updatedAt = .now.addingTimeInterval(1)
+        try PlaidLocalSyncImporter.importReviewedItems([item], context: context, bills: [])
+        XCTAssertEqual(transaction.creditCard?.id, chosen.id)
+        XCTAssertEqual(transaction.linkedBillID, chosen.id)
+        XCTAssertEqual(transaction.category, "Food")
+        XCTAssertNotNil(transaction.transactionDate)
+        XCTAssertNotNil(transaction.plaidEnrichmentJSON)
+        XCTAssertEqual(transaction.plaidCurrencyCode, "USD")
+        XCTAssertEqual(transaction.amountUSD, 15)
+    }
+
+    func testUnchangedSnapshotDoesNotReportCorrections() throws {
+        let context = try makeContext()
+        let item = reviewItem("unchanged", amount: 10)
+        try PlaidLocalSyncImporter.importReviewedItems([item], context: context, bills: [])
+        let summary = try PlaidLocalSyncImporter.importReviewedItems([item], context: context, bills: [])
+        XCTAssertEqual(summary.importedCount, 0)
+        XCTAssertEqual(summary.updatedCount, 0)
+        XCTAssertEqual(summary.removedCount, 0)
+    }
+
+    func testLegacyPendingRecordCannotReviveAfterPostedReplacement() throws {
+        let context = try makeContext()
+        let pending = reviewItem("legacy-pending", amount: 10)
+        pending.pending = true
+        let posted = reviewItem("legacy-posted", amount: 12)
+        try PlaidLocalSyncImporter.importReviewedItems([pending, posted], context: context, bills: [])
+        posted.pendingTransactionID = pending.plaidTransactionID
+        posted.updatedAt = .now.addingTimeInterval(10)
+        try PlaidLocalSyncImporter.importReviewedItems([pending, posted], context: context, bills: [])
+        let transactions = try context.fetch(FetchDescriptor<Transaction>())
+        XCTAssertEqual(transactions.compactMap(\.amountUSD).reduce(0, +), 12)
+        XCTAssertNotNil(transactions.first(where: { $0.plaidTransactionID == "legacy-pending" })?.plaidBankRemovedAt)
+        try PlaidLocalSyncImporter.importReviewedItems([pending, posted], context: context, bills: [])
+        XCTAssertEqual(transactions.compactMap(\.amountUSD).reduce(0, +), 12)
+    }
+
+    func testManualLookalikeDoesNotSuppressAuthoritativeBankTransaction() throws {
+        let context = try makeContext()
+        let item = reviewItem("distinct-bank-purchase", amount: 10)
+        let manual = Transaction(transactionDate: item.date, clearingDate: nil,
+                                 transactionDescription: item.name, merchant: item.merchantName,
+                                 category: nil, type: "Posted", amountUSD: 10, purchasedBy: "Me")
+        context.insert(manual)
+        let summary = try PlaidLocalSyncImporter.importReviewedItems([item], context: context, bills: [])
+        XCTAssertEqual(summary.importedCount, 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Transaction>()).count, 2)
+        XCTAssertNil(manual.plaidTransactionID)
+        XCTAssertEqual(manual.amountUSD, 10)
+    }
+
+    func testReplacementLookupIsScopedToAccount() throws {
+        let context = try makeContext()
+        let posted = reviewItem("posted-other-account", amount: 20)
+        posted.plaidAccountID = "other-account"
+        posted.pendingTransactionID = "pending-current-account"
+        try PlaidLocalSyncImporter.importReviewedItems([posted], context: context, bills: [])
+        let pending = reviewItem("pending-current-account", amount: 10)
+        pending.pending = true
+        let result = try PlaidLocalSyncImporter.importReviewedItems([pending], context: context, bills: [])
+        XCTAssertEqual(result.importedCount, 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Transaction>()), 2)
+    }
+
+    func testLargeImportRemainsIdempotent() throws {
+        let context = try makeContext()
+        let items = (0..<2000).map { reviewItem("bulk-\($0)", amount: 10) }
+        let start = Date()
+        XCTAssertEqual(try PlaidLocalSyncImporter.importReviewedItems(items, context: context, bills: []).importedCount, 2000)
+        XCTAssertEqual(try PlaidLocalSyncImporter.importReviewedItems(items, context: context, bills: []).importedCount, 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Transaction>()), 2000)
+        print("PERFORMANCE: 2000-row import and replay: \(Date().timeIntervalSince(start)) seconds")
+    }
+
+    private func reviewItem(_ id: String, amount: Double) -> PlaidTransactionReviewItem {
+        PlaidTransactionReviewItem(plaidTransactionID: id, plaidAccountID: "account",
+                                  plaidItemID: "item", name: "Merchant", merchantName: "Merchant",
+                                  date: Date(timeIntervalSince1970: 1_700_000_000), amount: amount, currencyCode: "USD")
+    }
+
     private func makeContext() throws -> ModelContext {
-        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let config = ModelConfiguration(UUID().uuidString, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(
             for: Bill.self,
             Transaction.self,
@@ -252,6 +433,7 @@ final class PlaidLocalSyncImporterTests: XCTestCase {
             PlaidSuggestion.self,
             configurations: config
         )
+        retainedContainers.append(container)
         return ModelContext(container)
     }
 }

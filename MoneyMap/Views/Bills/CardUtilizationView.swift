@@ -44,7 +44,7 @@ struct CardUtilizationView: View {
                 .keyboardType(.decimalPad)
             Button("Cancel", role: .cancel) { }
             Button("Done") {
-                billToEdit?.currentCreditCardDetails?.cardBalance = Double(alertValue) ?? 0
+                if billToEdit?.hasLinkedBankData != true { billToEdit?.currentCreditCardDetails?.cardBalance = Double(alertValue) ?? 0 }
                 saveContext()
                 editingBalance = false
                 alertValue.removeAll()
@@ -57,7 +57,7 @@ struct CardUtilizationView: View {
                 .keyboardType(.decimalPad)
             Button("Cancel", role: .cancel) { }
             Button("Done") {
-                billToEdit?.currentCreditCardDetails?.creditLimit = Double(alertValue) ?? 0
+                if billToEdit?.hasLinkedBankData != true { billToEdit?.currentCreditCardDetails?.creditLimit = Double(alertValue) ?? 0 }
                 saveContext()
                 editingLimit = false
                 alertValue.removeAll()

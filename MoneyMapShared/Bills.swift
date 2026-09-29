@@ -487,7 +487,11 @@ public class Bill {
     public var currentCreditCardDetails: CreditCardDetails? {
         get {
             guard var value = creditCardDetails else { return nil }
-            value.cardBalance = value.cardBalance < 0 ? min(value.cardBalance + recordedPaymentTotal, 0) : max(value.cardBalance - recordedPaymentTotal, 0)
+            if hasLinkedBankData, let bankBalance = plaidReportedCardBalance {
+                value.cardBalance = bankBalance
+            } else {
+                value.cardBalance = value.cardBalance < 0 ? min(value.cardBalance + recordedPaymentTotal, 0) : max(value.cardBalance - recordedPaymentTotal, 0)
+            }
             return value
         }
         set {
@@ -508,6 +512,8 @@ public class Bill {
     public var plaidItemID: String?
     public var plaidInstitutionID: String?
     public var plaidUpdatedAt: Date?
+    public var plaidEnrichmentJSON: String?
+    public var plaidReportedCardBalance: Double?
     public var plaidUnavailable: Bool = false
     public var status: Status?
     public var imageData: Data?
@@ -769,12 +775,24 @@ extension Bill {
         category?.isSubscriptionCategory == true || recurrenceInterval != nil
     }
 
+    public var hasLinkedBankData: Bool {
+        category == .creditCard && !plaidUnavailable
+            && !(plaidAccountID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
+    public var effectiveStatus: Status? {
+        guard lifecycleState == .active else { return .paid }
+        return bankReportedOverdue != nil ? bankReportedPaymentStatus : status
+    }
+
     public var displayStatusName: String {
-        lifecycleState == .active ? (status?.name ?? "Unknown") : lifecycleState.title
+        guard lifecycleState == .active else { return lifecycleState.title }
+        if bankReportedOverdue == false { return "On Time" }
+        return effectiveStatus?.name ?? "Unknown"
     }
 
     public var displayStatusColor: Color {
-        lifecycleState == .active ? (status?.color ?? .secondary) : lifecycleState.color
+        lifecycleState == .active ? (effectiveStatus?.color ?? .secondary) : lifecycleState.color
     }
 
     public func delay(to newDueDate: Date) {
@@ -828,8 +846,8 @@ extension Bill {
     // MARK: - Sorting
     
     public static func byDate(lhs: Bill, rhs: Bill) -> Bool {
-        let lhsDate = Calendar.current.startOfDay(for: lhs.dueDate ?? .distantPast)
-        let rhsDate = Calendar.current.startOfDay(for: rhs.dueDate ?? .distantPast)
+        let lhsDate = Calendar.current.startOfDay(for: lhs.displayDueDate ?? .distantPast)
+        let rhsDate = Calendar.current.startOfDay(for: rhs.displayDueDate ?? .distantPast)
         if lhsDate == rhsDate {
             return (lhs.amount ?? 0) > (rhs.amount ?? 0)
         }
@@ -862,15 +880,15 @@ extension Bill {
     }
     
     public static func byStatusDateUtilization(lhs: Bill, rhs: Bill) -> Bool {
-        let lhsIsPaid = lhs.status == .paid
-        let rhsIsPaid = rhs.status == .paid
+        let lhsIsPaid = lhs.displayPaymentIsPaid
+        let rhsIsPaid = rhs.displayPaymentIsPaid
         if lhsIsPaid != rhsIsPaid {
             // Unpaid first
             return !lhsIsPaid
         }
 
-        let lhsDate = lhs.dueDate ?? .distantFuture
-        let rhsDate = rhs.dueDate ?? .distantFuture
+        let lhsDate = lhs.displayDueDate ?? .distantFuture
+        let rhsDate = rhs.displayDueDate ?? .distantFuture
         let lhsUtilization = lhs.currentCreditCardDetails?.utilization ?? 0
         let rhsUtilization = rhs.currentCreditCardDetails?.utilization ?? 0
 
@@ -898,9 +916,41 @@ extension Bill {
     
     // MARK: - Functions
     
+    /// Use current bank payment facts without overwriting the user's planning schedule.
+    private var currentBankCreditLiability: [String: PlaidJSONValue]? {
+        guard category == .creditCard, !plaidUnavailable,
+              let accountID = plaidAccountID, !accountID.isEmpty,
+              let enrichment = PlaidAccountEnrichment.decode(plaidEnrichmentJSON),
+              let checkedAt = enrichment.productUpdatedAt["liabilities"],
+              BankSyncFreshness(lastSyncAt: checkedAt).level == .current,
+              let credit = enrichment.creditLiability else { return nil }
+        return credit
+    }
+
+    public var bankReportedOverdue: Bool? { currentBankCreditLiability?["is_overdue"]?.bool }
+
+    public var bankReportedPaymentStatus: Status? {
+        guard let credit = currentBankCreditLiability, let overdue = credit["is_overdue"]?.bool else { return nil }
+        if overdue { return .overdue }
+        guard let dateString = credit["next_payment_due_date"]?.string else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.isLenient = false
+        guard let date = formatter.date(from: dateString),
+              date >= Calendar.current.startOfDay(for: .now) else { return nil }
+        return .upcoming(date: date)
+    }
+
     public func checkStatus() {
         guard lifecycleState == .active else {
             status = .paid
+            return
+        }
+
+        if bankReportedOverdue != nil {
+            status = bankReportedPaymentStatus
             return
         }
 

@@ -28,8 +28,26 @@ enum SpotlightIndexer {
         index(items: goals.map(makeGoalItem))
     }
 
+    @MainActor private static var transactionIndexTask: Task<Void, Never>?
+
+    @MainActor
     static func reindexTransactions(_ transactions: [Transaction]) {
-        index(items: transactions.map(makeTransactionItem))
+        transactionIndexTask?.cancel()
+        transactionIndexTask = Task { @MainActor in
+            // Keep SwiftData access on its actor, but let navigation run between batches.
+            for start in stride(from: 0, to: transactions.count, by: 100) {
+                guard !Task.isCancelled else { return }
+                let end = min(start + 100, transactions.count)
+                let items = transactions[start..<end].map(makeTransactionItem)
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    CSSearchableIndex.default().indexSearchableItems(items) { error in
+                        if let error { print("Spotlight indexing error: \(error.localizedDescription)") }
+                        continuation.resume()
+                    }
+                }
+                await Task.yield()
+            }
+        }
     }
 
     static func reindexRecommendations(_ digest: RecommendationDigest) {
@@ -96,7 +114,7 @@ enum SpotlightIndexer {
         let entity = BillEntity(bill)
         let title = bill.name ?? "Untitled Bill"
         let amount = MoneyMapFormatters.currencyString(for: bill.amount ?? 0)
-        let dueText = bill.dueDate.map { MoneyMapFormatters.mediumDateString(for: $0) } ?? "No due date"
+        let dueText = bill.displayDueDate.map { MoneyMapFormatters.mediumDateString(for: $0) } ?? "No due date"
         let category = bill.category?.name ?? "Other"
 
         attributeSet.title = title
@@ -175,7 +193,7 @@ enum SpotlightIndexer {
         let attributeSet = CSSearchableItemAttributeSet(contentType: .item)
         let entity = TransactionEntity(transaction)
         let title = transactionHeadline(transaction)
-        let amount = MoneyMapFormatters.currencyString(for: abs(transaction.amountUSD ?? 0))
+        let amount = transaction.displayAmountText
         let date = (transaction.transactionDate ?? transaction.clearingDate).map(MoneyMapFormatters.mediumDateString(for:)) ?? "Unknown date"
         let cardName = transaction.creditCard?.name ?? "Unknown card"
 
@@ -215,10 +233,10 @@ enum SpotlightIndexer {
     }
 
     private static func spotlightPriority(for bill: Bill) -> Int {
-        if bill.status == .overdue {
+        if bill.effectiveStatus == .overdue {
             return 100
         }
-        if bill.datePaid == nil {
+        if !bill.displayPaymentIsPaid {
             return 80
         }
         return 20

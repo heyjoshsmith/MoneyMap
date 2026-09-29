@@ -72,9 +72,6 @@ extension Settings {
             NavigationLink("Smart Features") {
                 SmartFeaturesGuideView()
             }
-            NavigationLink("Ask MoneyMap") {
-                MoneyMapAssistantView()
-            }
             NavigationLink("What's New") {
                 WhatsNewView(releases: WhatsNewRepository.releases, onDone: nil)
             }
